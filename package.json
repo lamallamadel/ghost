@@ -1,0 +1,35 @@
+{
+  "name": "ghost",
+  "version": "0.0.1",
+  "description": "Utilitaire de verification, validation, et de proposition de commits basé sur l'IA",
+  "main": "ghost.js",
+  "bin": {
+    "ghost": "./ghost.js"
+  },
+  "scripts": {
+    "test": "echo \"ghost raider\"",
+    "start": "node ghost.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lamallamadel/ghost.git"
+  },
+  "keywords": [
+    "git",
+    "commit",
+    "ghost",
+    "automate",
+    "ai",
+    "cli",
+    "devsecops"
+  ],
+  "author": "Adel Lamallam",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/lamallamadel/ghost/issues"
+  },
+  "homepage": "https://github.com/lamallamadel/ghost#readme",
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}
