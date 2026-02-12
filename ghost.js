@@ -9,7 +9,7 @@
 const fs = require('fs');
 const path = require('path');
 const https = require('https');
-const { execSync, spawn } = require('child_process');
+const { execSync } = require('child_process');
 const readline = require('readline');
 const os = require('os');
 
@@ -20,7 +20,12 @@ const CONFIG_FILE = path.join(os.homedir(), '.ghost');
 const SAFE_EXTENSIONS = new Set(['.md', '.txt', '.csv', '.html', '.css', '.scss', '.lock', '.xml', '.json']);
 const SAFE_FILES = new Set(['mvnw', 'gradlew', 'package-lock.json', 'yarn.lock', 'pom.xml']);
 
-// Couleurs ANSI
+// Modèles disponibles sur Groq (Basé sur votre plan gratuit)
+// llama-3.3-70b-versatile : Intelligent, Idéal pour la sécurité (Limit: 1k RPD, 12k TPM)
+// llama-3.1-8b-instant    : Rapide, Idéal si quota dépassé (Limit: 14.4k RPD, 6k TPM)
+const DEFAULT_MODEL = "llama-3.3-70b-versatile";
+
+// Couleurs ANSI pour un terminal plus beau
 const Colors = {
     HEADER: '\x1b[95m',
     BLUE: '\x1b[94m',
@@ -29,7 +34,8 @@ const Colors = {
     WARNING: '\x1b[93m',
     FAIL: '\x1b[91m',
     ENDC: '\x1b[0m',
-    BOLD: '\x1b[1m'
+    BOLD: '\x1b[1m',
+    DIM: '\x1b[2m'
 };
 
 // ==============================================================================
@@ -53,26 +59,36 @@ class ConfigManager {
 
     save() {
         fs.writeFileSync(CONFIG_FILE, JSON.stringify(this.config, null, 4));
-        console.log(`${Colors.GREEN}Configuration sauvegardée dans ${CONFIG_FILE}${Colors.ENDC}`);
+        console.log(`${Colors.DIM}Configuration sauvegardée dans ${CONFIG_FILE}${Colors.ENDC}`);
     }
 
     async getApiKey() {
         let key = process.env.GROQ_API_KEY || this.config.groq_api_key;
 
         if (!key) {
-            console.log(`${Colors.WARNING}[!] Aucune clé API trouvée.${Colors.ENDC}`);
-            console.log(`Obtenez une clé gratuite sur : https://console.groq.com`);
-            key = await promptUser(`${Colors.BOLD}Entrez votre clé Groq (gsk_...): ${Colors.ENDC}`);
+            console.log(`\n${Colors.WARNING}⚠️  Configuration manquante${Colors.ENDC}`);
+            console.log(`${Colors.DIM}Pour utiliser Ghost, vous avez besoin d'une clé API Groq (Gratuite).${Colors.ENDC}`);
+            console.log(`${Colors.BLUE}👉 Obtenir une clé : https://console.groq.com${Colors.ENDC}\n`);
             
-            if (key) {
+            key = await promptUser(`${Colors.BOLD}Collez votre clé Groq (gsk_...) : ${Colors.ENDC}`);
+            
+            if (key && key.trim().startsWith('gsk_')) {
                 this.config.groq_api_key = key.trim();
                 this.save();
             } else {
-                console.log(`${Colors.FAIL}Clé requise pour continuer.${Colors.ENDC}`);
+                console.log(`${Colors.FAIL}❌ Clé invalide ou manquante. Abandon.${Colors.ENDC}`);
                 process.exit(1);
             }
         }
         return key;
+    }
+
+    getModel() {
+        if (!this.config.model) {
+            this.config.model = DEFAULT_MODEL;
+            this.save();
+        }
+        return this.config.model;
     }
 }
 
@@ -80,11 +96,11 @@ class ConfigManager {
 // 🧠 MOTEUR IA (Client HTTPS Natif)
 // ==============================================================================
 class AIEngine {
-    constructor(apiKey) {
+    constructor(apiKey, model) {
         this.apiKey = apiKey;
         this.hostname = "api.groq.com";
         this.path = "/openai/v1/chat/completions";
-        this.model = "llama-3.3-70b-versatile";
+        this.model = model || DEFAULT_MODEL;
     }
 
     async call(systemPrompt, userPrompt, temperature = 0.3, jsonMode = false) {
@@ -164,16 +180,17 @@ function calculateShannonEntropy(data) {
 function scanForSecrets(content) {
     if (!content) return [];
     const suspicious = [];
-    // Regex équivalente à celle de Python
+    // Regex : Cherche ce qui est entre quotes ou après un signe égal
     const regex = /(['"])(.*?)(\1)|=\s*([^\s]+)/g;
     let match;
 
     while ((match = regex.exec(content)) !== null) {
-        // match[2] est le contenu entre quotes, match[4] est après le =
         const candidate = match[2] || match[4];
         
+        // Filtres heuristiques de base
         if (!candidate || candidate.length < 12 || candidate.includes(' ')) continue;
         
+        // Analyse mathématique (Entropie > 4.8 est souvent un secret)
         if (calculateShannonEntropy(candidate) > 4.8) {
             suspicious.push(candidate.substring(0, 15) + "...");
         }
@@ -184,40 +201,50 @@ function scanForSecrets(content) {
 // ==============================================================================
 // 📂 GIT INTERFACE
 // ==============================================================================
-function gitExec(args) {
+function gitExec(args, suppressError = false) {
     try {
-        // execSync retourne un Buffer, on convertit en string
         return execSync(`git ${args.join(' ')}`, { encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe'] }).trim();
     } catch (e) {
-        if (e.stderr) console.error(`${Colors.FAIL}Erreur Git: ${e.stderr.toString()}${Colors.ENDC}`);
-        // Si c'est juste un diff vide ou erreur non critique, on peut renvoyer vide
+        if (!suppressError && e.stderr) {
+            // On ignore les erreurs mineures
+        }
         return "";
+    }
+}
+
+function checkGitRepo() {
+    try {
+        execSync('git rev-parse --is-inside-work-tree', { stdio: 'ignore' });
+        return true;
+    } catch (e) {
+        return false;
     }
 }
 
 function getStagedDiff() {
     const filesOutput = gitExec(['diff', '--cached', '--name-only']);
-    if (!filesOutput) return { text: "", map: {} };
+    if (!filesOutput) return { text: "", map: {}, files: [] };
 
     const files = filesOutput.split('\n');
     let fullDiff = "";
     const fileMap = {};
+    const validFiles = [];
 
     for (let f of files) {
-        f = f.trim().replace(/^"|"$/g, ''); // Nettoyage quotes
+        f = f.trim().replace(/^"|"$/g, '');
         if (!f || SAFE_FILES.has(path.basename(f)) || SAFE_EXTENSIONS.has(path.extname(f))) continue;
 
         const content = gitExec(['diff', '--cached', `"${f}"`]);
         if (content) {
             fullDiff += `\n--- ${f} ---\n${content}\n`;
             fileMap[f] = content;
+            validFiles.push(f);
         }
     }
 
-    return { text: fullDiff, map: fileMap };
+    return { text: fullDiff, map: fileMap, files: validFiles };
 }
 
-// Helper pour input utilisateur
 function promptUser(question) {
     const rl = readline.createInterface({
         input: process.stdin,
@@ -235,21 +262,39 @@ function promptUser(question) {
 // 🚀 MAIN LOOP
 // ==============================================================================
 async function main() {
-    console.log(`${Colors.BOLD}${Colors.CYAN}👻 Ghost CLI - Assistant Git Intelligent (JS)${Colors.ENDC}`);
+    console.clear();
+    console.log(`\n${Colors.BOLD}${Colors.CYAN} 👻 GHOST CLI ${Colors.ENDC}${Colors.DIM} v1.0.0${Colors.ENDC}`);
+    console.log(`${Colors.DIM} ─────────────────────────────────────${Colors.ENDC}\n`);
+
+    // 1. Vérification Git
+    if (!checkGitRepo()) {
+        console.log(`${Colors.FAIL}❌ Erreur : Ce dossier n'est pas un dépôt Git.${Colors.ENDC}`);
+        console.log(`💡 Solution : Lancez ${Colors.BOLD}git init${Colors.ENDC} d'abord.`);
+        process.exit(1);
+    }
 
     const config = new ConfigManager();
     const apiKey = await config.getApiKey();
-    const ai = new AIEngine(apiKey);
+    const model = config.getModel(); // Récupère le modèle configuré
+    const ai = new AIEngine(apiKey, model);
 
-    const { text: fullDiffText, map: diffMap } = getStagedDiff();
+    // 2. Récupération du Diff
+    const { text: fullDiffText, map: diffMap, files: fileList } = getStagedDiff();
 
     if (!fullDiffText) {
-        console.log(`${Colors.WARNING}[i] Aucun changement à traiter (ou fichiers ignorés).${Colors.ENDC}`);
+        console.log(`${Colors.WARNING}⚠️  Rien à commiter.${Colors.ENDC}`);
+        console.log(`💡 Astuce : Utilisez ${Colors.BOLD}git add <fichier>${Colors.ENDC} pour préparer vos changements.\n`);
         process.exit(0);
     }
 
-    // 1. Audit
-    console.log(`${Colors.BLUE}[1/2] 🛡️  Audit de Sécurité...${Colors.ENDC}`);
+    // Affichage des fichiers détectés
+    console.log(`${Colors.BOLD}📂 Fichiers détectés (${fileList.length}) :${Colors.ENDC}`);
+    fileList.forEach(f => console.log(`   ${Colors.DIM}• ${f}${Colors.ENDC}`));
+    console.log(""); // Saut de ligne
+
+    // 3. Audit de Sécurité
+    process.stdout.write(`${Colors.BLUE}🛡️  [1/2] Audit de Sécurité... ${Colors.ENDC}`);
+    
     const potentialLeaks = {};
     for (const [fname, content] of Object.entries(diffMap)) {
         const suspects = scanForSecrets(content);
@@ -257,7 +302,7 @@ async function main() {
     }
 
     if (Object.keys(potentialLeaks).length > 0) {
-        console.log(`${Colors.WARNING}⚠️  Entropie élevée détectée. Analyse approfondie IA...${Colors.ENDC}`);
+        console.log(`\n${Colors.WARNING}⚠️  Entropie élevée détectée ! Analyse approfondie par l'IA...${Colors.ENDC}`);
         const valPrompt = `Analyse ces secrets potentiels : ${JSON.stringify(potentialLeaks)}. Réponds JSON {'is_breach': bool, 'reason': str}. Vrais secrets (API Keys) seulement.`;
         
         try {
@@ -265,45 +310,48 @@ async function main() {
             const audit = JSON.parse(res);
             
             if (audit.is_breach) {
-                console.log(`${Colors.FAIL}❌ [BLOCAGE] Secret détecté : ${audit.reason}${Colors.ENDC}`);
+                console.log(`\n${Colors.FAIL}❌ [BLOCAGE SÉCURITÉ] Secret détecté !${Colors.ENDC}`);
+                console.log(`${Colors.FAIL}   Raison : ${audit.reason}${Colors.ENDC}\n`);
                 process.exit(1);
             } else {
-                console.log(`${Colors.GREEN}✅ Faux positifs confirmés.${Colors.ENDC}`);
+                console.log(`${Colors.GREEN}✅ Faux positifs confirmés (Sûr).${Colors.ENDC}`);
             }
         } catch (e) {
             console.log(`${Colors.FAIL}Erreur audit IA: ${e.message}${Colors.ENDC}`);
         }
     } else {
-        console.log(`${Colors.GREEN}✅ Code sain.${Colors.ENDC}`);
+        console.log(`${Colors.GREEN}OK (Code sain)${Colors.ENDC}`);
     }
 
-    // 2. Génération
-    console.log(`${Colors.BLUE}[2/2] ⚡ Génération du message...${Colors.ENDC}`);
-    const sysPrompt = "Tu es un assistant Git. Génère UNIQUEMENT un message de commit 'Conventional Commits' concis. Pas de markdown, pas de guillemets.";
+    // 4. Génération
+    const tokensEstimates = Math.ceil(fullDiffText.length / 4);
+    console.log(`${Colors.BLUE}⚡ [2/2] Génération du message... ${Colors.DIM}(~${tokensEstimates} tokens)${Colors.ENDC}`);
+    console.log(`${Colors.DIM}   Modèle utilisé : ${model}${Colors.ENDC}`);
+    
+    const sysPrompt = "Tu es un assistant Git expert. Génère UNIQUEMENT un message de commit suivant la convention 'Conventional Commits' (ex: feat: add login). Sois concis, descriptif et professionnel. N'utilise pas de markdown (pas de backticks), pas de guillemets autour du message.";
     
     try {
-        let commitMsg = await ai.call(sysPrompt, `Diff :\n${fullDiffText.substring(0, 6000)}`);
-        commitMsg = commitMsg.trim().replace(/^['"]|['"]$/g, '');
+        let commitMsg = await ai.call(sysPrompt, `Diff :\n${fullDiffText.substring(0, 12000)}`);
+        commitMsg = commitMsg.trim().replace(/^['"`]|['"`]$/g, ''); // Nettoyage final
 
-        console.log(`\n${Colors.BOLD}Message suggéré :${Colors.ENDC}`);
-        console.log(`${Colors.CYAN}--------------------------------------------------${Colors.ENDC}`);
-        console.log(commitMsg);
-        console.log(`${Colors.CYAN}--------------------------------------------------${Colors.ENDC}`);
+        console.log(`\n${Colors.CYAN}──────────────────────────────────────────────────${Colors.ENDC}`);
+        console.log(`${Colors.BOLD}${commitMsg}${Colors.ENDC}`);
+        console.log(`${Colors.CYAN}──────────────────────────────────────────────────${Colors.ENDC}\n`);
 
-        const action = await promptUser(`\n${Colors.BOLD}[Enter] Valider  |  [n] Annuler : ${Colors.ENDC}`);
+        const action = await promptUser(`${Colors.BOLD}[Enter]${Colors.ENDC} Valider  |  ${Colors.BOLD}[n]${Colors.ENDC} Annuler : `);
 
         if (action.toLowerCase() === 'n') {
-            console.log(`${Colors.WARNING}Annulé.${Colors.ENDC}`);
+            console.log(`\n${Colors.WARNING}🚫 Opération annulée.${Colors.ENDC}\n`);
         } else {
             try {
                 execSync(`git commit -m "${commitMsg}"`, { stdio: 'inherit' });
-                console.log(`${Colors.GREEN}✅ Commité.${Colors.ENDC}`);
+                console.log(`\n${Colors.GREEN}✅ Commit effectué avec succès !${Colors.ENDC}\n`);
             } catch (e) {
-                // Erreur Git (ex: hook failed) gérée par stdio inherit
+                // L'erreur est déjà affichée par git via stdio: inherit
             }
         }
     } catch (e) {
-        console.log(`${Colors.FAIL}Erreur: ${e.message}${Colors.ENDC}`);
+        console.log(`\n${Colors.FAIL}❌ Erreur fatale : ${e.message}${Colors.ENDC}\n`);
         process.exit(1);
     }
 }
