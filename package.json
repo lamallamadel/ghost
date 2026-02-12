@@ -1,5 +1,5 @@
 {
-  "name": "ghost",
+  "name": "@afroware/ghost",
   "version": "0.0.1",
   "description": "Utilitaire de verification, validation, et de proposition de commits basé sur l'IA",
   "main": "ghost.js",
