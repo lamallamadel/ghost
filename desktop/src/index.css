@@ -1,0 +1,33 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji";
+  line-height: 1.5;
+  font-weight: 400;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+
+  --gc-bg: 11 15 20;
+  --gc-surface: 18 24 38;
+  --gc-border: 39 52 68;
+  --gc-text: 230 237 243;
+  --gc-muted: 159 176 192;
+  --gc-accent: 124 92 255;
+  --gc-opacity: 0.75;
+  --gc-font-size: 14px;
+}
+
+html, body, #root {
+  height: 100%;
+}
+
+body {
+  background: rgba(var(--gc-bg) / 0.6);
+  color: rgb(var(--gc-text));
+  font-size: var(--gc-font-size);
+}
