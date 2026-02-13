@@ -1,10 +1,15 @@
 {
   "name": "atlasia-ghost",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Utilitaire de verification, validation, et de proposition de commits basé sur l'IA",
   "main": "ghost.js",
+  "files": [
+    "ghost.js",
+    "LICENSE",
+    "README.md"
+  ],
   "bin": {
-    "ghost": "./ghost.js"
+    "ghost": "ghost.js"
   },
   "scripts": {
     "test": "node test.js",

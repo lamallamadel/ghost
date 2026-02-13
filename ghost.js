@@ -96,14 +96,27 @@ class ConfigManager {
 // 🧠 MOTEUR IA (Client HTTPS Natif)
 // ==============================================================================
 class AIEngine {
-    constructor(apiKey, model) {
+    constructor(apiKey, model, provider = 'groq') {
         this.apiKey = apiKey;
-        this.hostname = "api.groq.com";
-        this.path = "/openai/v1/chat/completions";
         this.model = model || DEFAULT_MODEL;
+        this.provider = provider;
+        
+        // Configuration des providers
+        this.providers = {
+            groq: {
+                hostname: "api.groq.com",
+                path: "/openai/v1/chat/completions"
+            },
+            openai: {
+                hostname: "api.openai.com",
+                path: "/v1/chat/completions"
+            }
+        };
     }
 
     async call(systemPrompt, userPrompt, temperature = 0.3, jsonMode = false) {
+        const config = this.providers[this.provider] || this.providers.groq;
+        
         const payload = {
             model: this.model,
             messages: [
@@ -118,8 +131,8 @@ class AIEngine {
         }
 
         const options = {
-            hostname: this.hostname,
-            path: this.path,
+            hostname: config.hostname,
+            path: config.path,
             method: 'POST',
             headers: {
                 'Authorization': `Bearer ${this.apiKey}`,
@@ -136,9 +149,9 @@ class AIEngine {
                     if (res.statusCode >= 400) {
                         try {
                             const errBody = JSON.parse(data);
-                            reject(new Error(`API Error ${res.statusCode}: ${errBody.error?.message || data}`));
+                            reject(new Error(`API Error ${res.statusCode} (${this.provider}): ${errBody.error?.message || data}`));
                         } catch (e) {
-                            reject(new Error(`API Error ${res.statusCode}: ${data}`));
+                            reject(new Error(`API Error ${res.statusCode} (${this.provider}): ${data}`));
                         }
                     } else {
                         try {
@@ -165,6 +178,7 @@ function parseArgs() {
     const args = process.argv.slice(2);
     const flags = {
         model: null,
+        provider: null,
         noSecurity: false,
         dryRun: false,
         help: false
@@ -173,6 +187,9 @@ function parseArgs() {
     for (let i = 0; i < args.length; i++) {
         if (args[i] === '--model' && args[i + 1]) {
             flags.model = args[i + 1];
+            i++;
+        } else if (args[i] === '--provider' && args[i + 1]) {
+            flags.provider = args[i + 1];
             i++;
         } else if (args[i] === '--no-security') {
             flags.noSecurity = true;
@@ -187,17 +204,22 @@ function parseArgs() {
 
 function showHelp() {
     console.log(`
-${Colors.BOLD}${Colors.CYAN}GHOST CLI v0.1.0${Colors.ENDC}
-Assistant Git Intelligent basé sur l'IA (Groq)
+${Colors.BOLD}${Colors.CYAN}GHOST CLI v0.2.0${Colors.ENDC}
+Assistant Git Intelligent basé sur l'IA (Groq/OpenAI)
 
 ${Colors.BOLD}USAGE:${Colors.ENDC}
   ghost [options]
 
 ${Colors.BOLD}OPTIONS:${Colors.ENDC}
-  --model <name>    Utiliser un modèle spécifique (ex: llama-3.1-8b-instant)
-  --no-security     Désactiver l'audit de sécurité
-  --dry-run         Générer le message sans effectuer le commit
-  --help, -h        Afficher cette aide
+  --model <name>     Utiliser un modèle spécifique (ex: llama-3.1-8b-instant)
+  --provider <name>  Choisir le fournisseur (groq [défaut], openai)
+  --no-security      Désactiver l'audit de sécurité
+  --dry-run          Générer le message sans effectuer le commit
+  --help, -h         Afficher cette aide
+
+${Colors.BOLD}CONFIGURATION LOCALE (.ghostrc):${Colors.ENDC}
+  Créez un fichier ${Colors.CYAN}.ghostrc${Colors.ENDC} JSON dans votre projet pour personnaliser le prompt :
+  { "prompt": "Ton prompt personnalisé ici" }
     `);
 }
 
@@ -338,8 +360,21 @@ async function main() {
     }
 
     console.clear();
-    console.log(`\n${Colors.BOLD}${Colors.CYAN} 👻 GHOST CLI ${Colors.ENDC}${Colors.DIM} v0.1.0${Colors.ENDC}`);
+    console.log(`\n${Colors.BOLD}${Colors.CYAN} 👻 GHOST CLI ${Colors.ENDC}${Colors.DIM} v0.2.0${Colors.ENDC}`);
     console.log(`${Colors.DIM} ─────────────────────────────────────${Colors.ENDC}\n`);
+
+    // 0. Chargement de la configuration locale .ghostrc
+    const localConfigPath = path.join(process.cwd(), '.ghostrc');
+    let customPrompt = null;
+    if (fs.existsSync(localConfigPath)) {
+        try {
+            const localConfig = JSON.parse(fs.readFileSync(localConfigPath, 'utf8'));
+            if (localConfig.prompt) customPrompt = localConfig.prompt;
+            console.log(`${Colors.DIM}📝 Configuration locale .ghostrc chargée${Colors.ENDC}`);
+        } catch (e) {
+            console.log(`${Colors.WARNING}⚠️  Erreur lecture .ghostrc: ${e.message}${Colors.ENDC}`);
+        }
+    }
 
     // 1. Vérification Git
     if (!checkGitRepo()) {
@@ -364,15 +399,36 @@ async function main() {
 
     // Affichage des fichiers détectés
     console.log(`${Colors.BOLD}📂 Fichiers détectés (${fileList.length}) :${Colors.ENDC}`);
-    fileList.forEach(f => console.log(`   ${Colors.DIM}• ${f}${Colors.ENDC}`));
-    console.log(""); // Saut de ligne
+    fileList.forEach((f, idx) => console.log(`   ${Colors.DIM}${idx + 1}. ${f}${Colors.ENDC}`));
+    console.log("");
+
+    let selectedFiles = fileList;
+    let finalDiffText = fullDiffText;
+    let finalDiffMap = diffMap;
+
+    if (fileList.length > 1) {
+        const selection = await promptUser(`${Colors.BOLD}Sélectionnez les fichiers (ex: 1,3,5 ou 'all' [par défaut]) : ${Colors.ENDC}`);
+        if (selection && selection.toLowerCase() !== 'all' && selection.trim() !== '') {
+            const indices = selection.split(',').map(s => parseInt(s.trim()) - 1).filter(idx => idx >= 0 && idx < fileList.length);
+            if (indices.length > 0) {
+                selectedFiles = indices.map(idx => fileList[idx]);
+                finalDiffMap = {};
+                finalDiffText = "";
+                selectedFiles.forEach(f => {
+                    finalDiffMap[f] = diffMap[f];
+                    finalDiffText += `\n--- ${f} ---\n${diffMap[f]}\n`;
+                });
+                console.log(`${Colors.GREEN}✅ ${selectedFiles.length} fichier(s) sélectionné(s).${Colors.ENDC}\n`);
+            }
+        }
+    }
 
     // 3. Audit de Sécurité
     if (!flags.noSecurity) {
         process.stdout.write(`${Colors.BLUE}🛡️  [1/2] Audit de Sécurité... ${Colors.ENDC}`);
         
         const potentialLeaks = {};
-        for (const [fname, content] of Object.entries(diffMap)) {
+        for (const [fname, content] of Object.entries(finalDiffMap)) {
             const suspects = scanForSecrets(content);
             if (suspects.length > 0) potentialLeaks[fname] = suspects;
         }
@@ -403,14 +459,14 @@ async function main() {
     }
 
     // 4. Génération
-    const tokensEstimates = Math.ceil(fullDiffText.length / 4);
+    const tokensEstimates = Math.ceil(finalDiffText.length / 4);
     console.log(`${Colors.BLUE}⚡ [2/2] Génération du message... ${Colors.DIM}(~${tokensEstimates} tokens)${Colors.ENDC}`);
     console.log(`${Colors.DIM}   Modèle utilisé : ${model}${Colors.ENDC}`);
     
-    const sysPrompt = "Tu es un assistant Git expert. Génère UNIQUEMENT un message de commit suivant la convention 'Conventional Commits' (ex: feat: add login). Sois concis, descriptif et professionnel. N'utilise pas de markdown (pas de backticks), pas de guillemets autour du message.";
+    const sysPrompt = customPrompt || "Tu es un assistant Git expert. Génère UNIQUEMENT un message de commit suivant la convention 'Conventional Commits' (ex: feat: add login). Sois concis, descriptif et professionnel. N'utilise pas de markdown (pas de backticks), pas de guillemets autour du message.";
     
     try {
-        let commitMsg = await ai.call(sysPrompt, `Diff :\n${fullDiffText.substring(0, 12000)}`);
+        let commitMsg = await ai.call(sysPrompt, `Diff :\n${finalDiffText.substring(0, 12000)}`);
         commitMsg = commitMsg.trim().replace(/^['"`]|['"`]$/g, ''); // Nettoyage final
 
         console.log(`\n${Colors.CYAN}──────────────────────────────────────────────────${Colors.ENDC}`);
