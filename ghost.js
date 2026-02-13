@@ -385,8 +385,9 @@ async function main() {
 
     const config = new ConfigManager();
     const apiKey = await config.getApiKey();
-    const model = flags.model || config.getModel(); // Priorité au flag --model
-    const ai = new AIEngine(apiKey, model);
+    const model = flags.model || config.getModel();
+    const provider = flags.provider || config.config.provider || 'groq';
+    const ai = new AIEngine(apiKey, model, provider);
 
     // 2. Récupération du Diff
     const { text: fullDiffText, map: diffMap, files: fileList } = getStagedDiff();
@@ -461,7 +462,7 @@ async function main() {
     // 4. Génération
     const tokensEstimates = Math.ceil(finalDiffText.length / 4);
     console.log(`${Colors.BLUE}⚡ [2/2] Génération du message... ${Colors.DIM}(~${tokensEstimates} tokens)${Colors.ENDC}`);
-    console.log(`${Colors.DIM}   Modèle utilisé : ${model}${Colors.ENDC}`);
+    console.log(`${Colors.DIM}   Modèle utilisé : ${model} (${provider})${Colors.ENDC}`);
     
     const sysPrompt = customPrompt || "Tu es un assistant Git expert. Génère UNIQUEMENT un message de commit suivant la convention 'Conventional Commits' (ex: feat: add login). Sois concis, descriptif et professionnel. N'utilise pas de markdown (pas de backticks), pas de guillemets autour du message.";
     

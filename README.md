@@ -39,9 +39,25 @@ ghost
 | Option | Description |
 | :--- | :--- |
 | `--model <name>` | Utiliser un modèle spécifique (ex: `llama-3.1-8b-instant`) |
+| `--provider <name>` | Choisir le fournisseur (`groq` [défaut], `openai`) |
 | `--no-security` | Désactiver l'audit de sécurité (scan de secrets) |
 | `--dry-run` | Générer le message sans effectuer le commit |
 | `--help`, `-h` | Afficher l'aide |
+
+## 📝 Personnalisation
+
+### Sélection de fichiers
+Ghost propose désormais une sélection interactive si plusieurs fichiers sont modifiés. Vous pouvez spécifier les fichiers à analyser (ex: `1,3,5`) ou tout analyser (`all`).
+
+### Configuration locale (`.ghostrc`)
+Vous pouvez personnaliser le comportement de Ghost par projet en créant un fichier `.ghostrc` à la racine :
+
+```json
+{
+  "prompt": "Ton prompt système personnalisé pour l'IA ici",
+  "provider": "openai"
+}
+```
 
 ## 🛡️ Sécurité
 
