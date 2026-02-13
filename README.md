@@ -59,11 +59,24 @@ Vous pouvez personnaliser le comportement de Ghost par projet en créant un fich
 }
 ```
 
-## 🛡️ Sécurité
+## 🛡️ Audit de Sécurité
+Ghost scanne automatiquement vos modifications pour détecter les secrets (clés API, tokens, etc.) avant de commiter. Il utilise une double approche :
+1. **Regex ciblées** : Pour les formats connus (AWS, GitHub, Slack, etc.)
+2. **Analyse d'Entropie** : Pour détecter les chaînes aléatoires suspectes.
 
-Ghost effectue un double audit :
-1. **Local** : Scan par expressions régulières (Regex) et analyse d'entropie de Shannon pour détecter des patterns suspects.
-2. **IA** : En cas de doute, les fragments suspects sont analysés par l'IA pour confirmer s'il s'agit d'une faille réelle ou d'un faux positif.
+Vous pouvez désactiver cette vérification avec `--no-security` (non recommandé).
+
+## 📊 Console de Monitoring & MCP (Nouveau v0.3.1)
+
+Ghost intègre désormais une console de débogage et de monitoring temps réel, inspirée de Gemini.
+
+```bash
+ghost --console
+```
+Cela lance un serveur local sur `http://localhost:3000` affichant :
+- 📈 Métriques en temps réel (Latence API, nombre de requêtes, erreurs)
+- 📝 Logs structurés et alertes de sécurité
+- 🔌 **Endpoint MCP** : Compatible avec le *Model Context Protocol* sur `/mcp` pour l'intégration avec les IDEs et agents IA.
 
 ## 📄 Licence
 

@@ -13,11 +13,14 @@ const { execSync } = require('child_process');
 const readline = require('readline');
 const os = require('os');
 
+const http = require('http');
+
 // ==============================================================================
 // ⚙️ CONFIGURATION & CONSTANTES
 // ==============================================================================
 const CONFIG_FILE = path.join(os.homedir(), '.ghost');
 const HISTORY_FILE = path.join(os.homedir(), '.ghost_history');
+const LOG_FILE = path.join(os.homedir(), '.ghost_logs.json');
 const SAFE_EXTENSIONS = new Set(['.md', '.txt', '.csv', '.html', '.css', '.scss', '.lock', '.xml', '.json']);
 const SAFE_FILES = new Set(['mvnw', 'gradlew', 'package-lock.json', 'yarn.lock', 'pom.xml']);
 
@@ -40,7 +43,193 @@ const Colors = {
 };
 
 // ==============================================================================
-// 🔧 GESTIONNAIRE DE CONFIGURATION
+// � MONITORING & LOGGING (Gemini-style Console)
+// ==============================================================================
+class GhostMonitor {
+    constructor() {
+        this.logs = [];
+        this.metrics = {
+            startTime: Date.now(),
+            requests: 0,
+            tokens: 0,
+            errors: 0,
+            latency: []
+        };
+        this.loadLogs();
+    }
+
+    log(level, message, meta = {}) {
+        const entry = {
+            timestamp: new Date().toISOString(),
+            level,
+            message,
+            meta
+        };
+        this.logs.push(entry);
+        this.saveLog(entry);
+        
+        // Alertes automatisées
+        if (level === 'ERROR' || level === 'SECURITY_ALERT') {
+            console.error(`${Colors.FAIL}[${level}] ${message}${Colors.ENDC}`);
+        }
+    }
+
+    recordMetric(type, value) {
+        if (type === 'latency') this.metrics.latency.push(value);
+        if (type === 'request') this.metrics.requests++;
+        if (type === 'error') this.metrics.errors++;
+    }
+
+    saveLog(entry) {
+        try {
+            fs.appendFileSync(LOG_FILE, JSON.stringify(entry) + '\n');
+        } catch (e) { /* Ignore */ }
+    }
+
+    loadLogs() {
+        if (fs.existsSync(LOG_FILE)) {
+            try {
+                const content = fs.readFileSync(LOG_FILE, 'utf8').trim().split('\n').slice(-50);
+                this.logs = content.map(line => JSON.parse(line));
+            } catch (e) { this.logs = []; }
+        }
+    }
+
+    startConsoleServer(port = 3000) {
+        const server = http.createServer((req, res) => {
+            // Parsing basique de l'URL
+            const urlParts = req.url.split('?');
+            const pathName = urlParts[0];
+
+            if (pathName === '/' || pathName === '/index.html') {
+                res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+                res.end(this.getDashboardHTML());
+            } else if (pathName === '/api/stats') {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ logs: this.logs.slice(-20), metrics: this.metrics }));
+            } else if (pathName === '/mcp') {
+                 // MCP Endpoint simple (JSON-RPC over HTTP)
+                 let body = '';
+                 req.on('data', chunk => body += chunk);
+                 req.on('end', () => {
+                     try {
+                         const request = JSON.parse(body);
+                         const response = this.handleMCPRequest(request);
+                         res.writeHead(200, { 'Content-Type': 'application/json' });
+                         res.end(JSON.stringify(response));
+                     } catch (e) {
+                         res.writeHead(400);
+                         res.end(JSON.stringify({ error: e.message }));
+                     }
+                 });
+            } else if (pathName === '/favicon.ico') {
+                res.writeHead(204);
+                res.end();
+            } else {
+                console.log(`${Colors.DIM}[404] Request: ${req.url}${Colors.ENDC}`);
+                res.writeHead(404);
+                res.end('Not Found');
+            }
+        });
+
+        server.on('error', (e) => {
+            if (e.code === 'EADDRINUSE') {
+                console.log(`${Colors.WARNING}⚠️  Le port ${port} est occupé.${Colors.ENDC}`);
+                console.log(`${Colors.DIM}Tentative sur le port ${port + 1}...${Colors.ENDC}`);
+                this.startConsoleServer(port + 1);
+            } else {
+                console.error(`${Colors.FAIL}❌ Erreur serveur : ${e.message}${Colors.ENDC}`);
+            }
+        });
+
+        server.listen(port, () => {
+            console.log(`\n${Colors.CYAN}🖥️  Ghost Console accessible sur http://localhost:${port}${Colors.ENDC}`);
+            console.log(`${Colors.DIM}Protocole MCP activé sur /mcp${Colors.ENDC}`);
+        });
+    }
+
+    handleMCPRequest(req) {
+        // Implémentation basique du protocole MCP pour l'introspection
+        if (req.method === 'initialize') {
+            return {
+                jsonrpc: "2.0",
+                id: req.id,
+                result: {
+                    protocolVersion: "2024-11-05",
+                    capabilities: { tools: {} },
+                    serverInfo: { name: "ghost-cli", version: "0.3.1" }
+                }
+            };
+        }
+        if (req.method === 'tools/list') {
+            return {
+                jsonrpc: "2.0",
+                id: req.id,
+                result: {
+                    tools: [
+                        { name: "get_logs", description: "Récupère les derniers logs de Ghost" },
+                        { name: "get_metrics", description: "Récupère les métriques de performance" }
+                    ]
+                }
+            };
+        }
+        return { jsonrpc: "2.0", id: req.id, error: { code: -32601, message: "Method not found" } };
+    }
+
+    getDashboardHTML() {
+        const js = `
+            setInterval(() => {
+                fetch('/api/stats').then(r => r.json()).then(data => {
+                    document.getElementById('req-count').innerText = data.metrics.requests;
+                    document.getElementById('err-count').innerText = data.metrics.errors;
+                    const logs = document.getElementById('logs');
+                    logs.innerHTML = data.logs.reverse().map(l => 
+                        '<div class="log-entry"><span class="log-time">' + l.timestamp.split('T')[1].split('.')[0] + '</span><span class="log-level ' + l.level + '">' + l.level + '</span><span>' + l.message + '</span></div>'
+                    ).join('');
+                });
+            }, 2000);
+        `;
+        
+        return `
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Ghost Console</title>
+            <style>
+                body { background: #1a1a1a; color: #e0e0e0; font-family: monospace; padding: 20px; }
+                .card { background: #2d2d2d; padding: 15px; margin-bottom: 20px; border-radius: 8px; border: 1px solid #404040; }
+                h1 { color: #4af626; }
+                h2 { border-bottom: 1px solid #404040; padding-bottom: 5px; }
+                .log-entry { padding: 5px; border-bottom: 1px solid #333; display: flex; }
+                .log-time { color: #888; margin-right: 10px; width: 180px; }
+                .log-level { font-weight: bold; margin-right: 10px; width: 80px; }
+                .INFO { color: #4af626; } .WARNING { color: #f1c40f; } .ERROR { color: #e74c3c; }
+                .metric-box { display: inline-block; width: 150px; text-align: center; background: #333; padding: 10px; margin-right: 10px; border-radius: 5px; }
+                .metric-val { font-size: 24px; font-weight: bold; color: #3498db; }
+            </style>
+            <script>${js}</script>
+        </head>
+        <body>
+            <h1>👻 Ghost Console</h1>
+            <div class="card">
+                <h2>Métriques Temps Réel</h2>
+                <div class="metric-box">Requêtes<div class="metric-val" id="req-count">0</div></div>
+                <div class="metric-box">Erreurs<div class="metric-val" id="err-count">0</div></div>
+            </div>
+            <div class="card">
+                <h2>Logs & Événements</h2>
+                <div id="logs">Chargement...</div>
+            </div>
+        </body>
+        </html>
+        `;
+    }
+}
+
+const monitor = new GhostMonitor();
+
+// ==============================================================================
+// � GESTIONNAIRE DE CONFIGURATION
 // ==============================================================================
 class ConfigManager {
     constructor() {
@@ -132,39 +321,51 @@ class AIEngine {
     }
 
     async call(systemPrompt, userPrompt, temperature = 0.3, jsonMode = false) {
-        const config = this.providers[this.provider] || this.providers.groq;
-        
-        if (this.provider === 'anthropic') {
-            return this.callAnthropic(config, systemPrompt, userPrompt, temperature);
-        } else if (this.provider === 'gemini') {
-            return this.callGemini(config, systemPrompt, userPrompt, temperature);
-        }
+        monitor.log('INFO', `Appel IA via ${this.provider}`, { model: this.model });
+        monitor.recordMetric('request', 1);
+        const startTime = Date.now();
 
-        const payload = {
-            model: this.model,
-            messages: [
-                { role: "system", content: systemPrompt },
-                { role: "user", content: userPrompt }
-            ],
-            temperature: temperature
-        };
-
-        if (jsonMode) {
-            payload.response_format = { type: "json_object" };
-        }
-
-        const options = {
-            hostname: config.hostname,
-            path: config.path,
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${this.apiKey}`,
-                'Content-Type': 'application/json',
-                'User-Agent': 'Mozilla/5.0 (Node.js/GhostCLI)'
+        try {
+            const config = this.providers[this.provider] || this.providers.groq;
+            
+            if (this.provider === 'anthropic') {
+                return await this.callAnthropic(config, systemPrompt, userPrompt, temperature);
+            } else if (this.provider === 'gemini') {
+                return await this.callGemini(config, systemPrompt, userPrompt, temperature);
             }
-        };
 
-        return this.makeRequest(options, payload);
+            const payload = {
+                model: this.model,
+                messages: [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: userPrompt }
+                ],
+                temperature: temperature
+            };
+
+            if (jsonMode) {
+                payload.response_format = { type: "json_object" };
+            }
+
+            const options = {
+                hostname: config.hostname,
+                path: config.path,
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${this.apiKey}`,
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'Mozilla/5.0 (Node.js/GhostCLI)'
+                }
+            };
+
+            const result = await this.makeRequest(options, payload);
+            monitor.recordMetric('latency', Date.now() - startTime);
+            return result;
+        } catch (e) {
+            monitor.log('ERROR', `Erreur Appel IA: ${e.message}`);
+            monitor.recordMetric('error', 1);
+            throw e;
+        }
     }
 
     async callAnthropic(config, systemPrompt, userPrompt, temperature) {
@@ -301,7 +502,8 @@ function parseArgs() {
         noSecurity: false,
         dryRun: false,
         help: false,
-        history: false
+        history: false,
+        console: false
     };
 
     for (let i = 0; i < args.length; i++) {
@@ -319,6 +521,8 @@ function parseArgs() {
             flags.help = true;
         } else if (args[i] === '--history') {
             flags.history = true;
+        } else if (args[i] === '--console') {
+            flags.console = true;
         }
     }
     return flags;
@@ -326,7 +530,7 @@ function parseArgs() {
 
 function showHelp() {
     console.log(`
-${Colors.BOLD}${Colors.CYAN}GHOST CLI v0.3.0${Colors.ENDC}
+${Colors.BOLD}${Colors.CYAN}GHOST CLI v0.3.1${Colors.ENDC}
 Assistant Git Intelligent multi-LLM (Groq, OpenAI, Anthropic, Gemini)
 
 ${Colors.BOLD}USAGE:${Colors.ENDC}
@@ -336,6 +540,7 @@ ${Colors.BOLD}OPTIONS:${Colors.ENDC}
   --model <name>     Modèle spécifique (ex: claude-3-5-sonnet-20240620, gemini-1.5-pro)
   --provider <name>  Fournisseur : groq (défaut), openai, anthropic, gemini
   --history          Afficher l'historique des commits générés
+  --console          Démarrer la console de monitoring & MCP (http://localhost:3000)
   --no-security      Désactiver l'audit de sécurité
   --dry-run          Générer le message sans effectuer le commit
   --help, -h         Afficher cette aide
@@ -348,8 +553,13 @@ ${Colors.BOLD}CONFIGURATION LOCALE (.ghostrc):${Colors.ENDC}
 // ==============================================================================
 // 🛡️ SCANNER DE SECURITE
 // ==============================================================================
+const GENERIC_API_KEY_REGEX = new RegExp(
+    "(?:key|api|token|secret|auth)[_-]?(?:key|api|token|secret|auth)?\\s*[:=]\\s*[\"'](?!claude|gemini|llama|gpt|text-)([a-zA-Z0-9]{16,})[\"']",
+    "i"
+);
+
 const SECRET_REGEXES = [
-    { name: 'Generic API Key', regex: /([a-z0-9_-]{20,})/gi },
+    { name: 'Generic API Key', regex: GENERIC_API_KEY_REGEX },
     { name: 'Groq API Key', regex: /gsk_[a-zA-Z0-9]{48}/g },
     { name: 'GitHub Token', regex: /gh[pous]_[a-zA-Z0-9]{36}/g },
     { name: 'Slack Token', regex: /xox[baprs]-[0-9a-zA-Z]{10,48}/g },
@@ -373,16 +583,33 @@ function calculateShannonEntropy(data) {
     return entropy;
 }
 
+const GHOSTIGNORE_FILE = path.join(process.cwd(), '.ghostignore');
+
+function loadGhostIgnore() {
+    if (!fs.existsSync(GHOSTIGNORE_FILE)) return [];
+    try {
+        return fs.readFileSync(GHOSTIGNORE_FILE, 'utf8')
+            .split('\n')
+            .map(line => line.trim())
+            .filter(line => line && !line.startsWith('#'));
+    } catch (e) {
+        return [];
+    }
+}
+
 function scanForSecrets(content) {
     if (!content) return [];
     const suspicious = [];
     
+    const ignoredPatterns = loadGhostIgnore();
+    const isIgnored = (str) => ignoredPatterns.some(pattern => str.includes(pattern));
+
     // 1. Recherche via Regex ciblées
     for (const { name, regex } of SECRET_REGEXES) {
         const matches = content.match(regex);
         if (matches) {
             matches.forEach(m => {
-                if (m.length > 8) {
+                if (m.length > 8 && !isIgnored(m)) {
                     suspicious.push(`${m.substring(0, 15)}... (${name})`);
                 }
             });
@@ -393,11 +620,21 @@ function scanForSecrets(content) {
     const regex = /(['"])(.*?)(\1)|=\s*([^\s]+)/g;
     let match;
 
+    const KNOWN_NON_SECRETS = [
+        'claude-3-5-sonnet', 'gemini-1.5-flash', 'llama-3.3-70b', 
+        'anthropic', 'openai', 'google', 'groq',
+        'ConfigManager', 'AIEngine', 'DEFAULT_MODEL',
+        'getDashboardHTML', 'GhostMonitor', 'startConsoleServer'
+    ];
+
     while ((match = regex.exec(content)) !== null) {
         const candidate = match[2] || match[4];
         
         // Filtres heuristiques de base
         if (!candidate || candidate.length < 12 || candidate.includes(' ')) continue;
+
+        // Ignorer si c'est un nom de modèle ou de classe connu, ou dans .ghostignore
+        if (KNOWN_NON_SECRETS.some(ns => candidate.includes(ns)) || isIgnored(candidate)) continue;
         
         // Analyse mathématique (Entropie > 4.8 est souvent un secret)
         if (calculateShannonEntropy(candidate) > 4.8) {
@@ -481,13 +718,19 @@ async function main() {
         process.exit(0);
     }
 
+    if (flags.console) {
+        monitor.startConsoleServer(3000);
+        // On ne quitte pas le processus, on le laisse tourner
+        return;
+    }
+
     if (flags.history) {
         showHistory();
         process.exit(0);
     }
 
     console.clear();
-    console.log(`\n${Colors.BOLD}${Colors.CYAN} 👻 GHOST CLI ${Colors.ENDC}${Colors.DIM} v0.3.0${Colors.ENDC}`);
+    console.log(`\n${Colors.BOLD}${Colors.CYAN} 👻 GHOST CLI ${Colors.ENDC}${Colors.DIM} v0.3.1${Colors.ENDC}`);
     console.log(`${Colors.DIM} ─────────────────────────────────────${Colors.ENDC}\n`);
 
     // 0. Chargement de la configuration locale .ghostrc
@@ -563,13 +806,27 @@ async function main() {
 
         if (Object.keys(potentialLeaks).length > 0) {
             console.log(`\n${Colors.WARNING}⚠️  Entropie élevée ou patterns suspects détectés ! Analyse approfondie par l'IA...${Colors.ENDC}`);
-            const valPrompt = `Analyse ces secrets potentiels : ${JSON.stringify(potentialLeaks)}. Réponds JSON {'is_breach': bool, 'reason': str}. Vrais secrets (API Keys, tokens) seulement. Ignore les exemples ou les faux positifs.`;
+            const securityPrompt = `Tu es un expert en cybersécurité. Analyse les extraits de code suivants pour détecter des secrets (clés API, mots de passe, tokens).
+            
+            CONTEXTE : L'utilisateur est en train de modifier le code source de l'outil 'Ghost CLI'.
+            
+            IMPORTANT :
+            - Ne signale PAS les noms de modèles d'IA comme 'claude-3-5-sonnet', 'gemini-1.5-flash', 'llama-3.3-70b-versatile', etc. Ce ne sont PAS des secrets.
+            - Ne signale PAS les noms de fichiers ou de classes (ex: 'ConfigManager', 'AIEngine').
+            - Ne signale PAS les noms de fournisseurs (ex: 'anthropic', 'google', 'groq').
+            - Ne signale QUE les chaînes qui ressemblent à des clés d'accès réelles (ex: gsk_..., sk-..., AKIA...) ou des secrets hautement probables.
+            
+            Réponds UNIQUEMENT au format JSON : {"is_breach": boolean, "reason": "string"}`;
+
+
+            const valPrompt = `${securityPrompt}\n\nSecrets potentiels : ${JSON.stringify(potentialLeaks)}`;
             
             try {
-                const res = await ai.call("Tu es un expert sécurité.", valPrompt, 0.3, true);
+                const res = await ai.call("Tu es un expert en cybersécurité.", valPrompt, 0.3, true);
                 const audit = JSON.parse(res);
                 
                 if (audit.is_breach) {
+                    monitor.log('SECURITY_ALERT', `Secret détecté : ${audit.reason}`, { details: audit });
                     console.log(`\n${Colors.FAIL}❌ [BLOCAGE SÉCURITÉ] Secret détecté !${Colors.ENDC}`);
                     console.log(`${Colors.FAIL}   Raison : ${audit.reason}${Colors.ENDC}\n`);
                     process.exit(1);
