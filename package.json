@@ -1,6 +1,6 @@
 {
   "name": "atlasia-ghost",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "Utilitaire de verification, validation, et de proposition de commits basé sur l'IA",
   "main": "ghost.js",
   "files": [
