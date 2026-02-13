@@ -1,6 +1,6 @@
 {
   "name": "atlasia-ghost",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Utilitaire de verification, validation, et de proposition de commits basé sur l'IA",
   "main": "ghost.js",
   "files": [
@@ -36,6 +36,5 @@
   "homepage": "https://github.com/lamallamadel/ghost#readme",
   "engines": {
     "node": ">=14.0.0"
-  },
-  "dependencies": {}
+  }
 }

@@ -12,15 +12,15 @@ console.log('🧪 Running Ghost CLI Tests...\n');
 try {
     // Test 1: Version check
     const packageJson = require('./package.json');
-    assert.strictEqual(packageJson.version, '0.2.0', 'package.json version should be 0.2.0');
+    assert.strictEqual(packageJson.version, '0.3.0', 'package.json version should be 0.3.0');
     console.log('✅ Test 1: package.json version is correct');
 
     // Test 2: Help flag
     const helpOutput = execSync('node ghost.js --help', { encoding: 'utf8' });
-    assert.ok(helpOutput.includes('GHOST CLI v0.2.0'), 'Help output should contain version');
-    assert.ok(helpOutput.includes('--model'), 'Help output should contain --model flag');
-    assert.ok(helpOutput.includes('--provider'), 'Help output should contain --provider flag');
-    assert.ok(helpOutput.includes('.ghostrc'), 'Help output should mention .ghostrc');
+    assert.ok(helpOutput.includes('GHOST CLI v0.3.0'), 'Help output should contain version');
+    assert.ok(helpOutput.includes('anthropic'), 'Help output should contain anthropic');
+    assert.ok(helpOutput.includes('gemini'), 'Help output should contain gemini');
+    assert.ok(helpOutput.includes('--history'), 'Help output should contain --history');
     console.log('✅ Test 2: Help flag output is correct');
 
     // Test 3: Internal logic (Entropy)
