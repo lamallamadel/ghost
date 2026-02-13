@@ -1,13 +1,13 @@
 {
-  "name": "@afroware/ghost",
-  "version": "0.0.1",
+  "name": "atlasia-ghost",
+  "version": "0.1.0",
   "description": "Utilitaire de verification, validation, et de proposition de commits basé sur l'IA",
   "main": "ghost.js",
   "bin": {
     "ghost": "./ghost.js"
   },
   "scripts": {
-    "test": "echo \"ghost raider\"",
+    "test": "node test.js",
     "start": "node ghost.js"
   },
   "repository": {
@@ -31,5 +31,6 @@
   "homepage": "https://github.com/lamallamadel/ghost#readme",
   "engines": {
     "node": ">=14.0.0"
-  }
+  },
+  "dependencies": {}
 }

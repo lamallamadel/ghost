@@ -159,8 +159,60 @@ class AIEngine {
 }
 
 // ==============================================================================
+// 🛠️ UTILS & ARG PARSER
+// ==============================================================================
+function parseArgs() {
+    const args = process.argv.slice(2);
+    const flags = {
+        model: null,
+        noSecurity: false,
+        dryRun: false,
+        help: false
+    };
+
+    for (let i = 0; i < args.length; i++) {
+        if (args[i] === '--model' && args[i + 1]) {
+            flags.model = args[i + 1];
+            i++;
+        } else if (args[i] === '--no-security') {
+            flags.noSecurity = true;
+        } else if (args[i] === '--dry-run') {
+            flags.dryRun = true;
+        } else if (args[i] === '--help' || args[i] === '-h') {
+            flags.help = true;
+        }
+    }
+    return flags;
+}
+
+function showHelp() {
+    console.log(`
+${Colors.BOLD}${Colors.CYAN}GHOST CLI v0.1.0${Colors.ENDC}
+Assistant Git Intelligent basé sur l'IA (Groq)
+
+${Colors.BOLD}USAGE:${Colors.ENDC}
+  ghost [options]
+
+${Colors.BOLD}OPTIONS:${Colors.ENDC}
+  --model <name>    Utiliser un modèle spécifique (ex: llama-3.1-8b-instant)
+  --no-security     Désactiver l'audit de sécurité
+  --dry-run         Générer le message sans effectuer le commit
+  --help, -h        Afficher cette aide
+    `);
+}
+
+// ==============================================================================
 // 🛡️ SCANNER DE SECURITE
 // ==============================================================================
+const SECRET_REGEXES = [
+    { name: 'Generic API Key', regex: /([a-z0-9_-]{20,})/gi },
+    { name: 'Groq API Key', regex: /gsk_[a-zA-Z0-9]{48}/g },
+    { name: 'GitHub Token', regex: /gh[pous]_[a-zA-Z0-9]{36}/g },
+    { name: 'Slack Token', regex: /xox[baprs]-[0-9a-zA-Z]{10,48}/g },
+    { name: 'AWS Access Key', regex: /AKIA[0-9A-Z]{16}/g },
+    { name: 'Private Key', regex: /-----BEGIN (RSA|EC|PGP|OPENSSH) PRIVATE KEY-----/g }
+];
+
 function calculateShannonEntropy(data) {
     if (!data) return 0;
     const frequencies = {};
@@ -180,7 +232,20 @@ function calculateShannonEntropy(data) {
 function scanForSecrets(content) {
     if (!content) return [];
     const suspicious = [];
-    // Regex : Cherche ce qui est entre quotes ou après un signe égal
+    
+    // 1. Recherche via Regex ciblées
+    for (const { name, regex } of SECRET_REGEXES) {
+        const matches = content.match(regex);
+        if (matches) {
+            matches.forEach(m => {
+                if (m.length > 8) {
+                    suspicious.push(`${m.substring(0, 15)}... (${name})`);
+                }
+            });
+        }
+    }
+
+    // 2. Recherche via Entropie (pour les secrets non-standard)
     const regex = /(['"])(.*?)(\1)|=\s*([^\s]+)/g;
     let match;
 
@@ -192,7 +257,10 @@ function scanForSecrets(content) {
         
         // Analyse mathématique (Entropie > 4.8 est souvent un secret)
         if (calculateShannonEntropy(candidate) > 4.8) {
-            suspicious.push(candidate.substring(0, 15) + "...");
+            const display = candidate.substring(0, 15) + "...";
+            if (!suspicious.some(s => s.startsWith(display))) {
+                suspicious.push(`${display} (High Entropy)`);
+            }
         }
     }
     return suspicious;
@@ -232,7 +300,7 @@ function getStagedDiff() {
 
     for (let f of files) {
         f = f.trim().replace(/^"|"$/g, '');
-        if (!f || SAFE_FILES.has(path.basename(f)) || SAFE_EXTENSIONS.has(path.extname(f))) continue;
+        if (!f) continue;
 
         const content = gitExec(['diff', '--cached', `"${f}"`]);
         if (content) {
@@ -262,8 +330,15 @@ function promptUser(question) {
 // 🚀 MAIN LOOP
 // ==============================================================================
 async function main() {
+    const flags = parseArgs();
+
+    if (flags.help) {
+        showHelp();
+        process.exit(0);
+    }
+
     console.clear();
-    console.log(`\n${Colors.BOLD}${Colors.CYAN} 👻 GHOST CLI ${Colors.ENDC}${Colors.DIM} v1.0.0${Colors.ENDC}`);
+    console.log(`\n${Colors.BOLD}${Colors.CYAN} 👻 GHOST CLI ${Colors.ENDC}${Colors.DIM} v0.1.0${Colors.ENDC}`);
     console.log(`${Colors.DIM} ─────────────────────────────────────${Colors.ENDC}\n`);
 
     // 1. Vérification Git
@@ -275,7 +350,7 @@ async function main() {
 
     const config = new ConfigManager();
     const apiKey = await config.getApiKey();
-    const model = config.getModel(); // Récupère le modèle configuré
+    const model = flags.model || config.getModel(); // Priorité au flag --model
     const ai = new AIEngine(apiKey, model);
 
     // 2. Récupération du Diff
@@ -293,34 +368,38 @@ async function main() {
     console.log(""); // Saut de ligne
 
     // 3. Audit de Sécurité
-    process.stdout.write(`${Colors.BLUE}🛡️  [1/2] Audit de Sécurité... ${Colors.ENDC}`);
-    
-    const potentialLeaks = {};
-    for (const [fname, content] of Object.entries(diffMap)) {
-        const suspects = scanForSecrets(content);
-        if (suspects.length > 0) potentialLeaks[fname] = suspects;
-    }
-
-    if (Object.keys(potentialLeaks).length > 0) {
-        console.log(`\n${Colors.WARNING}⚠️  Entropie élevée détectée ! Analyse approfondie par l'IA...${Colors.ENDC}`);
-        const valPrompt = `Analyse ces secrets potentiels : ${JSON.stringify(potentialLeaks)}. Réponds JSON {'is_breach': bool, 'reason': str}. Vrais secrets (API Keys) seulement.`;
+    if (!flags.noSecurity) {
+        process.stdout.write(`${Colors.BLUE}🛡️  [1/2] Audit de Sécurité... ${Colors.ENDC}`);
         
-        try {
-            const res = await ai.call("Tu es un expert sécurité.", valPrompt, 0.3, true);
-            const audit = JSON.parse(res);
+        const potentialLeaks = {};
+        for (const [fname, content] of Object.entries(diffMap)) {
+            const suspects = scanForSecrets(content);
+            if (suspects.length > 0) potentialLeaks[fname] = suspects;
+        }
+
+        if (Object.keys(potentialLeaks).length > 0) {
+            console.log(`\n${Colors.WARNING}⚠️  Entropie élevée ou patterns suspects détectés ! Analyse approfondie par l'IA...${Colors.ENDC}`);
+            const valPrompt = `Analyse ces secrets potentiels : ${JSON.stringify(potentialLeaks)}. Réponds JSON {'is_breach': bool, 'reason': str}. Vrais secrets (API Keys, tokens) seulement. Ignore les exemples ou les faux positifs.`;
             
-            if (audit.is_breach) {
-                console.log(`\n${Colors.FAIL}❌ [BLOCAGE SÉCURITÉ] Secret détecté !${Colors.ENDC}`);
-                console.log(`${Colors.FAIL}   Raison : ${audit.reason}${Colors.ENDC}\n`);
-                process.exit(1);
-            } else {
-                console.log(`${Colors.GREEN}✅ Faux positifs confirmés (Sûr).${Colors.ENDC}`);
+            try {
+                const res = await ai.call("Tu es un expert sécurité.", valPrompt, 0.3, true);
+                const audit = JSON.parse(res);
+                
+                if (audit.is_breach) {
+                    console.log(`\n${Colors.FAIL}❌ [BLOCAGE SÉCURITÉ] Secret détecté !${Colors.ENDC}`);
+                    console.log(`${Colors.FAIL}   Raison : ${audit.reason}${Colors.ENDC}\n`);
+                    process.exit(1);
+                } else {
+                    console.log(`${Colors.GREEN}✅ Faux positifs confirmés (Sûr).${Colors.ENDC}`);
+                }
+            } catch (e) {
+                console.log(`${Colors.FAIL}Erreur audit IA: ${e.message}${Colors.ENDC}`);
             }
-        } catch (e) {
-            console.log(`${Colors.FAIL}Erreur audit IA: ${e.message}${Colors.ENDC}`);
+        } else {
+            console.log(`${Colors.GREEN}OK (Code sain)${Colors.ENDC}`);
         }
     } else {
-        console.log(`${Colors.GREEN}OK (Code sain)${Colors.ENDC}`);
+        console.log(`${Colors.WARNING}⏩ Audit de sécurité ignoré (--no-security)${Colors.ENDC}`);
     }
 
     // 4. Génération
@@ -337,6 +416,11 @@ async function main() {
         console.log(`\n${Colors.CYAN}──────────────────────────────────────────────────${Colors.ENDC}`);
         console.log(`${Colors.BOLD}${commitMsg}${Colors.ENDC}`);
         console.log(`${Colors.CYAN}──────────────────────────────────────────────────${Colors.ENDC}\n`);
+
+        if (flags.dryRun) {
+            console.log(`${Colors.WARNING}✨ Mode --dry-run : Aucun commit effectué.${Colors.ENDC}\n`);
+            process.exit(0);
+        }
 
         const action = await promptUser(`${Colors.BOLD}[Enter]${Colors.ENDC} Valider  |  ${Colors.BOLD}[n]${Colors.ENDC} Annuler : `);
 
