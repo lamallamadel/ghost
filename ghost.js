@@ -17,6 +17,7 @@ const os = require('os');
 // ⚙️ CONFIGURATION & CONSTANTES
 // ==============================================================================
 const CONFIG_FILE = path.join(os.homedir(), '.ghost');
+const HISTORY_FILE = path.join(os.homedir(), '.ghost_history');
 const SAFE_EXTENSIONS = new Set(['.md', '.txt', '.csv', '.html', '.css', '.scss', '.lock', '.xml', '.json']);
 const SAFE_FILES = new Set(['mvnw', 'gradlew', 'package-lock.json', 'yarn.lock', 'pom.xml']);
 
@@ -62,21 +63,29 @@ class ConfigManager {
         console.log(`${Colors.DIM}Configuration sauvegardée dans ${CONFIG_FILE}${Colors.ENDC}`);
     }
 
-    async getApiKey() {
-        let key = process.env.GROQ_API_KEY || this.config.groq_api_key;
+    async getApiKey(provider = 'groq') {
+        const keyMap = {
+            groq: { env: 'GROQ_API_KEY', config: 'groq_api_key', label: 'Groq', url: 'https://console.groq.com', prefix: 'gsk_' },
+            openai: { env: 'OPENAI_API_KEY', config: 'openai_api_key', label: 'OpenAI', url: 'https://platform.openai.com', prefix: 'sk-' },
+            anthropic: { env: 'ANTHROPIC_API_KEY', config: 'anthropic_api_key', label: 'Anthropic', url: 'https://console.anthropic.com', prefix: 'sk-ant' },
+            gemini: { env: 'GEMINI_API_KEY', config: 'gemini_api_key', label: 'Gemini', url: 'https://aistudio.google.com', prefix: '' }
+        };
+
+        const info = keyMap[provider] || keyMap.groq;
+        let key = process.env[info.env] || this.config[info.config];
 
         if (!key) {
-            console.log(`\n${Colors.WARNING}⚠️  Configuration manquante${Colors.ENDC}`);
-            console.log(`${Colors.DIM}Pour utiliser Ghost, vous avez besoin d'une clé API Groq (Gratuite).${Colors.ENDC}`);
-            console.log(`${Colors.BLUE}👉 Obtenir une clé : https://console.groq.com${Colors.ENDC}\n`);
+            console.log(`\n${Colors.WARNING}⚠️  Configuration manquante pour ${info.label}${Colors.ENDC}`);
+            console.log(`${Colors.DIM}Pour utiliser Ghost avec ${info.label}, vous avez besoin d'une clé API.${Colors.ENDC}`);
+            console.log(`${Colors.BLUE}👉 Obtenir une clé : ${info.url}${Colors.ENDC}\n`);
             
-            key = await promptUser(`${Colors.BOLD}Collez votre clé Groq (gsk_...) : ${Colors.ENDC}`);
+            key = await promptUser(`${Colors.BOLD}Collez votre clé ${info.label} : ${Colors.ENDC}`);
             
-            if (key && key.trim().startsWith('gsk_')) {
-                this.config.groq_api_key = key.trim();
+            if (key && key.trim()) {
+                this.config[info.config] = key.trim();
                 this.save();
             } else {
-                console.log(`${Colors.FAIL}❌ Clé invalide ou manquante. Abandon.${Colors.ENDC}`);
+                console.log(`${Colors.FAIL}❌ Clé manquante. Abandon.${Colors.ENDC}`);
                 process.exit(1);
             }
         }
@@ -110,6 +119,14 @@ class AIEngine {
             openai: {
                 hostname: "api.openai.com",
                 path: "/v1/chat/completions"
+            },
+            anthropic: {
+                hostname: "api.anthropic.com",
+                path: "/v1/messages"
+            },
+            gemini: {
+                hostname: "generativelanguage.googleapis.com",
+                path: "/v1beta/models/" // Modèle injecté dynamiquement
             }
         };
     }
@@ -117,6 +134,12 @@ class AIEngine {
     async call(systemPrompt, userPrompt, temperature = 0.3, jsonMode = false) {
         const config = this.providers[this.provider] || this.providers.groq;
         
+        if (this.provider === 'anthropic') {
+            return this.callAnthropic(config, systemPrompt, userPrompt, temperature);
+        } else if (this.provider === 'gemini') {
+            return this.callGemini(config, systemPrompt, userPrompt, temperature);
+        }
+
         const payload = {
             model: this.model,
             messages: [
@@ -141,6 +164,73 @@ class AIEngine {
             }
         };
 
+        return this.makeRequest(options, payload);
+    }
+
+    async callAnthropic(config, systemPrompt, userPrompt, temperature) {
+        const payload = {
+            model: this.model.includes('claude') ? this.model : "claude-3-5-sonnet-20240620",
+            max_tokens: 1024,
+            system: systemPrompt,
+            messages: [{ role: "user", content: userPrompt }],
+            temperature: temperature
+        };
+
+        const options = {
+            hostname: config.hostname,
+            path: config.path,
+            method: 'POST',
+            headers: {
+                'x-api-key': this.apiKey,
+                'anthropic-version': '2023-06-01',
+                'Content-Type': 'application/json',
+                'User-Agent': 'Mozilla/5.0 (Node.js/GhostCLI)'
+            }
+        };
+
+        const response = await this.makeRequest(options, payload);
+        try {
+            const data = JSON.parse(response);
+            return data.content[0].text;
+        } catch (e) {
+            return response; // Déjà parsé si makeRequest renvoie direct content
+        }
+    }
+
+    async callGemini(config, systemPrompt, userPrompt, temperature) {
+        const modelName = this.model.includes('gemini') ? this.model : "gemini-1.5-flash";
+        const path = `${config.path}${modelName}:generateContent?key=${this.apiKey}`;
+        
+        const payload = {
+            contents: [{
+                parts: [{ text: `${systemPrompt}\n\nUser: ${userPrompt}` }]
+            }],
+            generationConfig: {
+                temperature: temperature,
+                maxOutputTokens: 1024,
+            }
+        };
+
+        const options = {
+            hostname: config.hostname,
+            path: path,
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'User-Agent': 'Mozilla/5.0 (Node.js/GhostCLI)'
+            }
+        };
+
+        const response = await this.makeRequest(options, payload);
+        try {
+            const data = JSON.parse(response);
+            return data.candidates[0].content.parts[0].text;
+        } catch (e) {
+            return response;
+        }
+    }
+
+    async makeRequest(options, payload) {
         return new Promise((resolve, reject) => {
             const req = https.request(options, (res) => {
                 let data = '';
@@ -149,14 +239,20 @@ class AIEngine {
                     if (res.statusCode >= 400) {
                         try {
                             const errBody = JSON.parse(data);
-                            reject(new Error(`API Error ${res.statusCode} (${this.provider}): ${errBody.error?.message || data}`));
+                            reject(new Error(`API Error ${res.statusCode} (${this.provider}): ${errBody.error?.message || errBody.error || data}`));
                         } catch (e) {
                             reject(new Error(`API Error ${res.statusCode} (${this.provider}): ${data}`));
                         }
                     } else {
                         try {
-                            const result = JSON.parse(data);
-                            resolve(result.choices[0].message.content);
+                            // On renvoie la string brute pour que les méthodes spécifiques puissent parser
+                            // sauf pour OpenAI/Groq où on extrait direct pour compatibilité descendante
+                            if (this.provider === 'groq' || this.provider === 'openai') {
+                                const result = JSON.parse(data);
+                                resolve(result.choices[0].message.content);
+                            } else {
+                                resolve(data);
+                            }
                         } catch (e) {
                             reject(e);
                         }
@@ -174,6 +270,29 @@ class AIEngine {
 // ==============================================================================
 // 🛠️ UTILS & ARG PARSER
 // ==============================================================================
+function saveToHistory(commitMsg) {
+    try {
+        const entry = `[${new Date().toISOString()}] ${commitMsg}\n`;
+        fs.appendFileSync(HISTORY_FILE, entry);
+    } catch (e) {
+        // Ignorer les erreurs d'écriture de l'historique
+    }
+}
+
+function showHistory(limit = 10) {
+    if (!fs.existsSync(HISTORY_FILE)) {
+        console.log(`${Colors.DIM}L'historique est vide.${Colors.ENDC}`);
+        return;
+    }
+    const lines = fs.readFileSync(HISTORY_FILE, 'utf8').trim().split('\n');
+    console.log(`\n${Colors.BOLD}${Colors.CYAN}📜 HISTORIQUE DES COMMITS (Derniers ${limit})${Colors.ENDC}`);
+    lines.slice(-limit).reverse().forEach(line => {
+        const [date, ...msg] = line.split(' ');
+        console.log(`  ${Colors.DIM}${date}${Colors.ENDC} ${msg.join(' ')}`);
+    });
+    console.log("");
+}
+
 function parseArgs() {
     const args = process.argv.slice(2);
     const flags = {
@@ -181,7 +300,8 @@ function parseArgs() {
         provider: null,
         noSecurity: false,
         dryRun: false,
-        help: false
+        help: false,
+        history: false
     };
 
     for (let i = 0; i < args.length; i++) {
@@ -197,6 +317,8 @@ function parseArgs() {
             flags.dryRun = true;
         } else if (args[i] === '--help' || args[i] === '-h') {
             flags.help = true;
+        } else if (args[i] === '--history') {
+            flags.history = true;
         }
     }
     return flags;
@@ -204,22 +326,22 @@ function parseArgs() {
 
 function showHelp() {
     console.log(`
-${Colors.BOLD}${Colors.CYAN}GHOST CLI v0.2.0${Colors.ENDC}
-Assistant Git Intelligent basé sur l'IA (Groq/OpenAI)
+${Colors.BOLD}${Colors.CYAN}GHOST CLI v0.3.0${Colors.ENDC}
+Assistant Git Intelligent multi-LLM (Groq, OpenAI, Anthropic, Gemini)
 
 ${Colors.BOLD}USAGE:${Colors.ENDC}
   ghost [options]
 
 ${Colors.BOLD}OPTIONS:${Colors.ENDC}
-  --model <name>     Utiliser un modèle spécifique (ex: llama-3.1-8b-instant)
-  --provider <name>  Choisir le fournisseur (groq [défaut], openai)
+  --model <name>     Modèle spécifique (ex: claude-3-5-sonnet-20240620, gemini-1.5-pro)
+  --provider <name>  Fournisseur : groq (défaut), openai, anthropic, gemini
+  --history          Afficher l'historique des commits générés
   --no-security      Désactiver l'audit de sécurité
   --dry-run          Générer le message sans effectuer le commit
   --help, -h         Afficher cette aide
 
 ${Colors.BOLD}CONFIGURATION LOCALE (.ghostrc):${Colors.ENDC}
-  Créez un fichier ${Colors.CYAN}.ghostrc${Colors.ENDC} JSON dans votre projet pour personnaliser le prompt :
-  { "prompt": "Ton prompt personnalisé ici" }
+  { "prompt": "...", "provider": "anthropic", "model": "..." }
     `);
 }
 
@@ -359,8 +481,13 @@ async function main() {
         process.exit(0);
     }
 
+    if (flags.history) {
+        showHistory();
+        process.exit(0);
+    }
+
     console.clear();
-    console.log(`\n${Colors.BOLD}${Colors.CYAN} 👻 GHOST CLI ${Colors.ENDC}${Colors.DIM} v0.2.0${Colors.ENDC}`);
+    console.log(`\n${Colors.BOLD}${Colors.CYAN} 👻 GHOST CLI ${Colors.ENDC}${Colors.DIM} v0.3.0${Colors.ENDC}`);
     console.log(`${Colors.DIM} ─────────────────────────────────────${Colors.ENDC}\n`);
 
     // 0. Chargement de la configuration locale .ghostrc
@@ -482,15 +609,16 @@ async function main() {
         const action = await promptUser(`${Colors.BOLD}[Enter]${Colors.ENDC} Valider  |  ${Colors.BOLD}[n]${Colors.ENDC} Annuler : `);
 
         if (action.toLowerCase() === 'n') {
-            console.log(`\n${Colors.WARNING}🚫 Opération annulée.${Colors.ENDC}\n`);
-        } else {
-            try {
-                execSync(`git commit -m "${commitMsg}"`, { stdio: 'inherit' });
-                console.log(`\n${Colors.GREEN}✅ Commit effectué avec succès !${Colors.ENDC}\n`);
-            } catch (e) {
-                // L'erreur est déjà affichée par git via stdio: inherit
-            }
+        console.log(`\n${Colors.WARNING}🚫 Opération annulée.${Colors.ENDC}\n`);
+    } else {
+        try {
+            execSync(`git commit -m "${commitMsg}"`, { stdio: 'inherit' });
+            saveToHistory(commitMsg);
+            console.log(`\n${Colors.GREEN}✅ Commit effectué avec succès !${Colors.ENDC}\n`);
+        } catch (e) {
+            // L'erreur est déjà affichée par git via stdio: inherit
         }
+    }
     } catch (e) {
         console.log(`\n${Colors.FAIL}❌ Erreur fatale : ${e.message}${Colors.ENDC}\n`);
         process.exit(1);
