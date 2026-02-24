@@ -1,4 +1,5 @@
 const path = require('path');
+const { TrafficPolicer } = require('../qos/token-bucket');
 
 class GlobMatcher {
     static match(str, pattern) {
@@ -231,9 +232,10 @@ class PermissionChecker {
 }
 
 class AuthorizationLayer {
-    constructor() {
+    constructor(options = {}) {
         this.rateLimitManager = new RateLimitManager();
         this.permissionCheckers = new Map();
+        this.trafficPolicer = new TrafficPolicer(options);
     }
 
     registerExtension(extensionId, manifest) {
@@ -246,6 +248,12 @@ class AuthorizationLayer {
                 networkCap.rateLimit.cir, 
                 networkCap.rateLimit.bc
             );
+            
+            this.trafficPolicer.registerExtension(extensionId, {
+                cir: networkCap.rateLimit.cir,
+                bc: networkCap.rateLimit.bc,
+                be: networkCap.rateLimit.be
+            });
         }
     }
 
@@ -273,6 +281,21 @@ class AuthorizationLayer {
                 permissionCheck = checker.checkNetworkAccess(intent.params.url);
                 
                 if (permissionCheck.allowed) {
+                    const policeResult = this.trafficPolicer.police(intent.extensionId);
+                    
+                    if (!policeResult.allowed) {
+                        return {
+                            authorized: false,
+                            reason: policeResult.reason,
+                            code: policeResult.code,
+                            qos: {
+                                classification: policeResult.classification,
+                                color: policeResult.color,
+                                state: policeResult.state
+                            }
+                        };
+                    }
+                    
                     const rateLimitCheck = this.rateLimitManager.checkLimit(intent.extensionId);
                     if (!rateLimitCheck.allowed) {
                         return {
@@ -321,6 +344,7 @@ class AuthorizationLayer {
     unregisterExtension(extensionId) {
         this.permissionCheckers.delete(extensionId);
         this.rateLimitManager.cleanup(extensionId);
+        this.trafficPolicer.cleanup(extensionId);
     }
 
     getRateLimitState(extensionId) {
@@ -330,11 +354,24 @@ class AuthorizationLayer {
     resetRateLimit(extensionId) {
         this.rateLimitManager.reset(extensionId);
     }
+
+    getTrafficPolicerState(extensionId) {
+        return this.trafficPolicer.getState(extensionId);
+    }
+
+    getAllTrafficPolicerStates() {
+        return this.trafficPolicer.getAllStates();
+    }
+
+    resetTrafficPolicer(extensionId) {
+        this.trafficPolicer.reset(extensionId);
+    }
 }
 
 module.exports = {
     AuthorizationLayer,
     PermissionChecker,
     RateLimitManager,
-    TokenBucket
+    TokenBucket,
+    TrafficPolicer
 };

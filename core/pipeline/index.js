@@ -1,12 +1,13 @@
 const { MessageInterceptor, Intent, IntentSchema } = require('./intercept');
-const { AuthorizationLayer, PermissionChecker, RateLimitManager, TokenBucket } = require('./auth');
+const { AuthorizationLayer, PermissionChecker, RateLimitManager, TokenBucket, TrafficPolicer } = require('./auth');
 const { AuditLayer, AuditLogger, NISTValidator, EntropyScanner } = require('./audit');
 const { ExecutionLayer, ExecutionError, CircuitBreaker, TimeoutManager } = require('./execute');
+const { TwoRateThreeColorTokenBucket } = require('../qos/token-bucket');
 
 class IOPipeline {
     constructor(options = {}) {
         this.interceptor = new MessageInterceptor();
-        this.authLayer = new AuthorizationLayer();
+        this.authLayer = new AuthorizationLayer(options);
         this.auditLayer = new AuditLayer(options.auditLogPath);
         this.executionLayer = new ExecutionLayer();
     }
@@ -124,6 +125,18 @@ class IOPipeline {
     resetCircuitBreaker(type) {
         this.executionLayer.resetCircuitBreaker(type);
     }
+
+    getTrafficPolicerState(extensionId) {
+        return this.authLayer.getTrafficPolicerState(extensionId);
+    }
+
+    getAllTrafficPolicerStates() {
+        return this.authLayer.getAllTrafficPolicerStates();
+    }
+
+    resetTrafficPolicer(extensionId) {
+        this.authLayer.resetTrafficPolicer(extensionId);
+    }
 }
 
 module.exports = {
@@ -135,6 +148,8 @@ module.exports = {
     PermissionChecker,
     RateLimitManager,
     TokenBucket,
+    TrafficPolicer,
+    TwoRateThreeColorTokenBucket,
     AuditLayer,
     AuditLogger,
     NISTValidator,
