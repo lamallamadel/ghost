@@ -1,0 +1,39 @@
+{
+  "name": "@ghost/extension-sdk",
+  "version": "1.0.0",
+  "description": "SDK for building Ghost CLI extensions with typed JSON-RPC helpers",
+  "main": "index.js",
+  "types": "index.d.ts",
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "lib/**/*.js",
+    "lib/**/*.d.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "ghost",
+    "extension",
+    "sdk",
+    "json-rpc",
+    "cli"
+  ],
+  "author": "Adel Lamallam",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lamallamadel/ghost.git",
+    "directory": "packages/extension-sdk"
+  },
+  "bugs": {
+    "url": "https://github.com/lamallamadel/ghost/issues"
+  },
+  "homepage": "https://github.com/lamallamadel/ghost/tree/main/packages/extension-sdk#readme",
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

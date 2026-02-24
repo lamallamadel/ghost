@@ -83,6 +83,80 @@ This shows:
 - Audit validation results
 - Extension subprocess state changes
 
+## Extension Developer Toolkit 🛠️
+
+Ghost now includes a complete toolkit for building custom extensions:
+
+### CLI Commands
+
+- **`ghost extension init <name>`** - Scaffold a new extension project with boilerplate
+- **`ghost extension validate [path]`** - Validate manifest syntax and simulate permissions
+- **`ghost extension install <path>`** - Install extension locally
+- **`ghost extension list`** - List installed extensions
+- **`ghost extension info <id>`** - Show extension details
+
+### Extension SDK
+
+Install the official SDK in your extension:
+
+```bash
+npm install @ghost/extension-sdk
+```
+
+```javascript
+const { ExtensionSDK } = require('@ghost/extension-sdk');
+
+class MyExtension {
+    constructor() {
+        this.sdk = new ExtensionSDK('my-extension-id');
+    }
+
+    async myCommand(params) {
+        // Read files
+        const content = await this.sdk.requestFileRead({ path: './file.txt' });
+        
+        // Make HTTP requests
+        const data = await this.sdk.requestNetworkCall({
+            url: 'https://api.example.com/data'
+        });
+        
+        // Execute git commands
+        const status = await this.sdk.requestGitStatus();
+        
+        return { success: true, output: 'Done!' };
+    }
+}
+
+module.exports = MyExtension;
+```
+
+### Documentation
+
+- 🛠️ [Developer Toolkit Guide](./docs/DEVELOPER_TOOLKIT.md) - Complete guide to extension development
+- 📖 [Extension API Reference](./docs/extension-api.md) - I/O intent schema and examples
+- 💡 [Extension Examples](./docs/extension-examples.md) - Working examples for common patterns
+- 📦 [Extension SDK Package](./packages/extension-sdk/README.md) - SDK documentation
+
+### Quick Start
+
+```bash
+# Create a new extension
+ghost extension init my-awesome-extension
+cd my-awesome-extension
+
+# Install dependencies
+npm install
+
+# Validate the extension
+ghost extension validate
+
+# Install locally
+ghost extension install .
+
+# Use your extension
+ghost myCommand
+```
+
 ## Core Features
 
 ### 1. Extension Discovery & Routing

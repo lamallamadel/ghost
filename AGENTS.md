@@ -1,31 +1,56 @@
-1→# Ghost CLI - Agent Guide
-2→
-3→## Setup & Commands
-4→
-5→**Initial Setup:** `npm install` (root), `cd desktop && npm install` (desktop app)
-6→
-7→**Build:** `npm run build` (desktop only, creates production build)
-8→
-9→**Lint:** `npm run lint` (desktop only, runs ESLint on TypeScript/React files)
-10→
-11→**Test:** `npm test` (root runs test.js + integration tests in test/)
-12→
-13→**Dev Server:** `cd desktop && npm run desktop:dev` (Electron app with Vite HMR on :5173)
-14→
-15→## Tech Stack
-16→
-17→- **Root:** Pure Node.js CLI (no deps), zero-install design for global NPM package
-18→- **Desktop:** Electron + React 18 + TypeScript + Vite + TailwindCSS + Zustand (state)
-19→- **Testing:** Node assert (root), Vitest (desktop)
-20→
-21→## Architecture
-22→
-23→- `ghost.js`: Main CLI entry with AI-powered Git assistant (Groq/Anthropic/Gemini)
-24→- `desktop/`: Electron monitoring console (React SPA) - dev-only, not published to NPM
-25→- `test/`: Integration tests for version hooks, merge resolution, and audit features
-26→
-27→## Code Style
-28→
-29→- Root: Node.js CommonJS, minimal comments, ANSI color output
-30→- Desktop: ESLint flat config, React hooks, TypeScript strict mode, functional components
-31→
+# Ghost CLI - Agent Guide
+
+## Setup & Commands
+
+**Initial Setup:** `npm install` (root), `cd desktop && npm install` (desktop app)
+
+**Build:** `npm run build` (desktop only, creates production build)
+
+**Lint:** `npm run lint` (desktop only, runs ESLint on TypeScript/React files)
+
+**Test:** `npm test` (root runs test.js + integration tests in test/)
+
+**Dev Server:** `cd desktop && npm run desktop:dev` (Electron app with Vite HMR on :5173)
+
+## Tech Stack
+
+- **Root:** Pure Node.js CLI (no deps), zero-install design for global NPM package
+- **Desktop:** Electron + React 18 + TypeScript + Vite + TailwindCSS + Zustand (state)
+- **Testing:** Node assert (root), Vitest (desktop)
+- **Extension SDK:** @ghost/extension-sdk package (CommonJS + TypeScript defs)
+
+## Architecture
+
+- `ghost.js`: Main CLI entry with AI-powered Git assistant (Groq/Anthropic/Gemini)
+- `core/`: Gateway, runtime, pipeline layers (intercept→auth→audit→execute)
+- `extensions/`: Bundled extensions (ghost-git-extension)
+- `packages/extension-sdk/`: NPM package for building extensions
+- `desktop/`: Electron monitoring console (React SPA) - dev-only, not published to NPM
+- `test/`: Integration tests for version hooks, merge resolution, and audit features
+- `docs/`: Complete extension development documentation
+
+## Code Style
+
+- Root: Node.js CommonJS, minimal comments, ANSI color output
+- Desktop: ESLint flat config, React hooks, TypeScript strict mode, functional components
+- SDK: CommonJS modules with TypeScript definitions
+
+## Extension Developer Toolkit
+
+New commands and SDK for building extensions:
+
+**CLI Commands:**
+- `ghost extension init <name>` - Scaffold new extension with boilerplate
+- `ghost extension validate [path]` - Validate manifest and permissions
+
+**SDK Package:** `packages/extension-sdk/` - @ghost/extension-sdk NPM package with:
+- `ExtensionSDK` class - High-level API (requestFileRead, requestNetworkCall, requestGitExec)
+- `IntentBuilder` - Build JSON-RPC intents
+- `RPCClient` - Communication with Ghost pipeline
+- TypeScript definitions included
+
+**Documentation:** `docs/` directory:
+- `extension-api.md` - Complete I/O intent schema with examples
+- `extension-examples.md` - Working examples (file processor, API integration, git helper)
+- `DEVELOPER_TOOLKIT.md` - Complete toolkit guide
+- `QUICK_REFERENCE.md` - Quick reference card

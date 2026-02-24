@@ -1,0 +1,25 @@
+# Test files
+test/
+*.test.js
+*.spec.js
+
+# Development files
+.eslintrc.js
+.prettierrc
+tsconfig.json
+
+# Documentation source
+docs/
+
+# Git
+.git/
+.gitignore
+
+# CI
+.github/
+.travis.yml
+.circleci/
+
+# Misc
+*.log
+.DS_Store

@@ -183,6 +183,8 @@ class GatewayLauncher {
   ghost extension install <path>          Install an extension from path
   ghost extension remove <id>             Remove an extension by ID
   ghost extension info <id>               Show extension information
+  ghost extension init <name>             Scaffold a new extension project
+  ghost extension validate [path]         Validate extension manifest and permissions
 `);
             return;
         }
@@ -302,6 +304,19 @@ class GatewayLauncher {
                 
                 console.log('');
             }
+        } else if (subcommand === 'init') {
+            const extName = parsedArgs.args[0];
+            
+            if (!extName) {
+                console.error(`${Colors.FAIL}Error: Extension name required${Colors.ENDC}`);
+                console.log('Usage: ghost extension init <name>');
+                process.exit(1);
+            }
+
+            await this._scaffoldExtension(extName, parsedArgs.flags);
+        } else if (subcommand === 'validate') {
+            const extPath = parsedArgs.args[0] || '.';
+            await this._validateExtension(extPath);
         } else {
             console.error(`${Colors.FAIL}Unknown subcommand: ${subcommand}${Colors.ENDC}`);
             process.exit(1);
@@ -676,6 +691,331 @@ class GatewayLauncher {
         }
     }
 
+    async _scaffoldExtension(name, flags) {
+        const extId = name.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+        const targetDir = path.resolve(extId);
+
+        if (fs.existsSync(targetDir)) {
+            console.error(`${Colors.FAIL}Error: Directory ${extId} already exists${Colors.ENDC}`);
+            process.exit(1);
+        }
+
+        console.log(`${Colors.CYAN}Creating extension: ${Colors.BOLD}${name}${Colors.ENDC}`);
+        console.log(`${Colors.DIM}Directory: ${targetDir}${Colors.ENDC}\n`);
+
+        fs.mkdirSync(targetDir, { recursive: true });
+
+        const manifest = {
+            id: extId,
+            name: name,
+            version: '1.0.0',
+            description: `${name} extension for Ghost CLI`,
+            author: flags.author || 'Your Name',
+            main: 'index.js',
+            capabilities: {
+                filesystem: {
+                    read: ['**/*'],
+                    write: []
+                },
+                network: {
+                    allowlist: [],
+                    rateLimit: {
+                        cir: 60,
+                        bc: 100
+                    }
+                },
+                git: {
+                    read: true,
+                    write: false
+                }
+            },
+            permissions: [
+                'filesystem:read',
+                'git:read'
+            ]
+        };
+
+        fs.writeFileSync(
+            path.join(targetDir, 'manifest.json'),
+            JSON.stringify(manifest, null, 2)
+        );
+
+        const indexTemplate = `const { ExtensionSDK } = require('@ghost/extension-sdk');
+
+class ${name.replace(/[^a-zA-Z0-9]/g, '')}Extension {
+    constructor() {
+        this.sdk = new ExtensionSDK('${extId}');
+    }
+
+    async initialize() {
+        console.log('${name} extension initialized');
+    }
+
+    async myCommand(params) {
+        const { subcommand, args, flags } = params;
+
+        try {
+            const files = await this.sdk.requestFileRead({ path: '.' });
+            console.log('Files read:', files);
+
+            return {
+                success: true,
+                output: 'Command executed successfully'
+            };
+        } catch (error) {
+            console.error('Error:', error.message);
+            return {
+                success: false,
+                error: error.message
+            };
+        }
+    }
+
+    async shutdown() {
+        console.log('${name} extension shutting down');
+    }
+}
+
+module.exports = ${name.replace(/[^a-zA-Z0-9]/g, '')}Extension;
+`;
+
+        fs.writeFileSync(path.join(targetDir, 'index.js'), indexTemplate);
+
+        const packageJson = {
+            name: extId,
+            version: '1.0.0',
+            description: `${name} extension for Ghost CLI`,
+            main: 'index.js',
+            scripts: {
+                test: 'echo "Error: no test specified" && exit 1'
+            },
+            dependencies: {
+                '@ghost/extension-sdk': '^1.0.0'
+            },
+            keywords: ['ghost', 'extension'],
+            author: flags.author || 'Your Name',
+            license: 'MIT'
+        };
+
+        fs.writeFileSync(
+            path.join(targetDir, 'package.json'),
+            JSON.stringify(packageJson, null, 2)
+        );
+
+        const readme = `# ${name}
+
+${manifest.description}
+
+## Installation
+
+\`\`\`bash
+npm install
+ghost extension install .
+\`\`\`
+
+## Usage
+
+\`\`\`bash
+ghost myCommand
+\`\`\`
+
+## Development
+
+1. Install dependencies: \`npm install\`
+2. Validate manifest: \`ghost extension validate\`
+3. Install locally: \`ghost extension install .\`
+4. Test your extension: \`ghost myCommand\`
+
+## Capabilities
+
+This extension requests the following capabilities:
+- **Filesystem Read**: Read files in the current directory
+- **Git Read**: Read git repository data
+
+## API
+
+See [Extension API Documentation](https://github.com/lamallamadel/ghost/blob/main/docs/extension-api.md) for details.
+`;
+
+        fs.writeFileSync(path.join(targetDir, 'README.md'), readme);
+
+        fs.writeFileSync(path.join(targetDir, '.gitignore'), `node_modules/
+*.log
+.DS_Store
+`);
+
+        console.log(`${Colors.GREEN}✓${Colors.ENDC} Extension scaffolded successfully!\n`);
+        console.log(`${Colors.BOLD}Next steps:${Colors.ENDC}`);
+        console.log(`  1. cd ${extId}`);
+        console.log(`  2. npm install`);
+        console.log(`  3. Edit manifest.json to add capabilities`);
+        console.log(`  4. Edit index.js to implement your extension`);
+        console.log(`  5. ghost extension validate`);
+        console.log(`  6. ghost extension install .`);
+        console.log('');
+    }
+
+    async _validateExtension(extPath) {
+        const absolutePath = path.resolve(extPath);
+        const manifestPath = path.join(absolutePath, 'manifest.json');
+        
+        console.log(`${Colors.CYAN}Validating extension at: ${Colors.DIM}${absolutePath}${Colors.ENDC}\n`);
+
+        if (!fs.existsSync(manifestPath)) {
+            console.error(`${Colors.FAIL}✗ No manifest.json found${Colors.ENDC}`);
+            process.exit(1);
+        }
+
+        let manifest;
+        try {
+            const content = fs.readFileSync(manifestPath, 'utf8');
+            manifest = JSON.parse(content);
+            console.log(`${Colors.GREEN}✓${Colors.ENDC} Valid JSON syntax`);
+        } catch (error) {
+            console.error(`${Colors.FAIL}✗ Invalid JSON: ${error.message}${Colors.ENDC}`);
+            process.exit(1);
+        }
+
+        const schemaPath = path.join(__dirname, 'core', 'manifest-schema.json');
+        const schema = JSON.parse(fs.readFileSync(schemaPath, 'utf8'));
+
+        const errors = [];
+        const warnings = [];
+
+        if (!manifest.id) {
+            errors.push('Missing required field: id');
+        } else if (!/^[a-z0-9-]+$/.test(manifest.id)) {
+            errors.push('Invalid id: must be lowercase alphanumeric with hyphens');
+        } else {
+            console.log(`${Colors.GREEN}✓${Colors.ENDC} Valid extension id: ${manifest.id}`);
+        }
+
+        if (!manifest.name) {
+            errors.push('Missing required field: name');
+        } else {
+            console.log(`${Colors.GREEN}✓${Colors.ENDC} Extension name: ${manifest.name}`);
+        }
+
+        if (!manifest.version) {
+            errors.push('Missing required field: version');
+        } else if (!/^\d+\.\d+\.\d+$/.test(manifest.version)) {
+            errors.push('Invalid version: must be semantic version (major.minor.patch)');
+        } else {
+            console.log(`${Colors.GREEN}✓${Colors.ENDC} Valid version: ${manifest.version}`);
+        }
+
+        if (!manifest.main) {
+            errors.push('Missing required field: main');
+        } else {
+            const mainPath = path.join(absolutePath, manifest.main);
+            if (!fs.existsSync(mainPath)) {
+                errors.push(`Main file not found: ${manifest.main}`);
+            } else {
+                console.log(`${Colors.GREEN}✓${Colors.ENDC} Main file exists: ${manifest.main}`);
+            }
+        }
+
+        if (!manifest.capabilities) {
+            errors.push('Missing required field: capabilities');
+        } else {
+            console.log(`${Colors.GREEN}✓${Colors.ENDC} Capabilities defined`);
+            
+            if (manifest.capabilities.filesystem) {
+                const fs_cap = manifest.capabilities.filesystem;
+                if (fs_cap.read && Array.isArray(fs_cap.read)) {
+                    console.log(`  ${Colors.DIM}- Filesystem read: ${fs_cap.read.length} pattern(s)${Colors.ENDC}`);
+                }
+                if (fs_cap.write && Array.isArray(fs_cap.write)) {
+                    console.log(`  ${Colors.DIM}- Filesystem write: ${fs_cap.write.length} pattern(s)${Colors.ENDC}`);
+                    if (fs_cap.write.length > 0) {
+                        warnings.push('Extension requests write access to filesystem');
+                    }
+                }
+            }
+
+            if (manifest.capabilities.network) {
+                const net_cap = manifest.capabilities.network;
+                if (net_cap.allowlist && Array.isArray(net_cap.allowlist)) {
+                    console.log(`  ${Colors.DIM}- Network allowlist: ${net_cap.allowlist.length} domain(s)${Colors.ENDC}`);
+                    net_cap.allowlist.forEach(url => {
+                        if (!/^https?:\/\/[^/]+$/.test(url)) {
+                            errors.push(`Invalid network allowlist entry: ${url} (must be protocol + domain only)`);
+                        }
+                    });
+                }
+                if (net_cap.rateLimit) {
+                    if (!net_cap.rateLimit.cir || !net_cap.rateLimit.bc) {
+                        errors.push('Network rate limit requires both "cir" and "bc" fields');
+                    }
+                }
+            }
+
+            if (manifest.capabilities.git) {
+                const git_cap = manifest.capabilities.git;
+                if (git_cap.read) {
+                    console.log(`  ${Colors.DIM}- Git read: enabled${Colors.ENDC}`);
+                }
+                if (git_cap.write) {
+                    console.log(`  ${Colors.WARNING}- Git write: enabled${Colors.ENDC}`);
+                    warnings.push('Extension requests write access to git repository');
+                }
+            }
+
+            if (manifest.capabilities.hooks && Array.isArray(manifest.capabilities.hooks)) {
+                console.log(`  ${Colors.DIM}- Git hooks: ${manifest.capabilities.hooks.join(', ')}${Colors.ENDC}`);
+            }
+        }
+
+        console.log('');
+        console.log(`${Colors.BOLD}Simulating permission requests:${Colors.ENDC}`);
+
+        const testIntents = [
+            {
+                type: 'filesystem',
+                operation: 'read',
+                params: { path: './test.txt' },
+                extensionId: manifest.id
+            },
+            {
+                type: 'git',
+                operation: 'status',
+                params: { args: [] },
+                extensionId: manifest.id
+            }
+        ];
+
+        for (const intent of testIntents) {
+            const { IntentSchema } = require('./core/pipeline/intercept');
+            const validation = IntentSchema.validate(intent);
+            
+            if (validation.valid) {
+                console.log(`${Colors.GREEN}✓${Colors.ENDC} ${intent.type}:${intent.operation} - valid intent`);
+            } else {
+                console.log(`${Colors.FAIL}✗${Colors.ENDC} ${intent.type}:${intent.operation} - invalid intent`);
+                validation.errors.forEach(err => {
+                    console.log(`  ${Colors.DIM}${err}${Colors.ENDC}`);
+                });
+            }
+        }
+
+        console.log('');
+
+        if (warnings.length > 0) {
+            console.log(`${Colors.WARNING}Warnings:${Colors.ENDC}`);
+            warnings.forEach(w => console.log(`  ${Colors.WARNING}⚠${Colors.ENDC} ${w}`));
+            console.log('');
+        }
+
+        if (errors.length > 0) {
+            console.log(`${Colors.FAIL}Validation failed with ${errors.length} error(s):${Colors.ENDC}`);
+            errors.forEach(e => console.log(`  ${Colors.FAIL}✗${Colors.ENDC} ${e}`));
+            process.exit(1);
+        } else {
+            console.log(`${Colors.GREEN}${Colors.BOLD}✓ Extension is valid!${Colors.ENDC}\n`);
+            console.log(`${Colors.DIM}Ready to install with: ghost extension install ${extPath}${Colors.ENDC}`);
+        }
+    }
+
     showHelp() {
         console.log(`
 ${Colors.BOLD}${Colors.CYAN}GHOST CLI v0.4.0${Colors.ENDC} - Gateway Launcher
@@ -689,6 +1029,8 @@ ${Colors.BOLD}GATEWAY COMMANDS:${Colors.ENDC}
   extension install <path>      Install extension from path
   extension remove <id>         Remove extension
   extension info <id>           Show extension details
+  extension init <name>         Scaffold new extension project
+  extension validate [path]     Validate extension manifest
   gateway status                Show gateway status
   gateway health                Show extension health
   gateway metrics [ext-id]      Show telemetry metrics
@@ -711,6 +1053,8 @@ ${Colors.BOLD}OPTIONS:${Colors.ENDC}
 
 ${Colors.BOLD}EXAMPLES:${Colors.ENDC}
   ghost extension list
+  ghost extension init my-extension
+  ghost extension validate
   ghost gateway status --verbose
   ghost gateway metrics ghost-git-extension
   ghost gateway spans 100

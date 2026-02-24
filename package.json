@@ -8,6 +8,7 @@
     "core/**/*.js",
     "core/**/*.json",
     "extensions/ghost-git-extension/**",
+    "docs/**/*.md",
     "LICENSE",
     "README.md",
     "AGENTS.md"
@@ -15,6 +16,9 @@
   "bin": {
     "ghost": "ghost.js"
   },
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "test": "node test.js",
     "start": "node ghost.js"
