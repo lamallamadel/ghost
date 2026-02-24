@@ -3,6 +3,7 @@ const { AuthorizationLayer, PermissionChecker, RateLimitManager, TokenBucket, Tr
 const { AuditLayer, AuditLogger, NISTValidator, EntropyScanner } = require('./audit');
 const { ExecutionLayer, ExecutionError, CircuitBreaker, TimeoutManager } = require('./execute');
 const { TwoRateThreeColorTokenBucket } = require('../qos/token-bucket');
+const { instrumentPipeline, Telemetry } = require('../telemetry');
 
 class IOPipeline {
     constructor(options = {}) {
@@ -157,5 +158,7 @@ module.exports = {
     ExecutionLayer,
     ExecutionError,
     CircuitBreaker,
-    TimeoutManager
+    TimeoutManager,
+    instrumentPipeline,
+    Telemetry
 };

@@ -141,5 +141,6 @@ vite.config.ts.timestamp-*
 # Ghost CLI - Gateway runtime files
 .ghost/audit.log
 .ghost/extensions/
+.ghost/telemetry/
 *.ghost*
 .ghost_*

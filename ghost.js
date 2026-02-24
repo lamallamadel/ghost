@@ -5,7 +5,7 @@ const os = require('os');
 const fs = require('fs');
 const Gateway = require('./core/gateway');
 const { ExtensionRuntime } = require('./core/runtime');
-const { IOPipeline } = require('./core/pipeline');
+const { IOPipeline, instrumentPipeline } = require('./core/pipeline');
 const { AuditLogger } = require('./core/pipeline/audit');
 
 const USER_EXTENSIONS_DIR = path.join(os.homedir(), '.ghost', 'extensions');
@@ -30,6 +30,8 @@ class GatewayLauncher {
         this.runtime = null;
         this.pipeline = null;
         this.auditLogger = null;
+        this.telemetryInstance = null;
+        this.telemetryServer = null;
         this.telemetry = {
             requests: [],
             startTime: Date.now()
@@ -63,10 +65,16 @@ class GatewayLauncher {
             heartbeatTimeout: 30000
         });
         
-        this.pipeline = new IOPipeline({
+        const basePipeline = new IOPipeline({
             auditLogPath: AUDIT_LOG_PATH
         });
 
+        const instrumented = instrumentPipeline(basePipeline, {
+            enabled: true
+        });
+        
+        this.pipeline = instrumented.pipeline;
+        this.telemetryInstance = instrumented.telemetry;
         this.auditLogger = new AuditLogger(AUDIT_LOG_PATH);
 
         this._setupRuntimeEventHandlers();
@@ -159,6 +167,8 @@ class GatewayLauncher {
             await this.handleGatewayCommand(parsedArgs);
         } else if (parsedArgs.command === 'audit-log') {
             await this.handleAuditLogCommand(parsedArgs);
+        } else if (parsedArgs.command === 'console') {
+            await this.handleConsoleCommand(parsedArgs);
         } else {
             await this.forwardToExtension(parsedArgs);
         }
@@ -305,6 +315,8 @@ class GatewayLauncher {
             console.log(`${Colors.BOLD}Gateway Commands:${Colors.ENDC}
   ghost gateway status                    Show gateway status and statistics
   ghost gateway health                    Show extension health status
+  ghost gateway metrics [extension-id]    Show telemetry metrics
+  ghost gateway spans [limit]             Show recent spans
 `);
             return;
         }
@@ -317,7 +329,8 @@ class GatewayLauncher {
                 gateway: {
                     version: require('./package.json').version,
                     extensionsLoaded: extensions.length,
-                    uptime: Date.now() - this.telemetry.startTime
+                    uptime: Date.now() - this.telemetry.startTime,
+                    telemetryServer: this.telemetryServer ? `http://localhost:${this.telemetryServer.port}` : 'Not running'
                 },
                 runtime: runtimeHealth,
                 telemetry: {
@@ -335,7 +348,81 @@ class GatewayLauncher {
                 console.log(`Extensions Loaded: ${status.gateway.extensionsLoaded}`);
                 console.log(`Uptime:            ${Math.floor(status.gateway.uptime / 1000)}s`);
                 console.log(`Total Requests:    ${status.telemetry.totalRequests}`);
+                console.log(`Telemetry Server:  ${status.gateway.telemetryServer}`);
                 console.log('');
+            }
+        } else if (subcommand === 'metrics') {
+            const extensionId = parsedArgs.args[0] || null;
+            const metrics = this.telemetryInstance.metrics.getMetrics(extensionId);
+
+            if (parsedArgs.flags.json) {
+                console.log(JSON.stringify(metrics, null, 2));
+            } else {
+                console.log(`\n${Colors.BOLD}${Colors.CYAN}Telemetry Metrics${extensionId ? ` - ${extensionId}` : ''}${Colors.ENDC}`);
+                console.log(`${Colors.DIM}${'─'.repeat(80)}${Colors.ENDC}\n`);
+
+                if (Object.keys(metrics.requests).length === 0) {
+                    console.log(`${Colors.DIM}No metrics available.${Colors.ENDC}\n`);
+                } else {
+                    for (const [extId, stages] of Object.entries(metrics.requests)) {
+                        console.log(`${Colors.BOLD}${extId}${Colors.ENDC}`);
+                        for (const [stage, count] of Object.entries(stages)) {
+                            const latency = metrics.latencies[extId]?.[stage] || { p50: 0, p95: 0, p99: 0 };
+                            console.log(`  ${stage}: ${count} requests (p50: ${latency.p50}ms, p95: ${latency.p95}ms, p99: ${latency.p99}ms)`);
+                        }
+                        
+                        if (metrics.rateLimitViolations[extId]) {
+                            console.log(`  ${Colors.WARNING}Rate Limit Violations: ${metrics.rateLimitViolations[extId]}${Colors.ENDC}`);
+                        }
+                        
+                        if (metrics.authFailures[extId]) {
+                            console.log(`  ${Colors.FAIL}Auth Failures:${Colors.ENDC}`);
+                            for (const [code, count] of Object.entries(metrics.authFailures[extId])) {
+                                console.log(`    ${code}: ${count}`);
+                            }
+                        }
+                        
+                        if (metrics.validationFailures[extId]) {
+                            console.log(`  ${Colors.FAIL}Validation Failures:${Colors.ENDC}`);
+                            for (const [reason, count] of Object.entries(metrics.validationFailures[extId])) {
+                                console.log(`    ${reason}: ${count}`);
+                            }
+                        }
+                        
+                        console.log('');
+                    }
+                }
+            }
+        } else if (subcommand === 'spans') {
+            const limit = parseInt(parsedArgs.args[0]) || 50;
+            const spans = this.telemetryInstance.getRecentSpans(limit);
+
+            if (parsedArgs.flags.json) {
+                console.log(JSON.stringify(spans, null, 2));
+            } else {
+                console.log(`\n${Colors.BOLD}${Colors.CYAN}Recent Spans (${limit})${Colors.ENDC}`);
+                console.log(`${Colors.DIM}${'─'.repeat(80)}${Colors.ENDC}\n`);
+
+                if (spans.length === 0) {
+                    console.log(`${Colors.DIM}No spans recorded.${Colors.ENDC}\n`);
+                } else {
+                    spans.forEach(span => {
+                        const statusColor = span.status.code === 'OK' ? Colors.GREEN : 
+                                          span.status.code === 'ERROR' ? Colors.FAIL : Colors.DIM;
+                        console.log(`${statusColor}●${Colors.ENDC} ${Colors.BOLD}${span.name}${Colors.ENDC} ${Colors.DIM}(${span.duration}ms)${Colors.ENDC}`);
+                        console.log(`  Trace: ${span.traceId.substring(0, 16)}... | Span: ${span.spanId}`);
+                        if (span.attributes.extensionId) {
+                            console.log(`  Extension: ${span.attributes.extensionId}`);
+                        }
+                        if (span.attributes.requestId) {
+                            console.log(`  Request: ${span.attributes.requestId}`);
+                        }
+                        if (span.status.code !== 'OK' && span.status.message) {
+                            console.log(`  ${Colors.FAIL}Error: ${span.status.message}${Colors.ENDC}`);
+                        }
+                        console.log('');
+                    });
+                }
             }
         } else if (subcommand === 'health') {
             const health = this.runtime.getHealthStatus();
@@ -360,6 +447,25 @@ class GatewayLauncher {
                     console.log('');
                 }
             }
+        } else {
+            console.error(`${Colors.FAIL}Unknown subcommand: ${subcommand}${Colors.ENDC}`);
+            process.exit(1);
+        }
+    }
+
+    async handleConsoleCommand(parsedArgs) {
+        const subcommand = parsedArgs.subcommand || 'start';
+
+        if (subcommand === 'start') {
+            const port = parseInt(parsedArgs.flags.port) || 9876;
+            await this.startTelemetryServer(port);
+            
+            console.log(`\n${Colors.BOLD}${Colors.CYAN}Telemetry Console${Colors.ENDC}`);
+            console.log(`${Colors.DIM}Press Ctrl+C to stop the server${Colors.ENDC}\n`);
+            
+            return new Promise(() => {});
+        } else if (subcommand === 'stop') {
+            await this.stopTelemetryServer();
         } else {
             console.error(`${Colors.FAIL}Unknown subcommand: ${subcommand}${Colors.ENDC}`);
             process.exit(1);
@@ -489,7 +595,6 @@ class GatewayLauncher {
             'audit': 'ghost-git-extension',
             'version': 'ghost-git-extension',
             'merge': 'ghost-git-extension',
-            'console': 'ghost-git-extension',
             'history': 'ghost-git-extension'
         };
 
@@ -586,38 +691,88 @@ ${Colors.BOLD}GATEWAY COMMANDS:${Colors.ENDC}
   extension info <id>           Show extension details
   gateway status                Show gateway status
   gateway health                Show extension health
+  gateway metrics [ext-id]      Show telemetry metrics
+  gateway spans [limit]         Show recent spans
   audit-log view                View audit logs
+  console [start|stop]          Start/stop telemetry HTTP/WebSocket server
 
 ${Colors.BOLD}EXTENSION COMMANDS:${Colors.ENDC}
   commit                        AI-powered commit generation (via ghost-git-extension)
   audit                         Security audit (via ghost-git-extension)
   version                       Version management (via ghost-git-extension)
   merge                         Merge conflict resolution (via ghost-git-extension)
-  console                       Monitoring console (via ghost-git-extension)
   history                       Commit history (via ghost-git-extension)
 
 ${Colors.BOLD}OPTIONS:${Colors.ENDC}
   --verbose, -v                 Show detailed telemetry and pipeline logs
   --json                        Output in JSON format
+  --port <port>                 Specify port for telemetry server (default: 9876)
   --help, -h                    Show this help message
 
 ${Colors.BOLD}EXAMPLES:${Colors.ENDC}
   ghost extension list
   ghost gateway status --verbose
+  ghost gateway metrics ghost-git-extension
+  ghost gateway spans 100
   ghost commit --dry-run
   ghost audit --verbose
   ghost audit-log view --limit 100 --extension ghost-git-extension
+  ghost console start --port 9876
 
 ${Colors.BOLD}TELEMETRY:${Colors.ENDC}
-  Use --verbose flag to see real-time pipeline telemetry:
-  - Extension discovery and routing
-  - JSON-RPC request/response flows
-  - Pipeline stage execution times
-  - Authorization and audit results
+  Integrated OpenTelemetry observability:
+  - Spans for each pipeline layer (Intercept→Auth→Audit→Execute)
+  - Structured JSON logs with severity levels (INFO/WARN/ERROR/SECURITY_ALERT)
+  - Metrics (request count, latency percentiles, rate limit violations)
+  - HTTP/WebSocket server for real-time monitoring
+  - Logs stored in ~/.ghost/telemetry/
+  
+  Start telemetry server:
+    ghost console start
+  
+  HTTP endpoints:
+    GET /health                  Health check
+    GET /metrics                 All metrics
+    GET /metrics/<extension-id>  Extension-specific metrics
+    GET /spans                   Recent spans
+    GET /logs?severity=<level>   Filter logs by severity
 `);
     }
 
+    async startTelemetryServer(port = 9876) {
+        if (this.telemetryServer) {
+            console.log(`${Colors.WARNING}Telemetry server already running${Colors.ENDC}`);
+            return;
+        }
+
+        try {
+            this.telemetryServer = this.telemetryInstance.startServer(port);
+            console.log(`${Colors.GREEN}✓${Colors.ENDC} Telemetry server started on http://localhost:${port}`);
+            console.log(`${Colors.DIM}  Available endpoints:${Colors.ENDC}`);
+            console.log(`${Colors.DIM}    - GET  /health${Colors.ENDC}`);
+            console.log(`${Colors.DIM}    - GET  /metrics${Colors.ENDC}`);
+            console.log(`${Colors.DIM}    - GET  /metrics/<extension-id>${Colors.ENDC}`);
+            console.log(`${Colors.DIM}    - GET  /spans${Colors.ENDC}`);
+            console.log(`${Colors.DIM}    - GET  /logs?severity=<level>&limit=<n>${Colors.ENDC}`);
+            console.log(`${Colors.DIM}    - WebSocket upgrades supported${Colors.ENDC}`);
+        } catch (error) {
+            console.error(`${Colors.FAIL}Failed to start telemetry server: ${error.message}${Colors.ENDC}`);
+        }
+    }
+
+    async stopTelemetryServer() {
+        if (this.telemetryServer) {
+            this.telemetryInstance.stopServer();
+            this.telemetryServer = null;
+            console.log(`${Colors.GREEN}✓${Colors.ENDC} Telemetry server stopped`);
+        }
+    }
+
     async cleanup() {
+        if (this.telemetryServer) {
+            await this.stopTelemetryServer();
+        }
+        
         if (this.runtime) {
             await this.runtime.shutdown();
         }
