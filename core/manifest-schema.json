@@ -1,0 +1,151 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Ghost Extension Manifest",
+  "description": "Schema for Ghost CLI extension manifests defining capability contracts",
+  "type": "object",
+  "required": ["id", "name", "version", "main", "capabilities"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$",
+      "description": "Unique identifier for the extension (lowercase alphanumeric with hyphens)"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Human-readable name of the extension"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Semantic version (major.minor.patch)"
+    },
+    "description": {
+      "type": "string",
+      "description": "Brief description of the extension's functionality"
+    },
+    "author": {
+      "type": "string",
+      "description": "Extension author name or organization"
+    },
+    "main": {
+      "type": "string",
+      "description": "Entry point file (relative path from extension root)"
+    },
+    "capabilities": {
+      "type": "object",
+      "description": "Declared capabilities and resource requirements",
+      "properties": {
+        "filesystem": {
+          "type": "object",
+          "description": "Filesystem access permissions",
+          "properties": {
+            "read": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Glob patterns for read-only file access"
+            },
+            "write": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Glob patterns for write access"
+            }
+          }
+        },
+        "network": {
+          "type": "object",
+          "description": "Network access permissions",
+          "properties": {
+            "allowlist": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^https?://[^/]+$"
+              },
+              "description": "Allowed domains/URLs (protocol and domain only)"
+            },
+            "rateLimit": {
+              "type": "object",
+              "description": "Committed Information Rate (CIR) and Burst Committed (Bc) rate limits",
+              "properties": {
+                "cir": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "Committed Information Rate - sustained requests per minute"
+                },
+                "bc": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "description": "Burst Committed - maximum burst size in requests"
+                }
+              },
+              "required": ["cir", "bc"]
+            }
+          }
+        },
+        "git": {
+          "type": "object",
+          "description": "Git operations permissions",
+          "properties": {
+            "read": {
+              "type": "boolean",
+              "description": "Allow reading git repository data"
+            },
+            "write": {
+              "type": "boolean",
+              "description": "Allow modifying git repository (commits, branches, etc.)"
+            }
+          }
+        },
+        "hooks": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "pre-commit",
+              "post-commit",
+              "pre-push",
+              "post-checkout",
+              "commit-msg",
+              "pre-rebase"
+            ]
+          },
+          "description": "Git hooks the extension wants to register for"
+        }
+      }
+    },
+    "permissions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "filesystem:read",
+          "filesystem:write",
+          "network:http",
+          "network:https",
+          "git:read",
+          "git:write",
+          "process:spawn",
+          "env:read"
+        ]
+      },
+      "description": "Required system permissions"
+    },
+    "dependencies": {
+      "type": "object",
+      "description": "NPM dependencies required by the extension",
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "config": {
+      "type": "object",
+      "description": "Default configuration values",
+      "additionalProperties": true
+    }
+  }
+}

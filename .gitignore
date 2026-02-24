@@ -137,3 +137,6 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Ghost CLI - Extensions directory (user-installed extensions)
+.ghost/extensions/

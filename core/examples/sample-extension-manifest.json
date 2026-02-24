@@ -1,0 +1,54 @@
+{
+  "id": "sample-analyzer",
+  "name": "Sample Code Analyzer",
+  "version": "1.0.0",
+  "description": "Example extension that analyzes code on commit",
+  "author": "Ghost Team",
+  "main": "index.js",
+  "capabilities": {
+    "filesystem": {
+      "read": [
+        "src/**/*.js",
+        "src/**/*.ts",
+        "**/*.json",
+        "**/*.md"
+      ],
+      "write": [
+        ".ghost/reports/*.json"
+      ]
+    },
+    "network": {
+      "allowlist": [
+        "https://api.github.com",
+        "https://registry.npmjs.org"
+      ],
+      "rateLimit": {
+        "cir": 60,
+        "bc": 10
+      }
+    },
+    "git": {
+      "read": true,
+      "write": false
+    },
+    "hooks": [
+      "pre-commit",
+      "commit-msg"
+    ]
+  },
+  "permissions": [
+    "filesystem:read",
+    "filesystem:write",
+    "network:https",
+    "git:read"
+  ],
+  "dependencies": {},
+  "config": {
+    "enabled": true,
+    "severity": "warning",
+    "rules": {
+      "maxComplexity": 10,
+      "maxLineLength": 120
+    }
+  }
+}
