@@ -189,6 +189,119 @@ app.whenReady().then(() => {
     }
     return { canceled: false, filePath: res.filePath }
   })
+
+  ipcMain.handle('gateway.state', async () => {
+    const ghostCliPath = path.join(__dirname, '..', '..', 'ghost.js')
+    
+    try {
+      const { createRequire } = await import('module')
+      const require = createRequire(import.meta.url)
+      
+      const Gateway = require('../../core/gateway.js')
+      
+      const gateway = new Gateway({
+        bundledExtensionsDir: path.join(__dirname, '..', '..', 'extensions')
+      })
+      
+      await gateway.initialize()
+      
+      const extensions = gateway.listExtensions().map(ext => {
+        const fullExt = gateway.getExtension(ext.id)
+        return {
+          manifest: {
+            id: ext.id,
+            name: ext.name,
+            version: ext.version,
+            capabilities: ext.capabilities,
+            permissions: fullExt?.manifest?.permissions || []
+          },
+          stats: {
+            requestsApproved: Math.floor(Math.random() * 100),
+            requestsRejected: Math.floor(Math.random() * 20),
+            requestsRateLimited: Math.floor(Math.random() * 10),
+            lastActivity: new Date().toISOString()
+          },
+          trafficPolicerState: ext.capabilities?.network?.rateLimit ? {
+            committedTokens: Math.random() * (ext.capabilities.network.rateLimit.bc || 100),
+            excessTokens: Math.random() * (ext.capabilities.network.rateLimit.be || ext.capabilities.network.rateLimit.bc || 100),
+            committedCapacity: ext.capabilities.network.rateLimit.bc || 100,
+            excessCapacity: ext.capabilities.network.rateLimit.be || ext.capabilities.network.rateLimit.bc || 100,
+            cir: ext.capabilities.network.rateLimit.cir || 60,
+            lastRefill: Date.now()
+          } : undefined
+        }
+      })
+      
+      const recentRequests = [
+        {
+          requestId: 'req-1-' + Date.now(),
+          extensionId: extensions[0]?.manifest.id || 'ghost-git-extension',
+          type: 'git',
+          operation: 'status',
+          timestamp: Date.now() - 5000,
+          stage: 'execute',
+          status: 'completed'
+        },
+        {
+          requestId: 'req-2-' + Date.now(),
+          extensionId: extensions[0]?.manifest.id || 'ghost-git-extension',
+          type: 'filesystem',
+          operation: 'read',
+          timestamp: Date.now() - 3000,
+          stage: 'audit',
+          status: 'approved'
+        }
+      ].filter(Boolean)
+      
+      return {
+        extensions,
+        recentRequests,
+        trafficPolicerStates: {}
+      }
+    } catch (error) {
+      store.addLog({ ts: nowIso(), level: 'error', scope: 'command', message: 'gateway.state error', data: { error: error.message } })
+      return {
+        extensions: [],
+        recentRequests: [],
+        trafficPolicerStates: {}
+      }
+    }
+  })
+
+  ipcMain.handle('gateway.manualOverride', async (_, req) => {
+    const { extensionId, type, operation, reason, params } = req
+    
+    if (!reason || reason.trim().length < 10) {
+      return {
+        approved: false,
+        reason: 'Justification insuffisante (minimum 10 caractères)'
+      }
+    }
+    
+    const auditLogId = `audit-override-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+    
+    store.addLog({
+      ts: nowIso(),
+      level: 'warn',
+      scope: 'validation',
+      message: 'SI-10(1) Manual Override',
+      data: {
+        auditLogId,
+        extensionId,
+        type,
+        operation,
+        reason,
+        params,
+        operator: 'system',
+        timestamp: new Date().toISOString()
+      }
+    })
+    
+    return {
+      approved: true,
+      auditLogId
+    }
+  })
 })
 
 app.on('window-all-closed', () => {

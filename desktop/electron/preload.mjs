@@ -10,5 +10,7 @@ contextBridge.exposeInMainWorld('ghost', {
   logsList: (req) => ipcRenderer.invoke('logs.list', req),
   logsExport: (req) => ipcRenderer.invoke('logs.export', req),
   appInfo: () => ipcRenderer.invoke('app.info'),
+  gatewayState: () => ipcRenderer.invoke('gateway.state'),
+  manualOverride: (req) => ipcRenderer.invoke('gateway.manualOverride', req),
 })
 

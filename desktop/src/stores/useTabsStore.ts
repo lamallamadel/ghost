@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 
-export type TabKind = 'commands' | 'history' | 'git' | 'logs' | 'settings'
+export type TabKind = 'commands' | 'history' | 'git' | 'logs' | 'settings' | 'gateway' | 'extensions'
 
 export type Tab = {
   id: string
@@ -19,6 +19,8 @@ type TabsState = {
 function defaultTabs(): Tab[] {
   return [
     { id: 'commands-1', kind: 'commands', title: 'Commandes' },
+    { id: 'gateway', kind: 'gateway', title: 'Pipeline' },
+    { id: 'extensions', kind: 'extensions', title: 'Extensions' },
     { id: 'history', kind: 'history', title: 'Historique' },
     { id: 'git', kind: 'git', title: 'Git' },
     { id: 'logs', kind: 'logs', title: 'Logs' },

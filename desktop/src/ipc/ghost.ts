@@ -2,6 +2,7 @@ import type {
   AppInfo,
   CommandRunRequest,
   CommandRunResult,
+  GatewayState,
   GitOperationRequest,
   GitOperationResult,
   GitValidation,
@@ -12,6 +13,8 @@ import type {
   LogsExportResult,
   LogsListRequest,
   LogsListResult,
+  ManualOverrideRequest,
+  ManualOverrideResult,
   RepoSelectResult,
 } from './types'
 
@@ -47,5 +50,11 @@ export const ghost = {
   },
   appInfo(): Promise<AppInfo> {
     return ensure().appInfo() as Promise<AppInfo>
+  },
+  gatewayState(): Promise<GatewayState> {
+    return ensure().gatewayState() as Promise<GatewayState>
+  },
+  manualOverride(req: ManualOverrideRequest): Promise<ManualOverrideResult> {
+    return ensure().manualOverride(req) as Promise<ManualOverrideResult>
   },
 }

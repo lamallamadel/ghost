@@ -90,3 +90,67 @@ export type AppInfo = {
   userDataPath: string
   ghostCliPath: string
 }
+
+export type ExtensionManifest = {
+  id: string
+  name: string
+  version: string
+  capabilities?: {
+    filesystem?: { read?: string[]; write?: string[] }
+    network?: { allowlist?: string[]; rateLimit?: { cir: number; bc: number; be?: number } }
+    git?: { read?: boolean; write?: boolean }
+  }
+  permissions?: string[]
+}
+
+export type ExtensionStats = {
+  requestsApproved: number
+  requestsRejected: number
+  requestsRateLimited: number
+  lastActivity?: string
+}
+
+export type ExtensionInfo = {
+  manifest: ExtensionManifest
+  stats: ExtensionStats
+  trafficPolicerState?: TrafficPolicerState
+}
+
+export type TrafficPolicerState = {
+  committedTokens: number
+  excessTokens: number
+  committedCapacity: number
+  excessCapacity: number
+  cir: number
+  lastRefill: number
+}
+
+export type PipelineRequest = {
+  requestId: string
+  extensionId: string
+  type: string
+  operation: string
+  timestamp: number
+  stage: 'intercept' | 'auth' | 'audit' | 'execute'
+  status: 'pending' | 'approved' | 'rejected' | 'completed' | 'failed'
+}
+
+export type GatewayState = {
+  extensions: ExtensionInfo[]
+  recentRequests: PipelineRequest[]
+  trafficPolicerStates: Record<string, TrafficPolicerState>
+}
+
+export type ManualOverrideRequest = {
+  extensionId: string
+  type: string
+  operation: string
+  reason: string
+  params: Record<string, unknown>
+}
+
+export type ManualOverrideResult = {
+  approved: boolean
+  auditLogId?: string
+  reason?: string
+}

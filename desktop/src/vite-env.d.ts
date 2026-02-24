@@ -12,6 +12,8 @@ declare global {
       logsList: (req: unknown) => Promise<unknown>
       logsExport: (req: unknown) => Promise<unknown>
       appInfo: () => Promise<unknown>
+      gatewayState: () => Promise<unknown>
+      manualOverride: (req: unknown) => Promise<unknown>
     }
   }
 }
