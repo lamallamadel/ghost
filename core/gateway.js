@@ -7,9 +7,13 @@ class Gateway {
     constructor(options = {}) {
         this.options = {
             extensionsDir: options.extensionsDir || path.join(require('os').homedir(), '.ghost', 'extensions'),
+            bundledExtensionsDir: options.bundledExtensionsDir || null,
             ...options
         };
         this.loader = new ExtensionLoader(this.options.extensionsDir);
+        this.bundledLoader = this.options.bundledExtensionsDir 
+            ? new ExtensionLoader(this.options.bundledExtensionsDir)
+            : null;
         this.extensions = new Map();
     }
 
@@ -20,9 +24,18 @@ class Gateway {
             this.extensions.set(ext.manifest.id, ext);
         }
         
+        if (this.bundledLoader) {
+            const bundledExtensions = await this.bundledLoader.discoverAndLoad();
+            for (const ext of bundledExtensions) {
+                if (!this.extensions.has(ext.manifest.id)) {
+                    this.extensions.set(ext.manifest.id, ext);
+                }
+            }
+        }
+        
         return {
             success: true,
-            loaded: loadedExtensions.length,
+            loaded: this.extensions.size,
             extensions: Array.from(this.extensions.keys())
         };
     }

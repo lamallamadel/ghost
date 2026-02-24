@@ -1,57 +1,30 @@
 {
-  "name": "ghost-git-extension",
+  "id": "ghost-git-extension",
+  "name": "Ghost Git Extension",
   "version": "1.0.0",
   "description": "Git operations extension for Ghost CLI with AI-powered commit generation, security scanning, version management, and merge resolution",
   "main": "index.js",
-  "permissions": {
+  "capabilities": {
     "filesystem": {
       "read": ["**/*"],
-      "write": [".git/**", "package.json", ".ghost-versionrc", ".ghostignore", ".ghostrc"]
+      "write": [".git/**", "package.json", ".ghost-versionrc", ".ghostignore", ".ghostrc", "~/.ghost*"]
     },
     "network": {
-      "allowed_hosts": [
-        "api.groq.com",
-        "api.openai.com",
-        "api.anthropic.com",
-        "generativelanguage.googleapis.com"
+      "allowlist": [
+        "https://api.groq.com",
+        "https://api.openai.com",
+        "https://api.anthropic.com",
+        "https://generativelanguage.googleapis.com"
       ],
-      "protocols": ["https"]
+      "rateLimit": {
+        "cir": 100000,
+        "bc": 500000
+      }
     },
-    "rateLimits": {
-      "CIR": "100KB/s",
-      "Bc": "500KB",
-      "Be": "1MB"
-    }
-  },
-  "capabilities": {
     "git": {
-      "operations": [
-        "commit",
-        "diff",
-        "status",
-        "tag",
-        "merge",
-        "checkout",
-        "add"
-      ]
+      "read": true,
+      "write": true
     },
-    "ai": {
-      "providers": [
-        "groq",
-        "openai",
-        "anthropic",
-        "gemini"
-      ]
-    },
-    "security": {
-      "scanning": true,
-      "secretDetection": true,
-      "entropyAnalysis": true
-    },
-    "versioning": {
-      "semver": true,
-      "conventionalCommits": true,
-      "hooks": true
-    }
+    "hooks": ["pre-commit", "commit-msg", "pre-push"]
   }
 }

@@ -8,17 +8,17 @@ console.log('🧪 Running Ghost CLI Tests...\n');
 try {
     // Test 1: Version check
     const packageJson = require('./package.json');
-    assert.strictEqual(packageJson.version, '0.3.2', 'package.json version should be 0.3.2');
+    assert.strictEqual(packageJson.version, '0.4.0', 'package.json version should be 0.4.0');
     console.log('✅ Test 1: package.json version is correct');
 
     // Test 2: Help flag
     const helpOutput = execSync('node ghost.js --help', { encoding: 'utf8' });
-    assert.ok(helpOutput.includes('GHOST CLI v0.3.2'), 'Help output should contain version');
-    assert.ok(helpOutput.includes('console'), 'Help output should contain console command/option');
-    assert.ok(helpOutput.includes('anthropic'), 'Help output should contain anthropic');
-    assert.ok(helpOutput.includes('gemini'), 'Help output should contain gemini');
-    assert.ok(helpOutput.includes('--history'), 'Help output should contain --history');
-    assert.ok(helpOutput.includes('--console'), 'Help output should contain --console');
+    assert.ok(helpOutput.includes('GHOST CLI v0.4.0'), 'Help output should contain version');
+    assert.ok(helpOutput.includes('Gateway'), 'Help output should contain Gateway');
+    assert.ok(helpOutput.includes('extension'), 'Help output should contain extension command');
+    assert.ok(helpOutput.includes('gateway'), 'Help output should contain gateway command');
+    assert.ok(helpOutput.includes('audit-log'), 'Help output should contain audit-log command');
+    assert.ok(helpOutput.includes('--verbose'), 'Help output should contain --verbose');
     console.log('✅ Test 2: Help flag output is correct');
 
     // Test 3: ghost.js syntax is valid

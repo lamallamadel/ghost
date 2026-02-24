@@ -11,7 +11,11 @@ class ExtensionLoader {
 
     async discoverAndLoad() {
         if (!fs.existsSync(this.extensionsDir)) {
-            fs.mkdirSync(this.extensionsDir, { recursive: true });
+            try {
+                fs.mkdirSync(this.extensionsDir, { recursive: true });
+            } catch (error) {
+                console.warn(`[ExtensionLoader] Could not create extensions directory: ${error.message}`);
+            }
             return [];
         }
 
