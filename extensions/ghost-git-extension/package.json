@@ -1,0 +1,25 @@
+{
+  "name": "ghost-git-extension",
+  "version": "1.0.0",
+  "description": "Git operations extension for Ghost CLI with AI-powered commit generation, security scanning, version management, and merge resolution",
+  "main": "index.js",
+  "scripts": {
+    "test": "node test.js",
+    "validate": "node validate-manifest.js",
+    "example": "node example-integration.js"
+  },
+  "keywords": [
+    "ghost",
+    "git",
+    "extension",
+    "ai",
+    "security",
+    "versioning"
+  ],
+  "author": "Ghost CLI Team",
+  "license": "MIT",
+  "engines": {
+    "node": ">=14.0.0"
+  },
+  "dependencies": {}
+}

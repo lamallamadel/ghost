@@ -1,0 +1,57 @@
+{
+  "name": "ghost-git-extension",
+  "version": "1.0.0",
+  "description": "Git operations extension for Ghost CLI with AI-powered commit generation, security scanning, version management, and merge resolution",
+  "main": "index.js",
+  "permissions": {
+    "filesystem": {
+      "read": ["**/*"],
+      "write": [".git/**", "package.json", ".ghost-versionrc", ".ghostignore", ".ghostrc"]
+    },
+    "network": {
+      "allowed_hosts": [
+        "api.groq.com",
+        "api.openai.com",
+        "api.anthropic.com",
+        "generativelanguage.googleapis.com"
+      ],
+      "protocols": ["https"]
+    },
+    "rateLimits": {
+      "CIR": "100KB/s",
+      "Bc": "500KB",
+      "Be": "1MB"
+    }
+  },
+  "capabilities": {
+    "git": {
+      "operations": [
+        "commit",
+        "diff",
+        "status",
+        "tag",
+        "merge",
+        "checkout",
+        "add"
+      ]
+    },
+    "ai": {
+      "providers": [
+        "groq",
+        "openai",
+        "anthropic",
+        "gemini"
+      ]
+    },
+    "security": {
+      "scanning": true,
+      "secretDetection": true,
+      "entropyAnalysis": true
+    },
+    "versioning": {
+      "semver": true,
+      "conventionalCommits": true,
+      "hooks": true
+    }
+  }
+}
