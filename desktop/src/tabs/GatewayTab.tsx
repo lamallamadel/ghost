@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, useMemo } from 'react'
-import { Activity, ArrowRight, CheckCircle, XCircle, AlertCircle, TrendingUp } from 'lucide-react'
+import { Activity, ArrowRight, CheckCircle, XCircle, AlertCircle, TrendingUp, X, ChevronDown, ChevronUp } from 'lucide-react'
 import { ghost } from '@/ipc/ghost'
 import type { GatewayState, PipelineRequest } from '@/ipc/types'
 import { useToastsStore } from '@/stores/useToastsStore'
@@ -26,6 +26,7 @@ export function GatewayTab() {
   const [autoRefresh, setAutoRefresh] = useState(true)
   const [animatedRequests, setAnimatedRequests] = useState<AnimatedRequest[]>([])
   const [requestHistory, setRequestHistory] = useState<PipelineRequest[]>([])
+  const [expandedRequest, setExpandedRequest] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -179,7 +180,10 @@ export function GatewayTab() {
     return 'text-rose-400 border-rose-500/50'
   }
 
-  function getStatusIcon(status: string) {
+  function getStatusIcon(status: string, isDropped: boolean = false) {
+    if (isDropped) {
+      return <X size={16} className="text-rose-400" />
+    }
     switch (status) {
       case 'completed': return <CheckCircle size={16} className="text-emerald-400" />
       case 'approved': return <CheckCircle size={16} className="text-emerald-400" />
@@ -197,7 +201,48 @@ export function GatewayTab() {
     return `${timeStr}.${ms}`
   }
 
+  function getDropLayerBadge(dropLayer?: 'auth' | 'audit') {
+    if (!dropLayer) return null
+    
+    const isQoS = dropLayer === 'auth'
+    const isSI10 = dropLayer === 'audit'
+    
+    return (
+      <span className={`rounded-md border px-2 py-0.5 text-xs font-medium ${
+        isQoS 
+          ? 'bg-yellow-500/20 text-yellow-300 border-yellow-500/30' 
+          : isSI10 
+          ? 'bg-rose-500/20 text-rose-300 border-rose-500/30'
+          : 'bg-white/10 text-white/60 border-white/20'
+      }`}>
+        {isQoS ? 'QoS Violation' : 'SI-10 Violation'}
+      </span>
+    )
+  }
+
   const recentRequests = state?.recentRequests || []
+  
+  const droppedRequests = useMemo(() => {
+    return requestHistory.filter(r => r.status === 'rejected' && r.dropLayer)
+  }, [requestHistory])
+  
+  const dropsByLayer = useMemo(() => {
+    const counts = { auth: 0, audit: 0 }
+    droppedRequests.forEach(req => {
+      if (req.dropLayer) {
+        counts[req.dropLayer]++
+      }
+    })
+    return counts
+  }, [droppedRequests])
+  
+  const dropsByExtension = useMemo(() => {
+    const counts: Record<string, number> = {}
+    droppedRequests.forEach(req => {
+      counts[req.extensionId] = (counts[req.extensionId] || 0) + 1
+    })
+    return counts
+  }, [droppedRequests])
 
   return (
     <div className="flex h-full flex-col">
@@ -348,44 +393,143 @@ export function GatewayTab() {
           </div>
         </div>
 
+        {droppedRequests.length > 0 && (
+          <div className="mb-6">
+            <div className="mb-3 text-sm font-semibold">Dropped Requests Summary</div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-4">
+                <div className="text-xs text-white/60 mb-2">Drops by Layer</div>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm">Auth (QoS)</span>
+                    <span className="font-mono text-lg font-bold text-yellow-300">{dropsByLayer.auth}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm">Audit (SI-10)</span>
+                    <span className="font-mono text-lg font-bold text-rose-300">{dropsByLayer.audit}</span>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-4">
+                <div className="text-xs text-white/60 mb-2">Drops by Extension</div>
+                <div className="space-y-2 max-h-20 overflow-y-auto">
+                  {Object.entries(dropsByExtension).map(([extId, count]) => (
+                    <div key={extId} className="flex items-center justify-between">
+                      <span className="text-sm truncate flex-1">{extId}</span>
+                      <span className="font-mono text-sm font-bold text-rose-300 ml-2">{count}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         <div className="mb-3 flex items-center justify-between">
           <div className="text-sm font-semibold">Requêtes récentes</div>
           <div className="text-xs text-white/60">{recentRequests.length} requêtes</div>
         </div>
 
         <div className="space-y-2">
-          {recentRequests.map((req) => (
-            <div key={req.requestId} className="rounded-xl border border-white/10 bg-black/20 p-4 transition-all hover:border-white/20">
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    {getStatusIcon(req.status)}
-                    <span className="font-mono text-xs text-white/60">{req.requestId}</span>
-                    <span className={`rounded-md border px-2 py-0.5 text-xs ${getStageColor(req.stage)}`}>
-                      {req.stage}
-                    </span>
+          {recentRequests.map((req) => {
+            const isDropped = req.status === 'rejected' && !!req.dropLayer
+            const isExpanded = expandedRequest === req.requestId
+            
+            return (
+              <div 
+                key={req.requestId} 
+                className={`rounded-xl border p-4 transition-all ${
+                  isDropped 
+                    ? 'border-rose-500/30 bg-rose-500/5 hover:border-rose-500/50' 
+                    : 'border-white/10 bg-black/20 hover:border-white/20'
+                }`}
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2">
+                      {getStatusIcon(req.status, isDropped)}
+                      <span className="font-mono text-xs text-white/60">{req.requestId}</span>
+                      <span className={`rounded-md border px-2 py-0.5 text-xs ${getStageColor(req.stage)}`}>
+                        {req.stage}
+                      </span>
+                      {isDropped && getDropLayerBadge(req.dropLayer)}
+                    </div>
+                    <div className="mt-2 flex items-center gap-3 text-sm">
+                      <span className="font-medium">{req.extensionId}</span>
+                      <span className="text-white/40">→</span>
+                      <span className="rounded-md bg-white/5 px-2 py-0.5 font-mono text-xs">{req.type}</span>
+                      <span className="text-white/40">.</span>
+                      <span className="rounded-md bg-white/5 px-2 py-0.5 font-mono text-xs">{req.operation}</span>
+                    </div>
                   </div>
-                  <div className="mt-2 flex items-center gap-3 text-sm">
-                    <span className="font-medium">{req.extensionId}</span>
-                    <span className="text-white/40">→</span>
-                    <span className="rounded-md bg-white/5 px-2 py-0.5 font-mono text-xs">{req.type}</span>
-                    <span className="text-white/40">.</span>
-                    <span className="rounded-md bg-white/5 px-2 py-0.5 font-mono text-xs">{req.operation}</span>
+                  <div className="text-right flex items-start gap-2">
+                    <div>
+                      <div className="font-mono text-xs text-white/60">{formatTime(req.timestamp)}</div>
+                      <div className={`mt-1 text-xs font-medium ${
+                        req.status === 'completed' || req.status === 'approved' ? 'text-emerald-400' :
+                        req.status === 'rejected' || req.status === 'failed' ? 'text-rose-400' :
+                        'text-blue-400'
+                      }`}>
+                        {req.status}
+                      </div>
+                    </div>
+                    {isDropped && (
+                      <button
+                        type="button"
+                        onClick={() => setExpandedRequest(isExpanded ? null : req.requestId)}
+                        className="rounded-md border border-white/10 bg-white/5 p-1 hover:bg-white/10 transition-colors"
+                      >
+                        {isExpanded ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                      </button>
+                    )}
                   </div>
                 </div>
-                <div className="text-right">
-                  <div className="font-mono text-xs text-white/60">{formatTime(req.timestamp)}</div>
-                  <div className={`mt-1 text-xs font-medium ${
-                    req.status === 'completed' || req.status === 'approved' ? 'text-emerald-400' :
-                    req.status === 'rejected' || req.status === 'failed' ? 'text-rose-400' :
-                    'text-blue-400'
-                  }`}>
-                    {req.status}
+                
+                {isDropped && isExpanded && (
+                  <div className="mt-4 pt-4 border-t border-rose-500/20">
+                    <div className="text-xs font-semibold mb-2 text-rose-300">Rejection Details</div>
+                    <div className="space-y-2">
+                      <div className="flex items-start gap-2">
+                        <span className="text-xs text-white/40 w-24">Drop Layer:</span>
+                        <span className="text-xs font-mono text-white/80 capitalize">{req.dropLayer}</span>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <span className="text-xs text-white/40 w-24">Reason:</span>
+                        <span className="text-xs font-mono text-white/80 flex-1">{req.dropReason || 'No reason provided'}</span>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <span className="text-xs text-white/40 w-24">Timestamp:</span>
+                        <span className="text-xs font-mono text-white/80">{new Date(req.timestamp).toISOString()}</span>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <span className="text-xs text-white/40 w-24">Request ID:</span>
+                        <span className="text-xs font-mono text-white/80">{req.requestId}</span>
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <span className="text-xs text-white/40 w-24">Extension:</span>
+                        <span className="text-xs font-mono text-white/80">{req.extensionId}</span>
+                      </div>
+                      {req.dropLayer === 'auth' && (
+                        <div className="mt-3 rounded-md bg-yellow-500/10 border border-yellow-500/30 p-2">
+                          <div className="text-xs text-yellow-300">
+                            <strong>QoS Violation:</strong> Request exceeded rate limit defined in extension capabilities.
+                          </div>
+                        </div>
+                      )}
+                      {req.dropLayer === 'audit' && (
+                        <div className="mt-3 rounded-md bg-rose-500/10 border border-rose-500/30 p-2">
+                          <div className="text-xs text-rose-300">
+                            <strong>SI-10 Violation:</strong> Request violated input validation or security policy checks.
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
-            </div>
-          ))}
+            )
+          })}
           {recentRequests.length === 0 && !loading ? (
             <div className="rounded-xl border border-white/10 bg-black/20 p-8 text-center text-sm text-white/60">
               Aucune requête récente

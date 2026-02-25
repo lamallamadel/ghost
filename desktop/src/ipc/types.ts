@@ -133,6 +133,8 @@ export type PipelineRequest = {
   timestamp: number
   stage: 'intercept' | 'auth' | 'audit' | 'execute'
   status: 'pending' | 'approved' | 'rejected' | 'completed' | 'failed'
+  dropReason?: string
+  dropLayer?: 'auth' | 'audit'
 }
 
 export type GatewayState = {
