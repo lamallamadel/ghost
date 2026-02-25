@@ -47,7 +47,9 @@ class CommandValidator {
             /\|\|/,
             /&&/,
             />\s*&/,
-            /2>&1/
+            /2>&1/,
+            /[\r\n]/,
+            /\x00/
         ];
 
         return dangerousPatterns.some(pattern => pattern.test(input));
@@ -209,6 +211,7 @@ class CommandValidator {
                 encoding: 'utf8',
                 maxBuffer: options.maxBuffer || 10 * 1024 * 1024,
                 timeout: options.timeout || 30000,
+                shell: false,
                 ...options
             });
             return result.trim();
@@ -238,6 +241,7 @@ class CommandValidator {
                 encoding: 'utf8',
                 maxBuffer: options.maxBuffer || 10 * 1024 * 1024,
                 timeout: options.timeout || 30000,
+                shell: false,
                 ...options
             });
             return result.trim();
@@ -264,6 +268,81 @@ class CommandValidator {
     executeGitCommandWithParams(subcommand, params = {}, options = {}) {
         const args = this.buildGitCommand(subcommand, params);
         return this.executeGitCommand(subcommand, args.slice(1), options);
+    }
+
+    static validateFromManifest(command, args = [], manifestCapabilities = {}) {
+        if (!command || typeof command !== 'string') {
+            return {
+                valid: false,
+                reason: 'Invalid command'
+            };
+        }
+
+        const normalizedCommand = command.toLowerCase().trim();
+
+        if (normalizedCommand === 'git') {
+            if (!args || args.length === 0) {
+                return {
+                    valid: false,
+                    reason: 'Git command requires subcommand'
+                };
+            }
+
+            const subcommand = args[0];
+            const gitCapabilities = manifestCapabilities.git || {};
+
+            const readOnlyCommands = [
+                'status', 'diff', 'log', 'show', 'branch', 'tag', 'rev-parse',
+                'describe', 'ls-files', 'ls-tree', 'cat-file', 'config', 'remote'
+            ];
+
+            const writeCommands = [
+                'fetch', 'pull', 'push', 'checkout', 'add', 'commit',
+                'merge', 'rebase', 'reset', 'stash', 'clean'
+            ];
+
+            const isReadCommand = readOnlyCommands.includes(subcommand);
+            const isWriteCommand = writeCommands.includes(subcommand);
+
+            if (!isReadCommand && !isWriteCommand) {
+                return {
+                    valid: false,
+                    reason: `Unknown git subcommand: ${subcommand}`
+                };
+            }
+
+            if (isReadCommand && !gitCapabilities.read) {
+                return {
+                    valid: false,
+                    reason: `Git read permission required for '${subcommand}' but not granted in manifest`
+                };
+            }
+
+            if (isWriteCommand && !gitCapabilities.write) {
+                return {
+                    valid: false,
+                    reason: `Git write permission required for '${subcommand}' but not granted in manifest`
+                };
+            }
+
+            return {
+                valid: true,
+                reason: 'Git command authorized by manifest'
+            };
+        }
+
+        const permissions = manifestCapabilities.permissions || [];
+        if (!permissions.includes('process:spawn')) {
+            return {
+                valid: false,
+                reason: `Command '${command}' requires process:spawn permission in manifest`
+            };
+        }
+
+        return {
+            valid: true,
+            reason: 'Command authorized by manifest'
+        };
     }
 
     static createDefault() {

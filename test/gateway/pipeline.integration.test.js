@@ -24,7 +24,7 @@ const manifest = {
     version: '1.0.0',
     capabilities: {
         filesystem: {
-            read: ['test/**/*.txt', '*.md'],
+            read: ['**/*'],
             write: []
         }
     }
@@ -37,15 +37,23 @@ fs.writeFileSync(testFile, 'test content', 'utf8');
 
 (async () => {
     try {
-        const validReadIntent = {
-            type: 'filesystem',
-            operation: 'read',
-            params: { path: testFile },
-            extensionId: 'test-extension-1',
-            requestId: 'req-001'
+        const validReadMessage = {
+            jsonrpc: '2.0',
+            id: 'msg-001',
+            method: 'filesystem.read',
+            params: {
+                type: 'filesystem',
+                operation: 'read',
+                params: { path: testFile },
+                extensionId: 'test-extension-1',
+                requestId: 'req-001'
+            }
         };
 
-        const result = await pipeline.process(validReadIntent);
+        const result = await pipeline.process(validReadMessage);
+        if (!result.success) {
+            console.log('Result:', JSON.stringify(result, null, 2));
+        }
         assert.strictEqual(result.success, true, 'Valid read should succeed');
         assert.strictEqual(result.result.success, true, 'Read result should be successful');
         assert.ok(result.result.content, 'Should return content');

@@ -13,426 +13,11 @@
 
 const fs = require('fs');
 const path = require('path');
-const crypto = require('crypto');
 const os = require('os');
-
-/**
- * EntropyScanner - Detects high-entropy strings and secret patterns
- * 
- * NIST SI-10 Compliance:
- * - ENTROPY_THRESHOLD: 4.5 (Shannon entropy threshold for secret detection)
- * - MIN_LENGTH_FOR_SCAN: 16 characters (minimum string length for entropy analysis)
- */
-class EntropyScanner {
-    static ENTROPY_THRESHOLD = 4.5;
-    static MIN_LENGTH_FOR_SCAN = 16;
-
-    static calculateEntropy(data) {
-        if (!data || data.length === 0) return 0;
-
-        const freq = {};
-        for (let i = 0; i < data.length; i++) {
-            const char = data[i];
-            freq[char] = (freq[char] || 0) + 1;
-        }
-
-        let entropy = 0;
-        const len = data.length;
-
-        for (const char in freq) {
-            const p = freq[char] / len;
-            entropy -= p * Math.log2(p);
-        }
-
-        return entropy;
-    }
-
-    static scanForSecrets(data) {
-        if (!data || typeof data !== 'string') {
-            return { hasSecrets: false, findings: [] };
-        }
-
-        const findings = [];
-
-        const patterns = [
-            { name: 'AWS_KEY', regex: /AKIA[0-9A-Z]{16}/, risk: 'high' },
-            { name: 'PRIVATE_KEY', regex: /-----BEGIN [A-Z ]+PRIVATE KEY-----/, risk: 'critical' },
-            { name: 'API_KEY', regex: /api[_-]?key['\s:=]+[a-zA-Z0-9]{16,}/, risk: 'high' },
-            { name: 'TOKEN', regex: /token['\s:=]+[a-zA-Z0-9]{20,}/, risk: 'high' },
-            { name: 'PASSWORD', regex: /password['\s:=]+[^\s]{8,}/, risk: 'medium' },
-            { name: 'SECRET', regex: /secret['\s:=]+[a-zA-Z0-9]{16,}/, risk: 'high' }
-        ];
-
-        for (const pattern of patterns) {
-            const matches = data.match(new RegExp(pattern.regex, 'gi'));
-            if (matches) {
-                findings.push({
-                    type: pattern.name,
-                    risk: pattern.risk,
-                    count: matches.length
-                });
-            }
-        }
-
-        const words = data.split(/\s+/);
-        for (const word of words) {
-            if (word.length >= this.MIN_LENGTH_FOR_SCAN) {
-                const entropy = this.calculateEntropy(word);
-                if (entropy > this.ENTROPY_THRESHOLD) {
-                    findings.push({
-                        type: 'HIGH_ENTROPY',
-                        risk: 'medium',
-                        entropy: entropy.toFixed(2),
-                        sample: word.substring(0, 20) + (word.length > 20 ? '...' : '')
-                    });
-                    break;
-                }
-            }
-        }
-
-        return {
-            hasSecrets: findings.length > 0,
-            findings
-        };
-    }
-
-    static sanitize(data) {
-        if (!data || typeof data !== 'string') return data;
-
-        let sanitized = data;
-
-        const patterns = [
-            /AKIA[0-9A-Z]{16}/g,
-            /-----BEGIN [A-Z ]+PRIVATE KEY-----[\s\S]*?-----END [A-Z ]+PRIVATE KEY-----/g,
-            /(api[_-]?key['\s:=]+)[a-zA-Z0-9]{16,}/gi,
-            /(token['\s:=]+)[a-zA-Z0-9]{20,}/gi,
-            /(password['\s:=]+)[^\s]{8,}/gi,
-            /(secret['\s:=]+)[a-zA-Z0-9]{16,}/gi
-        ];
-
-        for (const pattern of patterns) {
-            sanitized = sanitized.replace(pattern, (match) => {
-                return match.substring(0, Math.min(match.length, 10)) + '[REDACTED]';
-            });
-        }
-
-        return sanitized;
-    }
-}
-
-/**
- * NISTValidator - NIST SP 800-53 SI-10 Input Validation
- * 
- * Validates all intents against NIST security controls:
- * 1. Path Traversal Detection (SI-10-PATH-TRAVERSAL)
- *    - Detects ../, ..\, URL-encoded variants, null bytes
- * 2. Command Injection Prevention (SI-10-COMMAND-INJECTION)
- *    - Blocks &&, ||, ;, |, backticks, $(), eval, etc.
- * 3. SSRF Protection (SI-10-SSRF-*)
- *    - Blocks localhost, private IPs, metadata services
- * 4. Secret Detection (SI-10-SECRET-DETECTION)
- *    - Scans for API keys, tokens, private keys, high-entropy strings
- * 
- * All violations result in blocking execution (valid: false).
- */
-class NISTValidator {
-    static ALLOWLIST_TYPES = {
-        filesystem: {
-            extensions: ['.js', '.json', '.md', '.txt', '.yml', '.yaml', '.xml', '.html', '.css', '.ts', '.tsx'],
-            paths: ['src/', 'test/', 'docs/', 'config/', '.ghost/']
-        },
-        network: {
-            protocols: ['https:', 'http:'],
-            ports: [80, 443, 8080, 3000]
-        },
-        process: {
-            commands: ['git', 'node', 'npm', 'yarn', 'pnpm']
-        }
-    };
-
-    static validate(intent) {
-        const result = {
-            valid: true,
-            violations: [],
-            warnings: []
-        };
-
-        switch (intent.type) {
-            case 'filesystem':
-                this._validateFilesystem(intent, result);
-                break;
-            case 'network':
-                this._validateNetwork(intent, result);
-                break;
-            case 'process':
-                this._validateProcess(intent, result);
-                break;
-        }
-
-        if (intent.params) {
-            const secretScan = EntropyScanner.scanForSecrets(JSON.stringify(intent.params));
-            if (secretScan.hasSecrets) {
-                result.violations.push({
-                    rule: 'SI-10-SECRET-DETECTION',
-                    message: 'Potential secrets detected in parameters',
-                    findings: secretScan.findings
-                });
-                result.valid = false;
-            }
-        }
-
-        return result;
-    }
-
-    static _validateFilesystem(intent, result) {
-        const requestedPath = intent.params.path;
-        
-        if (!requestedPath || typeof requestedPath !== 'string') {
-            result.violations.push({
-                rule: 'SI-10-PATH-VALIDATION',
-                message: 'Invalid or missing path parameter'
-            });
-            result.valid = false;
-            return;
-        }
-
-        // Enhanced path traversal detection
-        const pathTraversalPatterns = [
-            /\.\./,                    // Basic parent directory
-            /\.\.\\/,                  // Windows parent directory
-            /\.\.\//,                  // Unix parent directory
-            /%2e%2e/i,                 // URL encoded ..
-            /\.\.%2f/i,                // Mixed encoding
-            /%252e%252e/i,             // Double URL encoded
-            /\.\.\x00/,                // Null byte injection
-            /\.\.\x2f/,                // Hex encoded slash
-        ];
-
-        for (const pattern of pathTraversalPatterns) {
-            if (pattern.test(requestedPath)) {
-                result.violations.push({
-                    rule: 'SI-10-PATH-TRAVERSAL',
-                    message: 'Path traversal attempt detected',
-                    detail: `Pattern matched: ${pattern.toString()}`
-                });
-                result.valid = false;
-                break;
-            }
-        }
-
-        // Check for absolute paths pointing outside allowed directories
-        if (path.isAbsolute(requestedPath)) {
-            result.warnings.push({
-                rule: 'SI-10-ABSOLUTE-PATH',
-                message: 'Absolute path detected - verify it stays within allowed boundaries'
-            });
-        }
-
-        const ext = path.extname(requestedPath);
-        const isAllowedExt = this.ALLOWLIST_TYPES.filesystem.extensions.includes(ext);
-        const isAllowedPath = this.ALLOWLIST_TYPES.filesystem.paths.some(p => 
-            requestedPath.startsWith(p) || requestedPath.includes(`/${p}`)
-        );
-
-        if (!isAllowedExt && !isAllowedPath) {
-            result.warnings.push({
-                rule: 'SI-10-PATH-ALLOWLIST',
-                message: `Path extension or location not in standard allowlist: ${requestedPath}`
-            });
-        }
-
-        if (intent.operation === 'write' && intent.params.content) {
-            const secretScan = EntropyScanner.scanForSecrets(intent.params.content);
-            if (secretScan.hasSecrets) {
-                result.violations.push({
-                    rule: 'SI-10-CONTENT-SECRETS',
-                    message: 'Secrets detected in write content',
-                    findings: secretScan.findings
-                });
-                result.valid = false;
-            }
-        }
-    }
-
-    static _validateNetwork(intent, result) {
-        const url = intent.params.url;
-        
-        try {
-            const parsed = new URL(url);
-            
-            if (!this.ALLOWLIST_TYPES.network.protocols.includes(parsed.protocol)) {
-                result.violations.push({
-                    rule: 'SI-10-PROTOCOL-ALLOWLIST',
-                    message: `Protocol not allowed: ${parsed.protocol}`
-                });
-                result.valid = false;
-            }
-
-            // Enhanced SSRF protection - check for private IP ranges
-            // Note: parsed.hostname includes brackets for IPv6, e.g., "[::1]"
-            let hostname = parsed.hostname.toLowerCase();
-            
-            // Remove brackets from IPv6 addresses
-            if (hostname.startsWith('[') && hostname.endsWith(']')) {
-                hostname = hostname.slice(1, -1);
-            }
-            
-            // Check for localhost variations
-            const localhostPatterns = [
-                'localhost',
-                '127.0.0.1',
-                '::1',
-                '0.0.0.0',
-                '0000:0000:0000:0000:0000:0000:0000:0001'
-            ];
-            
-            // Check for exact match or startsWith for IPv4 ranges
-            const isLocalhost = localhostPatterns.some(pattern => {
-                if (pattern.includes(':')) {
-                    // For IPv6, do exact match or compressed form match
-                    return hostname === pattern || hostname === pattern.replace(/0+/g, '0').replace(/:0:/g, '::');
-                }
-                return hostname === pattern || hostname.startsWith(pattern + '.');
-            });
-            
-            if (isLocalhost) {
-                result.violations.push({
-                    rule: 'SI-10-SSRF-LOCALHOST',
-                    message: 'Access to localhost/loopback addresses is blocked (SSRF prevention)'
-                });
-                result.valid = false;
-            }
-
-            // Check for private IP ranges (RFC 1918, RFC 4193)
-            const privateIPPatterns = [
-                /^10\./,                        // 10.0.0.0/8
-                /^172\.(1[6-9]|2[0-9]|3[0-1])\./, // 172.16.0.0/12
-                /^192\.168\./,                   // 192.168.0.0/16
-                /^169\.254\./,                   // 169.254.0.0/16 (link-local)
-                /^fc00:/i,                       // IPv6 Unique Local Addresses
-                /^fd00:/i,                       // IPv6 Unique Local Addresses
-                /^fe80:/i                        // IPv6 Link-Local
-            ];
-
-            for (const pattern of privateIPPatterns) {
-                if (pattern.test(hostname)) {
-                    result.violations.push({
-                        rule: 'SI-10-SSRF-PRIVATE-IP',
-                        message: 'Access to private IP addresses is blocked (SSRF prevention)',
-                        detail: `Hostname: ${hostname}`
-                    });
-                    result.valid = false;
-                    break;
-                }
-            }
-
-            // Check for metadata service endpoints (cloud providers)
-            const metadataEndpoints = [
-                '169.254.169.254',  // AWS, Azure, GCP
-                '169.254.170.2',    // AWS ECS
-                'metadata.google.internal',
-                'metadata.azure.com'
-            ];
-
-            if (metadataEndpoints.some(endpoint => hostname === endpoint || hostname.endsWith(endpoint))) {
-                result.violations.push({
-                    rule: 'SI-10-SSRF-METADATA',
-                    message: 'Access to cloud metadata services is blocked (SSRF prevention)',
-                    detail: `Hostname: ${hostname}`
-                });
-                result.valid = false;
-            }
-
-            // Check for suspicious URL encoding or obfuscation
-            if (url.includes('%') && (url.toLowerCase().includes('%31%32%37') || url.toLowerCase().includes('%6c%6f%63%61%6c'))) {
-                result.violations.push({
-                    rule: 'SI-10-SSRF-ENCODED',
-                    message: 'URL encoding of restricted addresses detected (SSRF prevention)'
-                });
-                result.valid = false;
-            }
-
-        } catch (e) {
-            result.violations.push({
-                rule: 'SI-10-URL-VALIDATION',
-                message: `Invalid URL: ${url}`
-            });
-            result.valid = false;
-        }
-    }
-
-    static _validateProcess(intent, result) {
-        const command = intent.params.command;
-        
-        if (!command || typeof command !== 'string') {
-            result.violations.push({
-                rule: 'SI-10-COMMAND-VALIDATION',
-                message: 'Invalid or missing command parameter'
-            });
-            result.valid = false;
-            return;
-        }
-
-        const baseCommand = command.split(/\s+/)[0];
-        const isAllowed = this.ALLOWLIST_TYPES.process.commands.includes(baseCommand);
-        
-        if (!isAllowed) {
-            result.warnings.push({
-                rule: 'SI-10-COMMAND-ALLOWLIST',
-                message: `Command not in standard allowlist: ${baseCommand}`
-            });
-        }
-
-        // Enhanced command injection detection
-        const commandInjectionPatterns = [
-            { pattern: /&&/, name: 'AND chain' },
-            { pattern: /\|\|/, name: 'OR chain' },
-            { pattern: /;/, name: 'semicolon separator' },
-            { pattern: /\|(?!\|)/, name: 'pipe' },
-            { pattern: /`/, name: 'backtick execution' },
-            { pattern: /\$\(/, name: 'command substitution' },
-            { pattern: />\s*[/\\]/, name: 'redirect to path' },
-            { pattern: /<\s*[/\\]/, name: 'input from path' },
-            { pattern: /\r|\n/, name: 'newline injection' },
-            { pattern: /\x00/, name: 'null byte injection' },
-            { pattern: /&\s*$/, name: 'background execution' }
-        ];
-
-        for (const { pattern, name } of commandInjectionPatterns) {
-            if (pattern.test(command)) {
-                result.violations.push({
-                    rule: 'SI-10-COMMAND-INJECTION',
-                    message: `Command injection pattern detected: ${name}`,
-                    detail: `Pattern: ${pattern.toString()}`
-                });
-                result.valid = false;
-                break;
-            }
-        }
-
-        // Check for dangerous command arguments
-        const dangerousArgs = [
-            '--eval',
-            '-e',
-            'eval(',
-            'exec(',
-            'system(',
-            'require(',
-            '__import__'
-        ];
-
-        for (const dangerousArg of dangerousArgs) {
-            if (command.includes(dangerousArg)) {
-                result.violations.push({
-                    rule: 'SI-10-DANGEROUS-COMMAND-ARG',
-                    message: `Dangerous command argument detected: ${dangerousArg}`
-                });
-                result.valid = false;
-                break;
-            }
-        }
-    }
-}
+const PathValidator = require('../validators/path-validator');
+const NetworkValidator = require('../validators/network-validator');
+const CommandValidator = require('../validators/command-validator');
+const EntropyValidator = require('../validators/entropy-validator');
 
 /**
  * AuditLogger - Immutable JSON audit logging
@@ -507,23 +92,41 @@ class AuditLogger {
     }
 
     logSecurityEvent(extensionId, eventType, details) {
-        return this.log({
+        const entry = {
             type: 'SECURITY_EVENT',
             extensionId,
             eventType,
             details
-        });
+        };
+
+        if (details.severity) {
+            entry.severity = details.severity;
+        }
+
+        if (details.rule) {
+            entry.rule = details.rule;
+        }
+
+        return this.log(entry);
     }
 
     _sanitizeParams(params) {
+        const entropyValidator = new EntropyValidator();
         const sanitized = { ...params };
         
-        if (sanitized.content) {
-            sanitized.content = EntropyScanner.sanitize(sanitized.content);
+        if (sanitized.content && typeof sanitized.content === 'string') {
+            const scanResult = entropyValidator.scanContent(sanitized.content);
+            if (scanResult.hasSecrets) {
+                sanitized.content = '[CONTENT REDACTED - CONTAINS SECRETS]';
+            }
         }
         
-        if (sanitized.data) {
-            sanitized.data = EntropyScanner.sanitize(JSON.stringify(sanitized.data));
+        if (sanitized.data && typeof sanitized.data === 'object') {
+            const dataStr = JSON.stringify(sanitized.data);
+            const scanResult = entropyValidator.scanContent(dataStr);
+            if (scanResult.hasSecrets) {
+                sanitized.data = '[DATA REDACTED - CONTAINS SECRETS]';
+            }
         }
 
         return sanitized;
@@ -571,7 +174,7 @@ class AuditLogger {
 /**
  * AuditLayer - Pipeline layer for NIST SI-10 compliance
  * 
- * Integrates NISTValidator and AuditLogger into the I/O pipeline.
+ * Integrates standalone validators into the I/O pipeline.
  * 
  * NIST SI-10 Compliance:
  * - All intents are validated against security controls
@@ -581,8 +184,88 @@ class AuditLogger {
  * - Execution results are logged for audit trail
  */
 class AuditLayer {
-    constructor(logPath) {
+    constructor(logPath, manifestCapabilities = null) {
         this.logger = new AuditLogger(logPath);
+        this.manifestCapabilities = manifestCapabilities;
+        this.pathValidator = null;
+        this.networkValidator = null;
+        this.commandValidator = null;
+        this.entropyValidator = EntropyValidator.createDefault(process.cwd());
+        
+        this._initializeValidators();
+    }
+
+    _initializeValidators() {
+        if (this.manifestCapabilities) {
+            const fsCapabilities = this.manifestCapabilities.filesystem;
+            if (fsCapabilities) {
+                const patterns = [
+                    ...(fsCapabilities.read || []),
+                    ...(fsCapabilities.write || [])
+                ];
+                this.pathValidator = new PathValidator({
+                    rootDirectory: process.cwd(),
+                    allowedPatterns: patterns,
+                    allowedPaths: [],
+                    deniedPaths: []
+                });
+            }
+
+            const networkCapabilities = this.manifestCapabilities.network;
+            if (networkCapabilities && networkCapabilities.allowlist) {
+                const allowedDomains = networkCapabilities.allowlist.map(url => {
+                    try {
+                        const parsed = new URL(url);
+                        return parsed.hostname;
+                    } catch {
+                        return null;
+                    }
+                }).filter(d => d !== null);
+
+                this.networkValidator = new NetworkValidator({
+                    allowedSchemes: ['https', 'http'],
+                    allowedDomains: allowedDomains,
+                    requireTLS: false,
+                    allowPrivateIPs: false,
+                    allowLocalhostIPs: false
+                });
+            }
+
+            const gitCapabilities = this.manifestCapabilities.git;
+            if (gitCapabilities) {
+                this.commandValidator = new CommandValidator({
+                    allowedCommands: ['git'],
+                    allowedGitSubcommands: this._getGitSubcommandsFromCapabilities(gitCapabilities),
+                    deniedArguments: ['--exec', '-c', 'core.sshCommand', 'core.gitProxy'],
+                    maxArgumentLength: 1000,
+                    allowShellExpansion: false
+                });
+            }
+        }
+    }
+
+    _getGitSubcommandsFromCapabilities(gitCapabilities) {
+        const readCommands = [
+            'status', 'diff', 'log', 'show', 'branch', 'tag', 'rev-parse',
+            'describe', 'ls-files', 'ls-tree', 'cat-file', 'config', 'remote'
+        ];
+
+        const writeCommands = [
+            'fetch', 'pull', 'push', 'checkout', 'add', 'commit',
+            'merge', 'rebase', 'reset', 'stash', 'clean'
+        ];
+
+        const allowedSubcommands = [];
+
+        if (gitCapabilities.read) {
+            allowedSubcommands.push(...readCommands);
+        }
+
+        if (gitCapabilities.write) {
+            allowedSubcommands.push(...writeCommands);
+        }
+
+        return allowedSubcommands;
     }
 
     /**
@@ -592,12 +275,24 @@ class AuditLayer {
      * @returns {Object} Audit result with passed/failed status
      */
     audit(intent, authResult) {
-        const validationResult = NISTValidator.validate(intent);
+        const validationResult = this._validate(intent);
 
         this.logger.logIntent(intent, authResult, validationResult);
 
-        // NIST SI-10: All violations block execution
         if (!validationResult.valid) {
+            for (const violation of validationResult.violations) {
+                this.logger.logSecurityEvent(
+                    intent.extensionId,
+                    'VALIDATION_VIOLATION',
+                    {
+                        severity: violation.severity || 'high',
+                        rule: violation.rule,
+                        message: violation.message,
+                        detail: violation.detail
+                    }
+                );
+            }
+
             return {
                 passed: false,
                 reason: 'NIST SI-10 validation failed',
@@ -618,6 +313,253 @@ class AuditLayer {
         };
     }
 
+    _validate(intent) {
+        const result = {
+            valid: true,
+            violations: [],
+            warnings: []
+        };
+
+        switch (intent.type) {
+            case 'filesystem':
+                this._validateFilesystem(intent, result);
+                break;
+            case 'network':
+                this._validateNetwork(intent, result);
+                break;
+            case 'process':
+                this._validateProcess(intent, result);
+                break;
+        }
+
+        if (intent.params) {
+            const paramsStr = typeof intent.params === 'string' 
+                ? intent.params 
+                : JSON.stringify(intent.params);
+            
+            const entropyResult = this.entropyValidator.scanContentForIntent(paramsStr);
+            
+            if (!entropyResult.valid && entropyResult.violations.length > 0) {
+                result.violations.push(...entropyResult.violations);
+                result.valid = false;
+            }
+        }
+
+        return result;
+    }
+
+    _validateFilesystem(intent, result) {
+        const requestedPath = intent.params.path;
+        
+        if (!requestedPath || typeof requestedPath !== 'string') {
+            result.violations.push({
+                rule: 'SI-10-PATH-VALIDATION',
+                message: 'Invalid or missing path parameter',
+                severity: 'high'
+            });
+            result.valid = false;
+            return;
+        }
+
+        if (this.manifestCapabilities && this.manifestCapabilities.filesystem) {
+            const fsCapabilities = this.manifestCapabilities.filesystem;
+            const operation = intent.operation || 'read';
+            const patterns = operation === 'write' 
+                ? (fsCapabilities.write || []) 
+                : (fsCapabilities.read || []);
+
+            const pathValidation = PathValidator.validateFromManifest(
+                requestedPath,
+                patterns,
+                process.cwd()
+            );
+
+            if (!pathValidation.allowed) {
+                result.violations.push({
+                    rule: 'SI-10-PATH-TRAVERSAL',
+                    message: pathValidation.reason,
+                    severity: 'high',
+                    detail: `Path: ${requestedPath}`
+                });
+                result.valid = false;
+                return;
+            }
+        }
+
+        if (intent.operation === 'write' && intent.params.content) {
+            const contentValidation = this.entropyValidator.scanContentForIntent(intent.params.content);
+            
+            if (!contentValidation.valid) {
+                for (const violation of contentValidation.violations) {
+                    result.violations.push({
+                        rule: 'SI-10-CONTENT-SECRETS',
+                        message: 'Secrets detected in write content',
+                        severity: violation.severity || 'high',
+                        detail: violation.detail,
+                        method: violation.method
+                    });
+                }
+                result.valid = false;
+            }
+        }
+    }
+
+    _validateNetwork(intent, result) {
+        const url = intent.params.url;
+        
+        if (!url || typeof url !== 'string') {
+            result.violations.push({
+                rule: 'SI-10-URL-VALIDATION',
+                message: 'Invalid or missing URL parameter',
+                severity: 'high'
+            });
+            result.valid = false;
+            return;
+        }
+
+        if (this.manifestCapabilities && this.manifestCapabilities.network) {
+            const networkCap = this.manifestCapabilities.network;
+            const allowedDomains = [];
+            
+            if (networkCap.allowlist && Array.isArray(networkCap.allowlist)) {
+                for (const allowedUrl of networkCap.allowlist) {
+                    try {
+                        const parsed = new URL(allowedUrl);
+                        allowedDomains.push(parsed.hostname);
+                    } catch {
+                        // Skip invalid URLs in allowlist
+                    }
+                }
+            }
+
+            const manifestForValidation = {
+                schemes: ['https', 'http'],
+                domains: allowedDomains,
+                ports: [],
+                deniedDomains: [],
+                deniedIPs: [],
+                requireTLS: false,
+                allowPrivateIPs: false,
+                allowLocalhostIPs: false
+            };
+
+            const networkValidation = NetworkValidator.validateFromManifest(
+                url,
+                manifestForValidation
+            );
+
+            if (!networkValidation.valid) {
+                const severityMap = {
+                    'SI-10-SSRF-LOCALHOST': 'critical',
+                    'SI-10-SSRF-PRIVATE-IP': 'critical',
+                    'SI-10-SSRF-METADATA': 'critical',
+                    'SI-10-SSRF-ENCODED': 'critical',
+                    'SI-10-PROTOCOL-ALLOWLIST': 'high',
+                    'SI-10-URL-VALIDATION': 'high'
+                };
+
+                const rule = this._extractRuleFromNetworkReason(networkValidation.reason);
+                const severity = severityMap[rule] || 'high';
+
+                result.violations.push({
+                    rule: rule,
+                    message: networkValidation.reason,
+                    severity: severity,
+                    detail: `URL: ${url}`
+                });
+                result.valid = false;
+            }
+        }
+    }
+
+    _extractRuleFromNetworkReason(reason) {
+        if (!reason) return 'SI-10-URL-VALIDATION';
+        
+        const reasonLower = reason.toLowerCase();
+        
+        if (reasonLower.includes('localhost') || reasonLower.includes('loopback')) {
+            return 'SI-10-SSRF-LOCALHOST';
+        }
+        if (reasonLower.includes('private ip')) {
+            return 'SI-10-SSRF-PRIVATE-IP';
+        }
+        if (reasonLower.includes('metadata')) {
+            return 'SI-10-SSRF-METADATA';
+        }
+        if (reasonLower.includes('url encoding') || reasonLower.includes('obfuscation')) {
+            return 'SI-10-SSRF-ENCODED';
+        }
+        if (reasonLower.includes('protocol') || reasonLower.includes('scheme')) {
+            return 'SI-10-PROTOCOL-ALLOWLIST';
+        }
+        
+        return 'SI-10-URL-VALIDATION';
+    }
+
+    _validateProcess(intent, result) {
+        const command = intent.params.command;
+        
+        if (!command || typeof command !== 'string') {
+            result.violations.push({
+                rule: 'SI-10-COMMAND-VALIDATION',
+                message: 'Invalid or missing command parameter',
+                severity: 'high'
+            });
+            result.valid = false;
+            return;
+        }
+
+        const commandParts = command.split(/\s+/);
+        const baseCommand = commandParts[0];
+        const args = commandParts.slice(1);
+
+        if (this.manifestCapabilities) {
+            const commandValidation = CommandValidator.validateFromManifest(
+                baseCommand,
+                args,
+                this.manifestCapabilities
+            );
+
+            if (!commandValidation.valid) {
+                const severityMap = {
+                    'SI-10-COMMAND-INJECTION': 'critical',
+                    'SI-10-DANGEROUS-COMMAND-ARG': 'critical',
+                    'SI-10-COMMAND-VALIDATION': 'high',
+                    'SI-10-COMMAND-ALLOWLIST': 'medium'
+                };
+
+                const rule = this._extractRuleFromCommandReason(commandValidation.reason);
+                const severity = severityMap[rule] || 'high';
+
+                result.violations.push({
+                    rule: rule,
+                    message: commandValidation.reason,
+                    severity: severity,
+                    detail: `Command: ${command}`
+                });
+                result.valid = false;
+            }
+        }
+    }
+
+    _extractRuleFromCommandReason(reason) {
+        if (!reason) return 'SI-10-COMMAND-VALIDATION';
+        
+        const reasonLower = reason.toLowerCase();
+        
+        if (reasonLower.includes('injection')) {
+            return 'SI-10-COMMAND-INJECTION';
+        }
+        if (reasonLower.includes('dangerous') || reasonLower.includes('denied argument')) {
+            return 'SI-10-DANGEROUS-COMMAND-ARG';
+        }
+        if (reasonLower.includes('not in allowed') || reasonLower.includes('not allowed')) {
+            return 'SI-10-COMMAND-ALLOWLIST';
+        }
+        
+        return 'SI-10-COMMAND-VALIDATION';
+    }
+
     logExecution(intent, result, error = null) {
         return this.logger.logExecution(intent, result, error);
     }
@@ -633,7 +575,5 @@ class AuditLayer {
 
 module.exports = {
     AuditLayer,
-    AuditLogger,
-    NISTValidator,
-    EntropyScanner
+    AuditLogger
 };
