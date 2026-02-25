@@ -23,25 +23,103 @@ class ExtensionProcess extends EventEmitter {
         this.heartbeatTimeout = options.heartbeatTimeout || 30000;
         this.responseTimeout = options.responseTimeout || 30000;
         this.startupTimeout = options.startupTimeout || 10000;
+        
+        this.backoffDelay = 1000;
+        this.backoffMaxDelay = 30000;
+        this.backoffFactor = 2;
+        this.consecutiveRestarts = 0;
+        
+        this.shutdownTimeout = options.shutdownTimeout || 5000;
+        this.killTimeout = options.killTimeout || 10000;
+        this.shutdownTimer = null;
+        this.killTimer = null;
+        
+        this.validStateTransitions = {
+            'STOPPED': ['STARTING'],
+            'STARTING': ['RUNNING', 'FAILED', 'STOPPED'],
+            'RUNNING': ['STOPPING', 'FAILED'],
+            'STOPPING': ['STOPPED', 'FAILED'],
+            'FAILED': ['STARTING', 'STOPPED']
+        };
+    }
+
+    _validateStateTransition(fromState, toState, reason = '') {
+        const allowedTransitions = this.validStateTransitions[fromState] || [];
+        if (!allowedTransitions.includes(toState)) {
+            throw new Error(
+                `Invalid state transition: ${fromState} -> ${toState}${reason ? ` (reason: ${reason})` : ''}`
+            );
+        }
+    }
+
+    _transitionState(newState, reason = '', metadata = {}) {
+        const oldState = this.state;
+        this._validateStateTransition(oldState, newState, reason);
+        
+        this.state = newState;
+        
+        const stateChangeEvent = {
+            extensionId: this.extensionId,
+            timestamp: Date.now(),
+            timestampISO: new Date().toISOString(),
+            previousState: oldState,
+            newState: newState,
+            reason: reason,
+            reasonCode: this._getReasonCode(reason),
+            metadata: {
+                pid: this.process ? this.process.pid : null,
+                restartCount: this.restartCount,
+                consecutiveRestarts: this.consecutiveRestarts,
+                ...metadata
+            }
+        };
+        
+        this.emit('state-change', stateChangeEvent);
+    }
+
+    _getReasonCode(reason) {
+        const reasonMap = {
+            'user_requested': 'USER_REQUESTED',
+            'start_requested': 'START_REQUESTED',
+            'stop_requested': 'STOP_REQUESTED',
+            'restart_requested': 'RESTART_REQUESTED',
+            'startup_success': 'STARTUP_SUCCESS',
+            'startup_failed': 'STARTUP_FAILED',
+            'shutdown_complete': 'SHUTDOWN_COMPLETE',
+            'shutdown_timeout': 'SHUTDOWN_TIMEOUT',
+            'unexpected_exit': 'UNEXPECTED_EXIT',
+            'unresponsive': 'UNRESPONSIVE',
+            'restart_limit_exceeded': 'RESTART_LIMIT_EXCEEDED',
+            'validation_error': 'VALIDATION_ERROR',
+            'spawn_error': 'SPAWN_ERROR'
+        };
+        
+        return reasonMap[reason] || 'UNKNOWN';
     }
 
     async start() {
         if (this.state === 'RUNNING') {
             throw new Error(`Extension ${this.extensionId} is already running`);
         }
+        
+        if (this.state === 'STARTING') {
+            throw new Error(`Extension ${this.extensionId} is already starting`);
+        }
 
-        this.state = 'STARTING';
-        this.emit('state-change', { state: 'STARTING' });
+        this._transitionState('STARTING', 'start_requested');
 
         try {
             await this._spawnProcess();
-            this.state = 'RUNNING';
             this.lastHeartbeat = Date.now();
             this._startHeartbeatMonitoring();
-            this.emit('state-change', { state: 'RUNNING' });
+            this.consecutiveRestarts = 0;
+            this._transitionState('RUNNING', 'startup_success', {
+                startupDuration: Date.now() - this.lastHeartbeat
+            });
         } catch (error) {
-            this.state = 'FAILED';
-            this.emit('state-change', { state: 'FAILED', error: error.message });
+            this._transitionState('FAILED', 'startup_failed', {
+                error: error.message
+            });
             throw error;
         }
     }
@@ -50,9 +128,12 @@ class ExtensionProcess extends EventEmitter {
         if (this.state === 'STOPPED') {
             return;
         }
+        
+        if (this.state === 'STOPPING') {
+            return;
+        }
 
-        this.state = 'STOPPING';
-        this.emit('state-change', { state: 'STOPPING' });
+        this._transitionState('STOPPING', 'stop_requested');
 
         this._stopHeartbeatMonitoring();
         
@@ -66,41 +147,79 @@ class ExtensionProcess extends EventEmitter {
         this.pendingRequests.clear();
 
         if (this.process) {
-            try {
-                await this._sendRequest('shutdown', {}, 5000);
-            } catch (error) {
-            }
-
-            return new Promise((resolve) => {
-                const killTimeout = setTimeout(() => {
-                    if (this.process && !this.process.killed) {
-                        this.process.kill('SIGKILL');
-                    }
-                    resolve();
-                }, 5000);
-
-                if (this.process) {
-                    this.process.once('exit', () => {
-                        clearTimeout(killTimeout);
-                        resolve();
-                    });
-                    this.process.kill('SIGTERM');
-                } else {
-                    clearTimeout(killTimeout);
-                    resolve();
-                }
-            }).then(() => {
-                this.process = null;
-                this.state = 'STOPPED';
-                this.emit('state-change', { state: 'STOPPED' });
-            });
+            await this._gracefulShutdown();
         }
 
-        this.state = 'STOPPED';
-        this.emit('state-change', { state: 'STOPPED' });
+        this._transitionState('STOPPED', 'shutdown_complete');
     }
 
-    async restart() {
+    async _gracefulShutdown() {
+        const shutdownStartTime = Date.now();
+        let shutdownMethod = 'shutdown_request';
+        
+        if (!this.process || this.process.killed || this.process.exitCode !== null) {
+            return;
+        }
+        
+        return new Promise((resolve) => {
+            let resolved = false;
+            
+            const resolveOnce = () => {
+                if (!resolved) {
+                    resolved = true;
+                    this._clearShutdownTimers();
+                    const shutdownDuration = Date.now() - shutdownStartTime;
+                    this.emit('shutdown-complete', {
+                        extensionId: this.extensionId,
+                        timestamp: Date.now(),
+                        shutdownMethod,
+                        shutdownDuration
+                    });
+                    this.process = null;
+                    resolve();
+                }
+            };
+            
+            this.process.once('exit', () => {
+                resolveOnce();
+            });
+            
+            this._sendRequest('shutdown', {}, this.shutdownTimeout)
+                .catch(() => {
+                    if (!resolved && this.process && !this.process.killed) {
+                        shutdownMethod = 'SIGTERM';
+                        this.process.kill('SIGTERM');
+                    }
+                });
+            
+            this.shutdownTimer = setTimeout(() => {
+                if (!resolved && this.process && !this.process.killed) {
+                    shutdownMethod = 'SIGTERM';
+                    this.process.kill('SIGTERM');
+                    
+                    this.killTimer = setTimeout(() => {
+                        if (!resolved && this.process && !this.process.killed) {
+                            shutdownMethod = 'SIGKILL';
+                            this.process.kill('SIGKILL');
+                        }
+                    }, this.killTimeout - this.shutdownTimeout);
+                }
+            }, this.shutdownTimeout);
+        });
+    }
+
+    _clearShutdownTimers() {
+        if (this.shutdownTimer) {
+            clearTimeout(this.shutdownTimer);
+            this.shutdownTimer = null;
+        }
+        if (this.killTimer) {
+            clearTimeout(this.killTimer);
+            this.killTimer = null;
+        }
+    }
+
+    async restart(reason = 'restart_requested') {
         const now = Date.now();
         this.restartHistory = this.restartHistory.filter(
             timestamp => now - timestamp < this.restartWindow
@@ -110,18 +229,50 @@ class ExtensionProcess extends EventEmitter {
             const error = new Error(
                 `Extension ${this.extensionId} exceeded restart limit (${this.maxRestarts} restarts in ${this.restartWindow}ms)`
             );
-            this.state = 'FAILED';
-            this.emit('state-change', { state: 'FAILED', error: error.message });
+            this._transitionState('FAILED', 'restart_limit_exceeded', {
+                restartsInWindow: this.restartHistory.length
+            });
             throw error;
         }
 
         this.restartHistory.push(now);
         this.restartCount++;
+        this.consecutiveRestarts++;
+        
+        const delay = this._calculateBackoffDelay();
+        
+        this.emit('restart-initiated', {
+            extensionId: this.extensionId,
+            timestamp: now,
+            restartCount: this.restartCount,
+            consecutiveRestarts: this.consecutiveRestarts,
+            backoffDelay: delay,
+            reason
+        });
 
         await this.stop();
+        
+        if (delay > 0) {
+            await new Promise(resolve => setTimeout(resolve, delay));
+        }
+        
         await this.start();
         
-        this.emit('restarted', { count: this.restartCount });
+        this.emit('restarted', {
+            extensionId: this.extensionId,
+            timestamp: Date.now(),
+            restartCount: this.restartCount,
+            consecutiveRestarts: this.consecutiveRestarts
+        });
+    }
+
+    _calculateBackoffDelay() {
+        if (this.consecutiveRestarts === 0) {
+            return 0;
+        }
+        
+        const delay = this.backoffDelay * Math.pow(this.backoffFactor, this.consecutiveRestarts - 1);
+        return Math.min(delay, this.backoffMaxDelay);
     }
 
     async call(method, params = {}) {
@@ -144,6 +295,7 @@ class ExtensionProcess extends EventEmitter {
             state: this.state,
             pid: this.process ? this.process.pid : null,
             restartCount: this.restartCount,
+            consecutiveRestarts: this.consecutiveRestarts,
             lastHeartbeat: this.lastHeartbeat,
             pendingRequests: this.pendingRequests.size,
             uptime: this.state === 'RUNNING' && this.lastHeartbeat 
@@ -762,7 +914,7 @@ class ExtensionProcess extends EventEmitter {
         });
 
         try {
-            await this.restart();
+            await this.restart('unresponsive');
         } catch (error) {
             this.emit('error', {
                 extensionId: this.extensionId,
@@ -779,7 +931,7 @@ class ExtensionProcess extends EventEmitter {
         });
 
         try {
-            await this.restart();
+            await this.restart('unexpected_exit');
         } catch (error) {
             this.emit('error', {
                 extensionId: this.extensionId,
@@ -843,6 +995,14 @@ class ExtensionRuntime extends EventEmitter {
             });
         });
 
+        extensionProcess.on('restart-initiated', (info) => {
+            this.emit('extension-restart-initiated', info);
+        });
+
+        extensionProcess.on('shutdown-complete', (info) => {
+            this.emit('extension-shutdown-complete', info);
+        });
+
         extensionProcess.on('stderr', (info) => {
             this.emit('extension-stderr', info);
         });
@@ -885,7 +1045,7 @@ class ExtensionRuntime extends EventEmitter {
             throw new Error(`Extension ${extensionId} is not registered`);
         }
 
-        await extensionProcess.restart();
+        await extensionProcess.restart('user_requested');
     }
 
     async callExtension(extensionId, method, params = {}) {
