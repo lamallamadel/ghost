@@ -71,6 +71,19 @@
         "lib/extension.js"
       ]
     },
+    "commands": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "List of command names that this extension handles. Used for command routing in the CLI. Commands declared here will be routed to this extension's methods.",
+      "examples": [
+        ["commit", "audit", "version"],
+        ["format", "lint"],
+        ["deploy", "build"],
+        []
+      ]
+    },
     "capabilities": {
       "type": "object",
       "description": "Zero Trust capability declarations defining the complete security boundary for this extension. All resource access must be explicitly declared here. Fail-closed: any undeclared capability will be denied by the authorization layer. This contract is validated at load time and enforced at runtime by the Ghost pipeline.",

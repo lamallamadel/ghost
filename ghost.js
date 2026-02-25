@@ -776,27 +776,22 @@ class GatewayLauncher {
      * Find extension that can handle a command.
      * 
      * ORCHESTRATION ROLE: Correct implementation
-     * - Pure lookup logic using static command map and capability queries
+     * - Pure lookup logic discovering commands from extension manifests
      * - No business logic, only routing decisions
      */
     _findExtensionForCommand(command) {
-        // Static command-to-extension mapping
-        const commandMap = {
-            'commit': 'ghost-git-extension',
-            'audit': 'ghost-git-extension',
-            'version': 'ghost-git-extension',
-            'merge': 'ghost-git-extension',
-            'history': 'ghost-git-extension'
-        };
-
-        const extensionId = commandMap[command];
-        
-        if (extensionId) {
-            return this.gateway.getExtension(extensionId);
+        // Discover extensions by checking manifest.commands arrays
+        const extensions = this.gateway.listExtensions();
+        for (const ext of extensions) {
+            const fullExt = this.gateway.getExtension(ext.id);
+            if (fullExt && fullExt.manifest && fullExt.manifest.commands) {
+                if (Array.isArray(fullExt.manifest.commands) && fullExt.manifest.commands.includes(command)) {
+                    return fullExt;
+                }
+            }
         }
 
-        // Dynamic capability-based routing
-        const extensions = this.gateway.listExtensions();
+        // Fallback: Dynamic capability-based routing
         for (const ext of extensions) {
             if (ext.capabilities && ext.capabilities[command]) {
                 return this.gateway.getExtension(ext.id);
