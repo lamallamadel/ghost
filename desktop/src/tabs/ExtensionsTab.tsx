@@ -440,27 +440,102 @@ function ManualOverrideDialog({
     operation: 'read',
     reason: '',
     params: '{}',
+    durationMinutes: 5,
+    scopePaths: '',
+    scopeUrls: '',
+    operatorPassword: '',
+    confirmationCheckbox: false,
   })
+
+  const [showPreview, setShowPreview] = useState(false)
+  const [validationError, setValidationError] = useState<string | null>(null)
+
+  const reasonMinLength = 50
+  const isReasonValid = formData.reason.trim().length >= reasonMinLength
+
+  const justificationTemplate = `JUSTIFICATION TEMPLATE:
+- Business Need: [Why is this override necessary?]
+- Risk Assessment: [What are the security implications?]
+- Duration Rationale: [Why this time duration?]
+- Scope Justification: [Why these specific paths/URLs?]
+- Mitigation: [What controls are in place?]`
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
+    
+    if (!isReasonValid) {
+      setValidationError(`La raison doit contenir au moins ${reasonMinLength} caractères (actuellement: ${formData.reason.trim().length})`)
+      return
+    }
+
+    if (!formData.confirmationCheckbox) {
+      setValidationError('Vous devez confirmer la nature exceptionnelle de cette action')
+      return
+    }
+
+    if (!formData.operatorPassword) {
+      setValidationError('L\'authentification de l\'opérateur est requise')
+      return
+    }
+
     try {
       const params = JSON.parse(formData.params)
-      onApprove({
+      
+      const scope: { paths?: string[]; urls?: string[] } = {}
+      if (formData.scopePaths.trim()) {
+        scope.paths = formData.scopePaths.split('\n').map(p => p.trim()).filter(Boolean)
+      }
+      if (formData.scopeUrls.trim()) {
+        scope.urls = formData.scopeUrls.split('\n').map(u => u.trim()).filter(Boolean)
+      }
+
+      const request: ManualOverrideRequest = {
         extensionId,
         type: formData.type,
         operation: formData.operation,
         reason: formData.reason,
         params,
-      })
+        durationMinutes: formData.durationMinutes,
+        ...(Object.keys(scope).length > 0 && { scope }),
+      }
+
+      onApprove(request)
     } catch {
-      alert('Params JSON invalide')
+      setValidationError('Params JSON invalide')
     }
+  }
+
+  function generateAuditPreview(): string {
+    const now = new Date().toISOString()
+    const expiresAt = new Date(Date.now() + formData.durationMinutes * 60 * 1000).toISOString()
+    
+    const scope: { paths?: string[]; urls?: string[] } = {}
+    if (formData.scopePaths.trim()) {
+      scope.paths = formData.scopePaths.split('\n').map(p => p.trim()).filter(Boolean)
+    }
+    if (formData.scopeUrls.trim()) {
+      scope.urls = formData.scopeUrls.split('\n').map(u => u.trim()).filter(Boolean)
+    }
+
+    return JSON.stringify({
+      event: 'SI-10(1)_MANUAL_OVERRIDE',
+      timestamp: now,
+      extensionId,
+      operator: 'desktop-console-operator',
+      type: formData.type,
+      operation: formData.operation,
+      reason: formData.reason,
+      durationMinutes: formData.durationMinutes,
+      expiresAt,
+      scope: Object.keys(scope).length > 0 ? scope : undefined,
+      params: formData.params,
+      authenticated: true,
+    }, null, 2)
   }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
-      <div className="w-full max-w-2xl rounded-2xl border border-white/20 bg-[rgb(var(--gc-bg))] p-6 shadow-2xl">
+      <div className="max-h-[90vh] w-full max-w-3xl overflow-auto rounded-2xl border border-white/20 bg-[rgb(var(--gc-bg))] p-6 shadow-2xl">
         <div className="mb-4 flex items-center gap-3">
           <ShieldCheck size={24} className="text-yellow-400" />
           <div>
@@ -469,42 +544,131 @@ function ManualOverrideDialog({
           </div>
         </div>
 
+        <div className="mb-4 rounded-lg border border-rose-500/30 bg-rose-500/10 p-4">
+          <div className="mb-2 flex items-center gap-2">
+            <AlertTriangle size={18} className="text-rose-400" />
+            <span className="text-sm font-semibold text-rose-300">AVERTISSEMENT : Action Exceptionnelle</span>
+          </div>
+          <div className="space-y-1 text-xs text-rose-200">
+            <p>• Les overrides manuels contournent les contrôles de sécurité normaux</p>
+            <p>• Cette action est enregistrée dans l'audit trail et fera l'objet d'une revue</p>
+            <p>• N'utiliser qu'en cas d'urgence opérationnelle documentée</p>
+            <p>• L'authentification et la justification détaillée sont obligatoires</p>
+          </div>
+        </div>
+
         <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="mb-1 block text-xs text-white/60">Type</label>
-            <select
-              value={formData.type}
-              onChange={(e) => setFormData({ ...formData, type: e.target.value })}
-              className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm"
-            >
-              <option value="filesystem">filesystem</option>
-              <option value="network">network</option>
-              <option value="git">git</option>
-              <option value="process">process</option>
-            </select>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="mb-1 block text-xs text-white/60">Type</label>
+              <select
+                value={formData.type}
+                onChange={(e) => setFormData({ ...formData, type: e.target.value })}
+                className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm"
+              >
+                <option value="filesystem">filesystem</option>
+                <option value="network">network</option>
+                <option value="git">git</option>
+                <option value="process">process</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs text-white/60">Operation</label>
+              <input
+                type="text"
+                value={formData.operation}
+                onChange={(e) => setFormData({ ...formData, operation: e.target.value })}
+                className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm"
+                placeholder="read, write, http, etc."
+              />
+            </div>
           </div>
 
           <div>
-            <label className="mb-1 block text-xs text-white/60">Operation</label>
-            <input
-              type="text"
-              value={formData.operation}
-              onChange={(e) => setFormData({ ...formData, operation: e.target.value })}
-              className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm"
-              placeholder="read, write, http, etc."
-            />
+            <label className="mb-1 block text-xs text-white/60">
+              Durée d'approbation
+            </label>
+            <div className="grid grid-cols-4 gap-2">
+              {[
+                { value: 5, label: '5 min' },
+                { value: 60, label: '1 heure' },
+                { value: 480, label: '8 heures' },
+                { value: 1440, label: '24 heures' },
+              ].map(({ value, label }) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => setFormData({ ...formData, durationMinutes: value })}
+                  className={`rounded-lg border px-3 py-2 text-sm font-semibold transition-colors ${
+                    formData.durationMinutes === value
+                      ? 'border-blue-500/50 bg-blue-500/20 text-blue-300'
+                      : 'border-white/10 bg-black/20 text-white/60 hover:bg-white/5'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="mb-1 block text-xs text-white/60">
+                Limitation de scope - Chemins (un par ligne)
+              </label>
+              <textarea
+                value={formData.scopePaths}
+                onChange={(e) => setFormData({ ...formData, scopePaths: e.target.value })}
+                className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 font-mono text-xs"
+                rows={3}
+                placeholder="/specific/path/only&#10;/another/allowed/path"
+              />
+            </div>
+
+            <div>
+              <label className="mb-1 block text-xs text-white/60">
+                Limitation de scope - URLs (une par ligne)
+              </label>
+              <textarea
+                value={formData.scopeUrls}
+                onChange={(e) => setFormData({ ...formData, scopeUrls: e.target.value })}
+                className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 font-mono text-xs"
+                rows={3}
+                placeholder="https://api.example.com/endpoint&#10;https://specific.domain.com/*"
+              />
+            </div>
           </div>
 
           <div>
-            <label className="mb-1 block text-xs text-white/60">Raison (audit)</label>
+            <div className="mb-1 flex items-center justify-between">
+              <label className="text-xs text-white/60">
+                Raison détaillée (minimum {reasonMinLength} caractères)
+              </label>
+              <span className={`font-mono text-xs ${isReasonValid ? 'text-emerald-400' : 'text-rose-400'}`}>
+                {formData.reason.trim().length}/{reasonMinLength}
+              </span>
+            </div>
             <textarea
               value={formData.reason}
-              onChange={(e) => setFormData({ ...formData, reason: e.target.value })}
-              className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm"
-              rows={3}
-              placeholder="Justification obligatoire pour l'audit SI-10(1)..."
+              onChange={(e) => {
+                setFormData({ ...formData, reason: e.target.value })
+                setValidationError(null)
+              }}
+              className={`w-full rounded-lg border px-3 py-2 text-sm ${
+                isReasonValid
+                  ? 'border-white/10 bg-black/20'
+                  : 'border-rose-500/50 bg-rose-500/5'
+              }`}
+              rows={5}
+              placeholder={justificationTemplate}
               required
             />
+            {!isReasonValid && formData.reason.length > 0 && (
+              <div className="mt-1 text-xs text-rose-400">
+                Justification insuffisante. Veuillez fournir une raison détaillée.
+              </div>
+            )}
           </div>
 
           <div>
@@ -518,27 +682,85 @@ function ManualOverrideDialog({
             />
           </div>
 
-          <div className="flex items-center gap-3 rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-3">
-            <AlertTriangle size={20} className="text-yellow-400" />
-            <div className="text-xs text-yellow-200">
-              Cette action sera enregistrée dans l'audit trail avec votre justification.
-            </div>
+          <div>
+            <label className="mb-1 block text-xs text-white/60">
+              Authentification opérateur (mot de passe/confirmation)
+            </label>
+            <input
+              type="password"
+              value={formData.operatorPassword}
+              onChange={(e) => {
+                setFormData({ ...formData, operatorPassword: e.target.value })
+                setValidationError(null)
+              }}
+              className="w-full rounded-lg border border-white/10 bg-black/20 px-3 py-2 text-sm"
+              placeholder="Entrez votre mot de passe pour confirmer"
+              required
+            />
           </div>
 
-          <div className="flex justify-end gap-2">
+          <div className="flex items-start gap-3 rounded-lg border border-yellow-500/30 bg-yellow-500/10 p-3">
+            <input
+              type="checkbox"
+              id="confirmation"
+              checked={formData.confirmationCheckbox}
+              onChange={(e) => {
+                setFormData({ ...formData, confirmationCheckbox: e.target.checked })
+                setValidationError(null)
+              }}
+              className="mt-0.5 h-4 w-4 cursor-pointer rounded border-yellow-500/50 bg-black/20"
+            />
+            <label htmlFor="confirmation" className="cursor-pointer text-xs text-yellow-200">
+              <span className="font-semibold">Je confirme</span> que cette action est exceptionnelle, justifiée, 
+              et que j'ai évalué les implications de sécurité. Je comprends que cet override sera enregistré 
+              dans l'audit trail et fera l'objet d'une revue de conformité.
+            </label>
+          </div>
+
+          {validationError && (
+            <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-3">
+              <div className="flex items-center gap-2 text-sm text-rose-300">
+                <AlertTriangle size={16} />
+                <span>{validationError}</span>
+              </div>
+            </div>
+          )}
+
+          {showPreview && (
+            <div>
+              <div className="mb-2 text-xs font-semibold text-white/60">Aperçu de l'entrée d'audit</div>
+              <div className="rounded-lg border border-white/10 bg-black/30 p-4">
+                <pre className="overflow-auto font-mono text-xs text-white/80">
+                  {generateAuditPreview()}
+                </pre>
+              </div>
+            </div>
+          )}
+
+          <div className="flex justify-between gap-2">
             <button
               type="button"
-              onClick={onClose}
+              onClick={() => setShowPreview(!showPreview)}
               className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm hover:bg-white/10"
             >
-              Annuler
+              {showPreview ? 'Masquer' : 'Aperçu'} audit log
             </button>
-            <button
-              type="submit"
-              className="rounded-lg bg-yellow-500 px-4 py-2 text-sm font-semibold text-black hover:bg-yellow-400"
-            >
-              Approuver Override
-            </button>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={onClose}
+                className="rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm hover:bg-white/10"
+              >
+                Annuler
+              </button>
+              <button
+                type="submit"
+                disabled={!isReasonValid || !formData.confirmationCheckbox || !formData.operatorPassword}
+                className="rounded-lg bg-yellow-500 px-4 py-2 text-sm font-semibold text-black hover:bg-yellow-400 disabled:cursor-not-allowed disabled:opacity-50"
+              >
+                Approuver Override
+              </button>
+            </div>
           </div>
         </form>
       </div>

@@ -209,6 +209,11 @@ export type ManualOverrideRequest = {
   operation: string
   reason: string
   params: Record<string, unknown>
+  durationMinutes?: number
+  scope?: {
+    paths?: string[]
+    urls?: string[]
+  }
 }
 
 export type ManualOverrideResult = {
