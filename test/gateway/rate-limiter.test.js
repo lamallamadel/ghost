@@ -238,4 +238,392 @@ assert.strictEqual(extAResult.allowed, false, 'ext-a should be limited');
 assert.strictEqual(extBResult.allowed, true, 'ext-b should not be affected');
 console.log('✅ Rate limits isolated between extensions\n');
 
+// srTCM-specific tests start here
+console.log('▶ Test 18: srTCM CIR refill formula accuracy - various time intervals');
+const cirBucket = new SingleRateThreeColorTokenBucket({
+    cir: 180,
+    bc: 200,
+    be: 100
+});
+cirBucket.committedTokens = 0;
+cirBucket.excessTokens = 0;
+cirBucket.lastRefill = Date.now() - 10000;
+
+const cirState = cirBucket.getState();
+const expectedTokens10s = (10 * 180) / 60;
+assert.ok(Math.abs(cirState.committedTokens - expectedTokens10s) < 0.1,
+    `CIR formula: 10s * 180/min should add ${expectedTokens10s} tokens, got ${cirState.committedTokens}`);
+console.log(`✅ CIR refill accuracy: ${expectedTokens10s} tokens in 10s (formula: elapsed * CIR / 60)\n`);
+
+console.log('▶ Test 19: srTCM CIR refill formula with fractional seconds');
+const fracBucket = new SingleRateThreeColorTokenBucket({
+    cir: 600,
+    bc: 300,
+    be: 150
+});
+fracBucket.committedTokens = 100;
+fracBucket.excessTokens = 50;
+fracBucket.lastRefill = Date.now() - 1500;
+
+const fracState = fracBucket.getState();
+const expectedFrac = (1.5 * 600) / 60;
+const expectedCommitted = Math.min(300, 100 + expectedFrac);
+assert.ok(Math.abs(fracState.committedTokens - expectedCommitted) < 0.5,
+    `1.5s at CIR=600/min: expected ~${expectedCommitted}, got ${fracState.committedTokens}`);
+console.log(`✅ Fractional CIR refill: ${fracState.committedTokens} tokens after 1.5s\n`);
+
+console.log('▶ Test 20: srTCM CIR refill with very high rate (millisecond precision)');
+const highRateBucket = new SingleRateThreeColorTokenBucket({
+    cir: 6000,
+    bc: 500,
+    be: 200
+});
+highRateBucket.committedTokens = 0;
+highRateBucket.excessTokens = 0;
+highRateBucket.lastRefill = Date.now() - 100;
+
+const highRateState = highRateBucket.getState();
+const expected100ms = (0.1 * 6000) / 60;
+assert.ok(Math.abs(highRateState.committedTokens - expected100ms) < 1,
+    `100ms at 6000/min (100/s): expected ~${expected100ms}, got ${highRateState.committedTokens}`);
+console.log(`✅ High-rate CIR precision: ${highRateState.committedTokens} tokens in 100ms\n`);
+
+console.log('▶ Test 21: Bc-to-Be overflow when Bc is full and at rest');
+const restBucket = new SingleRateThreeColorTokenBucket({
+    cir: 60,
+    bc: 100,
+    be: 50
+});
+restBucket.committedTokens = 100;
+restBucket.excessTokens = 0;
+restBucket.lastRefill = Date.now() - 60000;
+
+const restState = restBucket.getState();
+const tokensGenerated = (60 * 60) / 60;
+assert.strictEqual(restState.committedTokens, 100, 'Bc should remain at capacity');
+assert.ok(restState.excessTokens > 0 && restState.excessTokens <= 50,
+    `Overflow should fill Be: expected ≤50, got ${restState.excessTokens}`);
+console.log(`✅ At-rest overflow: Bc capped at 100, Be filled to ${restState.excessTokens}\n`);
+
+console.log('▶ Test 22: Bc-to-Be overflow with partial Bc capacity available');
+const partialRestBucket = new SingleRateThreeColorTokenBucket({
+    cir: 120,
+    bc: 200,
+    be: 100
+});
+partialRestBucket.committedTokens = 180;
+partialRestBucket.excessTokens = 20;
+partialRestBucket.lastRefill = Date.now() - 5000;
+
+const partialRestState = partialRestBucket.getState();
+const tokensToAdd = (5 * 120) / 60;
+const bcSpace = 200 - 180;
+const bcFill = Math.min(tokensToAdd, bcSpace);
+const overflow = tokensToAdd - bcFill;
+const expectedBc = 180 + bcFill;
+const expectedBe = Math.min(100, 20 + overflow);
+
+assert.ok(Math.abs(partialRestState.committedTokens - expectedBc) < 0.1,
+    `Bc should be ${expectedBc}, got ${partialRestState.committedTokens}`);
+assert.ok(Math.abs(partialRestState.excessTokens - expectedBe) < 0.1,
+    `Be should be ${expectedBe}, got ${partialRestState.excessTokens}`);
+console.log(`✅ Partial overflow: ${tokensToAdd} tokens → Bc(${partialRestState.committedTokens}), Be(${partialRestState.excessTokens})\n`);
+
+console.log('▶ Test 23: Bc-to-Be overflow with Be already at capacity');
+const fullBeBucket = new SingleRateThreeColorTokenBucket({
+    cir: 60,
+    bc: 80,
+    be: 40
+});
+fullBeBucket.committedTokens = 80;
+fullBeBucket.excessTokens = 40;
+fullBeBucket.lastRefill = Date.now() - 10000;
+
+const fullBeState = fullBeBucket.getState();
+assert.strictEqual(fullBeState.committedTokens, 80, 'Bc should stay at capacity');
+assert.strictEqual(fullBeState.excessTokens, 40, 'Be should stay at capacity (no room for overflow)');
+console.log(`✅ Full buckets: No overflow when both at capacity\n`);
+
+console.log('▶ Test 24: Small burst using only Bc (all green)');
+const smallBurst = new SingleRateThreeColorTokenBucket({
+    cir: 120,
+    bc: 150,
+    be: 75
+});
+smallBurst.lastRefill = Date.now();
+
+const sb1 = smallBurst.classify(40);
+const sb2 = smallBurst.classify(30);
+const sb3 = smallBurst.classify(50);
+
+assert.strictEqual(sb1.color, 'green', 'First 40 should be green');
+assert.strictEqual(sb2.color, 'green', 'Next 30 should be green');
+assert.strictEqual(sb3.color, 'green', 'Next 50 should be green (total 120 < Bc)');
+assert.strictEqual(sb3.state.committedTokens, 30, 'Should have 30 Bc tokens left');
+assert.strictEqual(sb3.state.excessTokens, 75, 'Be should be untouched');
+console.log(`✅ Small burst: 120 tokens, all green, Bc remaining=${sb3.state.committedTokens}\n`);
+
+console.log('▶ Test 25: Medium burst using Bc + partial Be (green then yellow)');
+const medBurst = new SingleRateThreeColorTokenBucket({
+    cir: 90,
+    bc: 80,
+    be: 120
+});
+medBurst.lastRefill = Date.now();
+
+const mb1 = medBurst.classify(80);
+assert.strictEqual(mb1.color, 'green', 'First 80 exhausts Bc (green)');
+assert.strictEqual(mb1.state.committedTokens, 0, 'Bc should be empty');
+
+const mb2 = medBurst.classify(50);
+assert.strictEqual(mb2.color, 'yellow', 'Next 50 uses Be (yellow)');
+assert.strictEqual(mb2.state.excessTokens, 70, 'Be should have 70 left');
+
+const mb3 = medBurst.classify(40);
+assert.strictEqual(mb3.color, 'yellow', 'Next 40 still uses Be (yellow)');
+assert.strictEqual(mb3.state.excessTokens, 30, 'Be should have 30 left');
+assert.strictEqual(mb3.state.committedTokens, 0, 'Bc still empty');
+console.log(`✅ Medium burst: Bc exhausted (green), partial Be used (yellow), ${mb3.state.excessTokens} Be left\n`);
+
+console.log('▶ Test 26: Large burst exhausting both Bc and Be (all colors)');
+const largeBurst2 = new SingleRateThreeColorTokenBucket({
+    cir: 60,
+    bc: 50,
+    be: 30
+});
+largeBurst2.lastRefill = Date.now();
+
+const lb1 = largeBurst2.classify(50);
+assert.strictEqual(lb1.color, 'green', 'First 50 exhausts Bc');
+
+const lb2 = largeBurst2.classify(30);
+assert.strictEqual(lb2.color, 'yellow', 'Next 30 exhausts Be');
+
+const lb3 = largeBurst2.classify(1);
+assert.strictEqual(lb3.color, 'red', 'Any more traffic is red');
+assert.strictEqual(lb3.allowed, false, 'Red traffic denied');
+
+const lb4 = largeBurst2.classify(100);
+assert.strictEqual(lb4.color, 'red', 'Large violating burst is red');
+assert.strictEqual(lb4.allowed, false, 'Large violating burst denied');
+
+console.log(`✅ Large burst: Bc→green (50), Be→yellow (30), overflow→red (denied)\n`);
+
+console.log('▶ Test 27: Complex burst scenario with alternating colors');
+const complexBurst = new SingleRateThreeColorTokenBucket({
+    cir: 180,
+    bc: 100,
+    be: 60
+});
+complexBurst.lastRefill = Date.now();
+
+const colors = [];
+colors.push(complexBurst.classify(30).color);
+colors.push(complexBurst.classify(40).color);
+colors.push(complexBurst.classify(30).color);
+colors.push(complexBurst.classify(20).color);
+colors.push(complexBurst.classify(40).color);
+colors.push(complexBurst.classify(10).color);
+
+assert.strictEqual(colors[0], 'green', '30 tokens: green');
+assert.strictEqual(colors[1], 'green', '40 tokens: green');
+assert.strictEqual(colors[2], 'green', '30 tokens: green (total 100 = Bc)');
+assert.strictEqual(colors[3], 'yellow', '20 tokens: yellow (uses Be)');
+assert.strictEqual(colors[4], 'yellow', '40 tokens: yellow (uses Be)');
+assert.strictEqual(colors[5], 'red', '10 tokens: red (Be exhausted)');
+
+console.log(`✅ Complex burst: [${colors.join(', ')}] - proper three-color marking\n`);
+
+console.log('▶ Test 28: State persistence after crash - single extension');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const crashPath1 = path.join(os.tmpdir(), 'ghost-crash-test-1.json');
+
+if (fs.existsSync(crashPath1)) {
+    fs.unlinkSync(crashPath1);
+}
+
+const precrash = new TrafficPolicer({
+    persistencePath: crashPath1,
+    dropViolating: true
+});
+
+precrash.registerExtension('crash-ext', {
+    cir: 240,
+    bc: 300,
+    be: 150
+});
+
+precrash.police('crash-ext', 100);
+precrash.police('crash-ext', 80);
+
+const preState = precrash.getState('crash-ext');
+const preCommitted = preState.committedTokens;
+const preExcess = preState.excessTokens;
+
+const postcrash = new TrafficPolicer({
+    persistencePath: crashPath1,
+    dropViolating: true
+});
+
+const postState = postcrash.getState('crash-ext');
+assert.ok(postState, 'State should be restored after crash');
+assert.strictEqual(postState.cir, 240, 'CIR restored');
+assert.strictEqual(postState.committedCapacity, 300, 'Bc restored');
+assert.strictEqual(postState.excessCapacity, 150, 'Be restored');
+assert.ok(postState.committedTokens >= preCommitted, 'Committed tokens restored + refilled');
+
+fs.unlinkSync(crashPath1);
+console.log(`✅ Crash recovery: Pre(${preCommitted.toFixed(1)}/${preExcess}) → Post(${postState.committedTokens.toFixed(1)}/${postState.excessTokens})\n`);
+
+console.log('▶ Test 29: State persistence after crash - multiple extensions with traffic');
+const crashPath2 = path.join(os.tmpdir(), 'ghost-crash-test-2.json');
+
+if (fs.existsSync(crashPath2)) {
+    fs.unlinkSync(crashPath2);
+}
+
+const multiPrecrash = new TrafficPolicer({
+    persistencePath: crashPath2,
+    dropViolating: true
+});
+
+multiPrecrash.registerExtension('ext-alpha', { cir: 120, bc: 200, be: 100 });
+multiPrecrash.registerExtension('ext-beta', { cir: 60, bc: 100, be: 50 });
+multiPrecrash.registerExtension('ext-gamma', { cir: 180, bc: 150, be: 75 });
+
+multiPrecrash.police('ext-alpha', 50);
+multiPrecrash.police('ext-beta', 30);
+multiPrecrash.police('ext-gamma', 70);
+multiPrecrash.police('ext-alpha', 80);
+multiPrecrash.police('ext-beta', 40);
+
+const preStates = {
+    alpha: multiPrecrash.getState('ext-alpha'),
+    beta: multiPrecrash.getState('ext-beta'),
+    gamma: multiPrecrash.getState('ext-gamma')
+};
+
+const multiPostcrash = new TrafficPolicer({
+    persistencePath: crashPath2,
+    dropViolating: true
+});
+
+assert.strictEqual(multiPostcrash.buckets.size, 3, 'All 3 extensions restored');
+
+const postStates = {
+    alpha: multiPostcrash.getState('ext-alpha'),
+    beta: multiPostcrash.getState('ext-beta'),
+    gamma: multiPostcrash.getState('ext-gamma')
+};
+
+assert.ok(postStates.alpha, 'ext-alpha restored');
+assert.ok(postStates.beta, 'ext-beta restored');
+assert.ok(postStates.gamma, 'ext-gamma restored');
+
+assert.strictEqual(postStates.alpha.cir, 120, 'alpha CIR restored');
+assert.strictEqual(postStates.beta.cir, 60, 'beta CIR restored');
+assert.strictEqual(postStates.gamma.cir, 180, 'gamma CIR restored');
+
+fs.unlinkSync(crashPath2);
+console.log(`✅ Multi-extension crash recovery: 3 extensions with traffic state restored\n`);
+
+console.log('▶ Test 30: State restoration with in-progress burst (token validation)');
+const crashPath3 = path.join(os.tmpdir(), 'ghost-crash-test-3.json');
+
+if (fs.existsSync(crashPath3)) {
+    fs.unlinkSync(crashPath3);
+}
+
+const burstPrecrash = new TrafficPolicer({
+    persistencePath: crashPath3,
+    dropViolating: true
+});
+
+burstPrecrash.registerExtension('burst-ext', { cir: 300, bc: 200, be: 100 });
+
+burstPrecrash.police('burst-ext', 150);
+burstPrecrash.police('burst-ext', 40);
+
+const burstPreState = burstPrecrash.getState('burst-ext');
+
+const burstPostcrash = new TrafficPolicer({
+    persistencePath: crashPath3,
+    dropViolating: true
+});
+
+const result1 = burstPostcrash.police('burst-ext', 10);
+assert.ok(result1.allowed, 'Should allow traffic after restoration');
+
+const burstPostState = burstPostcrash.getState('burst-ext');
+assert.ok(burstPostState.committedTokens > 0 || burstPostState.excessTokens > 0,
+    'Should have tokens available after restoration');
+
+fs.unlinkSync(crashPath3);
+console.log(`✅ In-progress burst recovery: Tokens validated, traffic continues\n`);
+
+console.log('▶ Test 31: State restoration after multiple crashes');
+const crashPath4 = path.join(os.tmpdir(), 'ghost-crash-test-4.json');
+
+if (fs.existsSync(crashPath4)) {
+    fs.unlinkSync(crashPath4);
+}
+
+const iter1 = new TrafficPolicer({ persistencePath: crashPath4, dropViolating: true });
+iter1.registerExtension('persistent-ext', { cir: 180, bc: 150, be: 75 });
+iter1.police('persistent-ext', 50);
+
+const iter2 = new TrafficPolicer({ persistencePath: crashPath4, dropViolating: true });
+iter2.police('persistent-ext', 30);
+
+const iter3 = new TrafficPolicer({ persistencePath: crashPath4, dropViolating: true });
+iter3.police('persistent-ext', 40);
+
+const iter4 = new TrafficPolicer({ persistencePath: crashPath4, dropViolating: true });
+const finalState = iter4.getState('persistent-ext');
+
+assert.ok(finalState, 'State survives multiple crashes');
+assert.strictEqual(finalState.cir, 180, 'Configuration persists');
+
+fs.unlinkSync(crashPath4);
+console.log(`✅ Multiple crashes: State survives 4 iterations\n`);
+
+console.log('▶ Test 32: Verify refill continues correctly after restoration');
+const crashPath5 = path.join(os.tmpdir(), 'ghost-crash-test-5.json');
+
+if (fs.existsSync(crashPath5)) {
+    fs.unlinkSync(crashPath5);
+}
+
+const refillPrecrash = new TrafficPolicer({
+    persistencePath: crashPath5,
+    dropViolating: true
+});
+
+refillPrecrash.registerExtension('refill-ext', { cir: 120, bc: 100, be: 50 });
+refillPrecrash.police('refill-ext', 100);
+
+const preBucket = refillPrecrash.buckets.get('refill-ext');
+preBucket.lastRefill = Date.now() - 2000;
+refillPrecrash._saveState();
+
+const refillPostcrash = new TrafficPolicer({
+    persistencePath: crashPath5,
+    dropViolating: true
+});
+
+const postBucket = refillPostcrash.buckets.get('refill-ext');
+const postStateImmediate = postBucket.getState();
+
+postBucket.lastRefill = Date.now() - 3000;
+const postStateAfterWait = postBucket.getState();
+
+assert.ok(postStateAfterWait.committedTokens > postStateImmediate.committedTokens ||
+          postStateImmediate.committedTokens === 100,
+    'Refill should continue working after crash');
+
+fs.unlinkSync(crashPath5);
+console.log(`✅ Post-crash refill: Tokens refilling correctly after restoration\n`);
+
 console.log('🎉 All rate limiter tests passed!');
