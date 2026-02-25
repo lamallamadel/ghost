@@ -269,7 +269,8 @@ class MetricsCollector {
             latencies: new Map(),
             rateLimitViolations: new Map(),
             validationFailures: new Map(),
-            authFailures: new Map()
+            authFailures: new Map(),
+            intentSizes: new Map()
         };
     }
 
@@ -318,6 +319,26 @@ class MetricsCollector {
             this.metrics.authFailures.get(key) + 1);
     }
 
+    recordIntentSize(extensionId, requestSize, responseSize) {
+        if (!this.metrics.intentSizes.has(extensionId)) {
+            this.metrics.intentSizes.set(extensionId, {
+                requests: [],
+                responses: []
+            });
+        }
+        
+        const sizes = this.metrics.intentSizes.get(extensionId);
+        sizes.requests.push(requestSize);
+        sizes.responses.push(responseSize);
+        
+        if (sizes.requests.length > 1000) {
+            sizes.requests.shift();
+        }
+        if (sizes.responses.length > 1000) {
+            sizes.responses.shift();
+        }
+    }
+
     getLatencyPercentiles(extensionId, stage) {
         const key = `${extensionId}:${stage}`;
         const latencies = this.metrics.latencies.get(key) || [];
@@ -327,10 +348,14 @@ class MetricsCollector {
         }
 
         const sorted = [...latencies].sort((a, b) => a - b);
+        const p50Index = Math.ceil(sorted.length * 0.5) - 1;
+        const p95Index = Math.ceil(sorted.length * 0.95) - 1;
+        const p99Index = Math.ceil(sorted.length * 0.99) - 1;
+        
         return {
-            p50: sorted[Math.floor(sorted.length * 0.5)],
-            p95: sorted[Math.floor(sorted.length * 0.95)],
-            p99: sorted[Math.floor(sorted.length * 0.99)]
+            p50: sorted[Math.max(0, p50Index)],
+            p95: sorted[Math.max(0, p95Index)],
+            p99: sorted[Math.max(0, p99Index)]
         };
     }
 
@@ -340,7 +365,8 @@ class MetricsCollector {
             latencies: {},
             rateLimitViolations: {},
             validationFailures: {},
-            authFailures: {}
+            authFailures: {},
+            intentSizes: {}
         };
 
         for (const [key, count] of this.metrics.requestCount.entries()) {
@@ -389,6 +415,24 @@ class MetricsCollector {
             }
         }
 
+        for (const [extId, sizes] of this.metrics.intentSizes.entries()) {
+            if (!extensionId || extId === extensionId) {
+                const avgRequest = sizes.requests.length > 0
+                    ? sizes.requests.reduce((a, b) => a + b, 0) / sizes.requests.length
+                    : 0;
+                const avgResponse = sizes.responses.length > 0
+                    ? sizes.responses.reduce((a, b) => a + b, 0) / sizes.responses.length
+                    : 0;
+                
+                result.intentSizes[extId] = {
+                    avgRequestSize: Math.round(avgRequest),
+                    avgResponseSize: Math.round(avgResponse),
+                    totalRequests: sizes.requests.length,
+                    totalResponses: sizes.responses.length
+                };
+            }
+        }
+
         return result;
     }
 
@@ -415,12 +459,14 @@ class MetricsCollector {
                     this.metrics.authFailures.delete(key);
                 }
             }
+            this.metrics.intentSizes.delete(extensionId);
         } else {
             this.metrics.requestCount.clear();
             this.metrics.latencies.clear();
             this.metrics.rateLimitViolations.clear();
             this.metrics.validationFailures.clear();
             this.metrics.authFailures.clear();
+            this.metrics.intentSizes.clear();
         }
     }
 }
@@ -718,11 +764,14 @@ class InstrumentedPipeline {
 
         let intent;
         let extensionId;
+        let requestSize = 0;
 
         const interceptSpan = this.telemetry.startSpan('pipeline.intercept', rootSpan);
+        const interceptStartTime = Date.now();
         try {
             intent = this.pipeline.interceptor.intercept(rawMessage);
             extensionId = intent.extensionId;
+            requestSize = JSON.stringify(intent).length;
             
             interceptSpan.setAttributes({
                 extensionId,
@@ -735,12 +784,18 @@ class InstrumentedPipeline {
 
             interceptSpan.setStatus('OK');
             interceptSpan.end();
+            const interceptLatency = Date.now() - interceptStartTime;
+            this.telemetry.metrics.recordRequest(extensionId, 'intercept', interceptLatency);
             this.telemetry.recordSpan(interceptSpan);
         } catch (error) {
             interceptSpan.setStatus('ERROR', error.message);
             interceptSpan.setAttribute('error.type', error.name || 'Error');
             interceptSpan.setAttribute('error.code', error.code || 'UNKNOWN');
             interceptSpan.end();
+            const interceptLatency = Date.now() - interceptStartTime;
+            if (extensionId) {
+                this.telemetry.metrics.recordRequest(extensionId, 'intercept', interceptLatency);
+            }
             this.telemetry.recordSpan(interceptSpan);
             this.telemetry.logger.error('Intercept failed', { 
                 error: error.message,
@@ -768,6 +823,7 @@ class InstrumentedPipeline {
         });
 
         const authSpan = this.telemetry.startSpan('pipeline.auth', rootSpan);
+        const authStartTime = Date.now();
         authSpan.setAttributes({
             extensionId,
             requestId: intent.requestId,
@@ -785,6 +841,8 @@ class InstrumentedPipeline {
             authSpan.setAttribute('error.code', authResult.code);
             authSpan.setAttribute('denial.reason', authResult.reason);
             authSpan.end();
+            const authLatency = Date.now() - authStartTime;
+            this.telemetry.metrics.recordRequest(extensionId, 'auth', authLatency);
             this.telemetry.recordSpan(authSpan);
 
             this.telemetry.metrics.recordAuthFailure(extensionId, authResult.code);
@@ -861,9 +919,12 @@ class InstrumentedPipeline {
 
         authSpan.setStatus('OK');
         authSpan.end();
+        const authLatency = Date.now() - authStartTime;
+        this.telemetry.metrics.recordRequest(extensionId, 'auth', authLatency);
         this.telemetry.recordSpan(authSpan);
 
         const auditSpan = this.telemetry.startSpan('pipeline.audit', rootSpan);
+        const auditStartTime = Date.now();
         auditSpan.setAttributes({
             extensionId,
             requestId: intent.requestId,
@@ -899,6 +960,8 @@ class InstrumentedPipeline {
             }
 
             auditSpan.end();
+            const auditLatency = Date.now() - auditStartTime;
+            this.telemetry.metrics.recordRequest(extensionId, 'audit', auditLatency);
             this.telemetry.recordSpan(auditSpan);
 
             this.telemetry.metrics.recordValidationFailure(extensionId, auditResult.code);
@@ -947,9 +1010,12 @@ class InstrumentedPipeline {
 
         auditSpan.setStatus('OK');
         auditSpan.end();
+        const auditLatency = Date.now() - auditStartTime;
+        this.telemetry.metrics.recordRequest(extensionId, 'audit', auditLatency);
         this.telemetry.recordSpan(auditSpan);
 
         const executeSpan = this.telemetry.startSpan('pipeline.execute', rootSpan);
+        const executeStartTime = Date.now();
         executeSpan.setAttributes({
             extensionId,
             requestId: intent.requestId,
@@ -997,6 +1063,9 @@ class InstrumentedPipeline {
             }
 
             executeSpan.end();
+            const executeLatency = Date.now() - executeStartTime;
+            this.telemetry.metrics.recordRequest(extensionId, 'execute', executeLatency);
+            this.telemetry.metrics.recordIntentSize(extensionId, requestSize, resultSize);
             this.telemetry.recordSpan(executeSpan);
 
             auditLayerWithCapabilities.logExecution(intent, result);
@@ -1045,6 +1114,9 @@ class InstrumentedPipeline {
             }
 
             executeSpan.end();
+            const executeLatency = Date.now() - executeStartTime;
+            this.telemetry.metrics.recordRequest(extensionId, 'execute', executeLatency);
+            this.telemetry.metrics.recordIntentSize(extensionId, requestSize, 0);
             this.telemetry.recordSpan(executeSpan);
 
             auditLayerWithCapabilities.logExecution(intent, null, error);
