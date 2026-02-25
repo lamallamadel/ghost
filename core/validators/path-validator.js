@@ -1,6 +1,29 @@
 const fs = require('fs');
 const path = require('path');
 
+class GlobMatcher {
+    static match(str, pattern) {
+        const normalizedStr = str.replace(/\\/g, '/');
+        const normalizedPattern = pattern.replace(/\\/g, '/');
+        
+        let regexPattern = normalizedPattern
+            .replace(/\*\*/g, '<<<GLOBSTAR>>>')
+            .replace(/\*/g, '<<<STAR>>>')
+            .replace(/\?/g, '<<<QUESTION>>>')
+            .replace(/\./g, '\\.');
+        
+        regexPattern = regexPattern
+            .replace(/<<<GLOBSTAR>>>\//g, '(.*\/)?')
+            .replace(/\/<<<GLOBSTAR>>>/g, '(\/.*)?')
+            .replace(/<<<GLOBSTAR>>>/g, '.*')
+            .replace(/<<<STAR>>>/g, '[^/]*')
+            .replace(/<<<QUESTION>>>/g, '.');
+        
+        const regex = new RegExp(`^${regexPattern}$`);
+        return regex.test(normalizedStr);
+    }
+}
+
 class PathValidator {
     constructor(options = {}) {
         this.allowedPaths = options.allowedPaths || [];
@@ -52,6 +75,24 @@ class PathValidator {
             return false;
         }
 
+        const urlEncodedPatterns = [
+            '%2e%2e',
+            '%2E%2E',
+            '%252e',
+            '%252E',
+            '%c0%ae',
+            '%C0%AE',
+            '%c0%2e',
+            '%C0%2E'
+        ];
+
+        const lowerInput = inputPath.toLowerCase();
+        for (const encoded of urlEncodedPatterns) {
+            if (lowerInput.includes(encoded.toLowerCase())) {
+                return true;
+            }
+        }
+
         const normalized = path.normalize(inputPath);
         const parts = normalized.split(path.sep);
         
@@ -64,7 +105,34 @@ class PathValidator {
             return false;
         }
 
-        const relative = path.relative(this.rootDirectory, normalized);
+        let realPath;
+        try {
+            if (fs.existsSync(normalized)) {
+                realPath = fs.realpathSync(normalized);
+            } else {
+                let current = normalized;
+                const parts = [];
+                
+                while (!fs.existsSync(current)) {
+                    parts.unshift(path.basename(current));
+                    const parent = path.dirname(current);
+                    if (parent === current) {
+                        realPath = normalized;
+                        break;
+                    }
+                    current = parent;
+                }
+                
+                if (!realPath) {
+                    const realBase = fs.realpathSync(current);
+                    realPath = path.join(realBase, ...parts);
+                }
+            }
+        } catch (error) {
+            realPath = normalized;
+        }
+
+        const relative = path.relative(this.rootDirectory, realPath);
         return !relative.startsWith('..') && !path.isAbsolute(relative);
     }
 
@@ -73,13 +141,8 @@ class PathValidator {
             return false;
         }
 
-        const regexPattern = pattern
-            .replace(/\./g, '\\.')
-            .replace(/\*/g, '.*')
-            .replace(/\?/g, '.');
-        
-        const regex = new RegExp(`^${regexPattern}$`);
-        return regex.test(inputPath);
+        const normalizedPath = inputPath.replace(/\\/g, '/');
+        return GlobMatcher.match(normalizedPath, pattern);
     }
 
     matchesAnyPattern(inputPath, patterns) {
@@ -87,6 +150,20 @@ class PathValidator {
     }
 
     isPathAllowed(inputPath) {
+        if (!inputPath || typeof inputPath !== 'string') {
+            return {
+                allowed: false,
+                reason: 'Invalid path input'
+            };
+        }
+
+        if (inputPath.includes('\0')) {
+            return {
+                allowed: false,
+                reason: 'Null-byte injection detected'
+            };
+        }
+
         if (this.hasDirectoryTraversal(inputPath)) {
             return {
                 allowed: false,
@@ -224,6 +301,17 @@ class PathValidator {
             allowedPatterns: [],
             deniedPaths: []
         });
+    }
+
+    static validateFromManifest(inputPath, manifestGlobs, rootDirectory) {
+        const validator = new PathValidator({
+            rootDirectory: rootDirectory || process.cwd(),
+            allowedPaths: [],
+            allowedPatterns: manifestGlobs || [],
+            deniedPaths: []
+        });
+
+        return validator.isPathAllowed(inputPath);
     }
 }
 
