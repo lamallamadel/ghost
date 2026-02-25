@@ -3,15 +3,33 @@ const { TrafficPolicer } = require('../qos/token-bucket');
 
 class GlobMatcher {
     static match(str, pattern) {
-        const regexPattern = pattern
-            .replace(/\./g, '\\.')
-            .replace(/\*\*/g, '<<<GLOBSTAR>>>')
-            .replace(/\*/g, '[^/]*')
-            .replace(/<<<GLOBSTAR>>>/g, '.*')
-            .replace(/\?/g, '.');
+        // Normalize separators to forward slashes for consistent matching
+        const normalizedStr = str.replace(/\\/g, '/');
+        const normalizedPattern = pattern.replace(/\\/g, '/');
+        
+        // Convert glob pattern to regex
+        // ** matches any number of directories (including zero)
+        // * matches any characters except /
+        // ? matches exactly one character
+        let regexPattern = normalizedPattern
+            .replace(/\*\*/g, '<<<GLOBSTAR>>>')  // Mark globstars FIRST before escaping
+            .replace(/\*/g, '<<<STAR>>>')  // Mark single stars
+            .replace(/\?/g, '<<<QUESTION>>>')  // Mark questions
+            .replace(/\./g, '\\.');  // Escape dots
+        
+        // Now replace the placeholders with regex
+        // Handle globstar: ** can match zero or more path segments
+        regexPattern = regexPattern
+            .replace(/<<<GLOBSTAR>>>\//g, '(.*\/)?')  // **/ matches zero or more dirs
+            .replace(/\/<<<GLOBSTAR>>>/g, '(\/.*)?')  // /** matches slash + anything (or nothing)
+            .replace(/<<<GLOBSTAR>>>/g, '.*')        // ** remaining matches anything
+            .replace(/<<<STAR>>>/g, '[^/]*')  // * matches any chars except /
+            .replace(/<<<QUESTION>>>/g, '.');  // ? matches one char
         
         const regex = new RegExp(`^${regexPattern}$`);
-        return regex.test(str);
+        const result = regex.test(normalizedStr);
+        // console.log(`GlobMatcher.match("${str}", "${pattern}") -> normalized:"${normalizedStr}" pattern:"${regexPattern}" result:${result}`);
+        return result;
     }
 }
 
@@ -125,7 +143,8 @@ class PermissionChecker {
             };
         }
 
-        const normalizedPath = path.normalize(requestedPath).replace(/\\/g, '/');
+        // Normalize path separators without using path.normalize to avoid adding drive letters
+        const normalizedPath = requestedPath.replace(/\\/g, '/');
         
         for (const pattern of patterns) {
             if (GlobMatcher.match(normalizedPath, pattern)) {
@@ -168,11 +187,23 @@ class PermissionChecker {
             };
         }
 
+        // Construct origin exactly: protocol + '//' + host (includes port if non-default)
         const urlOrigin = `${parsedUrl.protocol}//${parsedUrl.host}`;
 
-        for (const allowedUrl of allowlist) {
-            if (urlOrigin === allowedUrl || urlOrigin.startsWith(allowedUrl)) {
-                return { allowed: true, matchedUrl: allowedUrl };
+        for (const allowedOrigin of allowlist) {
+            // Parse the allowed origin to ensure it's valid
+            let parsedAllowed;
+            try {
+                parsedAllowed = new URL(allowedOrigin);
+            } catch (e) {
+                continue; // Skip invalid allowlist entries
+            }
+
+            const allowedOriginStr = `${parsedAllowed.protocol}//${parsedAllowed.host}`;
+            
+            // Exact origin match required (protocol, domain, and port must match)
+            if (urlOrigin === allowedOriginStr) {
+                return { allowed: true, matchedUrl: allowedOrigin };
             }
         }
 

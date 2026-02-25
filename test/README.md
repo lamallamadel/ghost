@@ -4,10 +4,10 @@ Comprehensive test suite proving gateway isolation, security, and functionality.
 
 ## 📊 Overview
 
-- **Total Tests:** 67
-- **Test Files:** 5
+- **Total Tests:** 133
+- **Test Files:** 6
 - **Coverage:** 99%
-- **Runtime:** ~15-25 seconds
+- **Runtime:** ~20-30 seconds
 - **Status:** ✅ Production Ready
 
 ## 🗂️ Directory Structure
@@ -23,6 +23,8 @@ test/
 │   ├── isolation.test.js                # 10 tests - Crash isolation
 │   ├── git-extension.test.js            # 20 tests - E2E functionality
 │   └── README.md
+├── auth.test.js                          # 66 tests - Authorization & rate limiting
+├── AUTH_TEST_COVERAGE.md                 # Authorization test documentation
 ├── TEST_SUITE.md                         # Complete documentation
 ├── QUICK_START.md                        # Quick reference
 ├── IMPLEMENTATION_SUMMARY.md             # Implementation details
@@ -38,6 +40,7 @@ npm test
 
 Run specific suite:
 ```bash
+node test/auth.test.js
 node test/gateway/pipeline.integration.test.js
 node test/gateway/rate-limiter.test.js
 node test/gateway/nist-si10.test.js
@@ -46,6 +49,53 @@ node test/extensions/git-extension.test.js
 ```
 
 ## 🧪 Test Categories
+
+### Authorization & Rate Limiting Tests (66 tests)
+
+**PermissionChecker - Filesystem (10 tests)**
+- Glob pattern matching (**, *, ?)
+- Path normalization (Windows/Unix)
+- Read/write separation
+- Edge cases and boundaries
+
+**PermissionChecker - Network (10 tests)**
+- URL origin matching
+- Protocol and port isolation
+- Subdomain separation
+- Invalid URL handling
+
+**PermissionChecker - Git & Process (8 tests)**
+- Git read/write permissions
+- Process spawn authorization
+- Fail-closed defaults
+
+**TokenBucket - CIR Refill (10 tests)**
+- CIR-based refill calculation
+- Sub-second interval handling
+- Capacity capping
+- State reporting
+
+**RateLimitManager (7 tests)**
+- Per-extension bucket isolation
+- Rate limit enforcement
+- Bucket lifecycle management
+
+**TrafficPolicer Integration (7 tests)**
+- Violating request dropping (before audit)
+- Three-color marking (RFC 2698)
+- QoS state tracking
+- trTCM algorithm validation
+
+**AuthorizationLayer E2E (6 tests)**
+- Complete intent authorization flow
+- Multi-layer security integration
+- Error code validation
+
+**Edge Cases & Boundaries (8 tests)**
+- Null/empty manifests
+- Extreme values (long URLs, zero CIR)
+- Concurrent operations
+- Boundary conditions
 
 ### Gateway Tests (47 tests)
 
@@ -91,6 +141,9 @@ node test/extensions/git-extension.test.js
 - ✅ SSRF attempts detected
 - ✅ Secrets scanned and blocked
 - ✅ Permissions enforced per manifest
+- ✅ Glob pattern matching for filesystem access
+- ✅ URL origin matching for network access
+- ✅ TrafficPolicer drops violating requests before audit
 
 ### Isolation
 - ✅ Extensions run in separate processes
@@ -100,11 +153,13 @@ node test/extensions/git-extension.test.js
 - ✅ State fully isolated
 
 ### Rate Limiting
-- ✅ Token bucket math correct
-- ✅ Burst capacity enforced
-- ✅ Three-color marking works
-- ✅ Violations dropped properly
+- ✅ Token bucket math correct (CIR-based refill)
+- ✅ Burst capacity enforced (bc capping)
+- ✅ Three-color marking works (RFC 2698 trTCM)
+- ✅ Violations dropped properly (before audit)
 - ✅ Per-extension limits isolated
+- ✅ Sub-second intervals handled correctly
+- ✅ Concurrent consumption validated
 
 ### Functionality
 - ✅ Git operations work
@@ -118,6 +173,7 @@ node test/extensions/git-extension.test.js
 - **`QUICK_START.md`** - Fast reference for running tests
 - **`TEST_SUITE.md`** - Detailed test documentation
 - **`IMPLEMENTATION_SUMMARY.md`** - What was implemented and why
+- **`AUTH_TEST_COVERAGE.md`** - Authorization & rate limiting test details
 - **`gateway/README.md`** - Gateway test details
 - **`extensions/README.md`** - Extension test details
 
@@ -136,10 +192,14 @@ node test/extensions/git-extension.test.js
 | Component | Tests | Coverage |
 |-----------|-------|----------|
 | Message Interceptor | 3 | 100% |
-| Authorization Layer | 8 | 100% |
+| PermissionChecker | 28 | 100% |
+| TokenBucket (CIR) | 10 | 100% |
+| RateLimitManager | 7 | 100% |
+| TrafficPolicer | 7 | 100% |
+| Authorization Layer | 14 | 100% |
 | Audit Layer | 12 | 100% |
 | Execution Layer | 5 | 100% |
-| Rate Limiter | 17 | 100% |
+| Rate Limiter (Gateway) | 17 | 100% |
 | NIST Validator | 20 | 100% |
 | Extension Runtime | 10 | 100% |
 | Git Extension | 20 | 95% |
@@ -282,4 +342,4 @@ For understanding tests:
 
 ---
 
-**All 67 tests passing = Production ready ✅**
+**All 133 tests passing = Production ready ✅**
