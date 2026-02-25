@@ -1222,13 +1222,15 @@ class GatewayLauncher {
                     allowlist: [],
                     rateLimit: {
                         cir: 60,
-                        bc: 100
+                        bc: 100,
+                        be: 204800
                     }
                 },
                 git: {
                     read: true,
                     write: false
-                }
+                },
+                hooks: ['pre-commit', 'post-merge']
             },
             permissions: [
                 'filesystem:read',
@@ -1242,30 +1244,98 @@ class GatewayLauncher {
             JSON.stringify(manifest, null, 2)
         );
 
-        const indexTemplate = `const { ExtensionSDK } = require('@ghost/extension-sdk');
+        const className = name.replace(/[^a-zA-Z0-9]/g, '');
+        const indexTemplate = `const { ExtensionSDK, IntentBuilder, RPCClient } = require('@ghost/extension-sdk');
 
-class ${name.replace(/[^a-zA-Z0-9]/g, '')}Extension {
+/**
+ * ${name} Extension
+ * 
+ * This extension provides custom functionality for Ghost CLI.
+ * It demonstrates best practices for extension development including:
+ * - Proper error handling with structured logging
+ * - Batch operations for improved performance
+ * - Hook integration for Git lifecycle events
+ * 
+ * @class ${className}Extension
+ */
+class ${className}Extension {
+    /**
+     * Creates an instance of the extension.
+     * Initializes SDK, RPC client, and intent builder for pipeline operations.
+     * 
+     * @constructor
+     */
     constructor() {
         this.sdk = new ExtensionSDK('${extId}');
+        this.rpcClient = new RPCClient('${extId}');
+        this.intentBuilder = new IntentBuilder('${extId}');
     }
 
+    /**
+     * Initialize the extension.
+     * Called when the extension is loaded by Ghost runtime.
+     * 
+     * @async
+     * @returns {Promise<void>}
+     */
     async initialize() {
         console.log('${name} extension initialized');
     }
 
+    /**
+     * Example command implementation with error handling and batch operations.
+     * 
+     * @async
+     * @param {Object} params - Command parameters
+     * @param {string} params.subcommand - Subcommand name
+     * @param {Array<string>} params.args - Command arguments
+     * @param {Object} params.flags - Command flags
+     * @returns {Promise<Object>} Command result with success status and output
+     * 
+     * @example
+     * // Call via CLI:
+     * // ghost myCommand --verbose
+     * 
+     * @example
+     * // With subcommands and arguments:
+     * // ghost myCommand list files/ --filter="*.js"
+     */
     async myCommand(params) {
         const { subcommand, args, flags } = params;
 
         try {
-            const files = await this.sdk.requestFileRead({ path: '.' });
-            console.log('Files read:', files);
+            // Log structured information for debugging and audit
+            this._logInfo('Executing myCommand', { subcommand, args, flags });
+
+            // Example: Use batch operations for multiple file reads
+            const filePaths = args.length > 0 ? args : ['README.md', 'package.json', 'manifest.json'];
+            const intents = filePaths.map(file => 
+                this.intentBuilder.filesystem('read', { path: file })
+            );
+
+            // Send batch request for improved performance
+            const results = await this.rpcClient.sendBatch(intents);
+            
+            // Process results
+            const successCount = results.filter(r => r.success).length;
+            this._logInfo('Batch operation completed', { 
+                total: filePaths.length, 
+                successful: successCount 
+            });
 
             return {
                 success: true,
-                output: 'Command executed successfully'
+                output: \`Command executed successfully. Read \${successCount} of \${filePaths.length} files.\`
             };
         } catch (error) {
-            console.error('Error:', error.message);
+            // Structured error logging with context
+            this._logError('Command execution failed', {
+                command: 'myCommand',
+                subcommand,
+                error: error.message,
+                stack: error.stack
+            });
+
             return {
                 success: false,
                 error: error.message
@@ -1273,22 +1343,215 @@ class ${name.replace(/[^a-zA-Z0-9]/g, '')}Extension {
         }
     }
 
+    /**
+     * Pre-commit hook handler.
+     * Called before Git commits are created.
+     * 
+     * @async
+     * @param {Object} params - Hook parameters
+     * @returns {Promise<Object>} Hook result
+     * 
+     * @example
+     * // Automatically triggered by Ghost on pre-commit
+     */
+    async preCommit(params) {
+        try {
+            this._logInfo('Pre-commit hook triggered');
+            
+            // Example: Check for sensitive data before commit
+            const status = await this.sdk.requestGitStatus();
+            
+            return {
+                success: true,
+                output: 'Pre-commit checks passed'
+            };
+        } catch (error) {
+            this._logError('Pre-commit hook failed', { error: error.message });
+            return {
+                success: false,
+                error: error.message
+            };
+        }
+    }
+
+    /**
+     * Post-merge hook handler.
+     * Called after Git merge operations complete.
+     * 
+     * @async
+     * @param {Object} params - Hook parameters
+     * @returns {Promise<Object>} Hook result
+     * 
+     * @example
+     * // Automatically triggered by Ghost on post-merge
+     */
+    async postMerge(params) {
+        try {
+            this._logInfo('Post-merge hook triggered');
+            
+            // Example: Update dependencies after merge
+            return {
+                success: true,
+                output: 'Post-merge tasks completed'
+            };
+        } catch (error) {
+            this._logError('Post-merge hook failed', { error: error.message });
+            return {
+                success: false,
+                error: error.message
+            };
+        }
+    }
+
+    /**
+     * Log informational message with structured data.
+     * 
+     * @private
+     * @param {string} message - Log message
+     * @param {Object} [data] - Additional structured data
+     */
+    _logInfo(message, data = {}) {
+        const logEntry = {
+            level: 'INFO',
+            timestamp: new Date().toISOString(),
+            extension: '${extId}',
+            message,
+            ...data
+        };
+        console.log(JSON.stringify(logEntry));
+    }
+
+    /**
+     * Log error message with structured data and stack trace.
+     * 
+     * @private
+     * @param {string} message - Error message
+     * @param {Object} [data] - Additional structured data including error details
+     */
+    _logError(message, data = {}) {
+        const logEntry = {
+            level: 'ERROR',
+            timestamp: new Date().toISOString(),
+            extension: '${extId}',
+            message,
+            ...data
+        };
+        console.error(JSON.stringify(logEntry));
+    }
+
+    /**
+     * Shutdown the extension.
+     * Called when Ghost is shutting down or the extension is being unloaded.
+     * Use this for cleanup operations.
+     * 
+     * @async
+     * @returns {Promise<void>}
+     */
     async shutdown() {
-        console.log('${name} extension shutting down');
+        this._logInfo('${name} extension shutting down');
     }
 }
 
-module.exports = ${name.replace(/[^a-zA-Z0-9]/g, '')}Extension;
+module.exports = ${className}Extension;
 `;
 
         // VIOLATION: Direct fs.writeFileSync
         fs.writeFileSync(path.join(targetDir, 'index.js'), indexTemplate);
+
+        // Create TypeScript declaration file
+        const dtsTemplate = `import { ExtensionSDK, IntentBuilder, RPCClient } from '@ghost/extension-sdk';
+
+/**
+ * ${name} Extension
+ * 
+ * Provides custom functionality for Ghost CLI with type-safe interfaces.
+ */
+declare class ${className}Extension {
+    /**
+     * Extension SDK instance for high-level API operations
+     */
+    sdk: ExtensionSDK;
+
+    /**
+     * RPC client for low-level intent communication
+     */
+    rpcClient: RPCClient;
+
+    /**
+     * Intent builder for constructing pipeline requests
+     */
+    intentBuilder: IntentBuilder;
+
+    /**
+     * Creates an instance of the extension
+     */
+    constructor();
+
+    /**
+     * Initialize the extension
+     * @returns Promise that resolves when initialization is complete
+     */
+    initialize(): Promise<void>;
+
+    /**
+     * Example command implementation
+     * @param params - Command parameters
+     * @param params.subcommand - Subcommand name
+     * @param params.args - Command arguments
+     * @param params.flags - Command flags
+     * @returns Promise with command result
+     */
+    myCommand(params: {
+        subcommand?: string;
+        args: string[];
+        flags: Record<string, any>;
+    }): Promise<{
+        success: boolean;
+        output?: string;
+        error?: string;
+    }>;
+
+    /**
+     * Pre-commit hook handler
+     * @param params - Hook parameters
+     * @returns Promise with hook result
+     */
+    preCommit(params: Record<string, any>): Promise<{
+        success: boolean;
+        output?: string;
+        error?: string;
+    }>;
+
+    /**
+     * Post-merge hook handler
+     * @param params - Hook parameters
+     * @returns Promise with hook result
+     */
+    postMerge(params: Record<string, any>): Promise<{
+        success: boolean;
+        output?: string;
+        error?: string;
+    }>;
+
+    /**
+     * Shutdown the extension
+     * @returns Promise that resolves when shutdown is complete
+     */
+    shutdown(): Promise<void>;
+}
+
+export = ${className}Extension;
+`;
+
+        // VIOLATION: Direct fs.writeFileSync
+        fs.writeFileSync(path.join(targetDir, 'index.d.ts'), dtsTemplate);
 
         const packageJson = {
             name: extId,
             version: '1.0.0',
             description: `${name} extension for Ghost CLI`,
             main: 'index.js',
+            types: 'index.d.ts',
             scripts: {
                 test: 'echo "Error: no test specified" && exit 1'
             },
@@ -1320,7 +1583,14 @@ ghost extension install .
 ## Usage
 
 \`\`\`bash
+# Execute the main command
 ghost myCommand
+
+# With arguments
+ghost myCommand file1.txt file2.txt
+
+# With flags
+ghost myCommand --verbose
 \`\`\`
 
 ## Development
@@ -1333,12 +1603,86 @@ ghost myCommand
 ## Capabilities
 
 This extension requests the following capabilities:
-- **Filesystem Read**: Read files in the current directory
-- **Git Read**: Read git repository data
 
-## API
+### Filesystem
+- **Read**: \`**/*\` - Read files in the current directory and subdirectories
+- **Write**: None (read-only by default)
 
-See [Extension API Documentation](https://github.com/lamallamadel/ghost/blob/main/docs/extension-api.md) for details.
+### Network
+- **Allowlist**: None (no external network access by default)
+- **Rate Limit**: 
+  - CIR (Committed Information Rate): 60 tokens/minute
+  - BC (Burst Capacity): 100 tokens
+  - BE (Excess Burst Size): 200KB (204800 bytes)
+
+### Git
+- **Read**: Enabled - Can read repository status, logs, and diffs
+- **Write**: Disabled - Cannot modify repository
+
+### Hooks
+- **pre-commit**: Triggered before Git commits
+- **post-merge**: Triggered after Git merge operations
+
+## Architecture
+
+This extension demonstrates best practices:
+
+- **Batch Operations**: Uses \`sendBatch()\` for efficient multiple file reads
+- **Structured Logging**: JSON-formatted logs with timestamps and context
+- **Error Handling**: Comprehensive try-catch with detailed error reporting
+- **TypeScript Support**: Includes type declarations for IDE support
+- **Hook Integration**: Implements Git lifecycle hooks
+
+## API Reference
+
+### Commands
+
+#### \`myCommand(params)\`
+Example command with batch file reading capabilities.
+
+**Parameters:**
+- \`params.subcommand\` (string, optional): Subcommand name
+- \`params.args\` (Array<string>): List of file paths to read
+- \`params.flags\` (Object): Command-line flags
+
+**Returns:** Promise<{ success: boolean, output?: string, error?: string }>
+
+### Hooks
+
+#### \`preCommit(params)\`
+Executed before Git commits. Use for validation and pre-commit checks.
+
+#### \`postMerge(params)\`
+Executed after Git merge operations. Use for post-merge cleanup and updates.
+
+## Examples
+
+### Batch File Operations
+
+\`\`\`javascript
+const intents = files.map(file => 
+    this.intentBuilder.filesystem('read', { path: file })
+);
+const results = await this.rpcClient.sendBatch(intents);
+\`\`\`
+
+### Structured Error Logging
+
+\`\`\`javascript
+try {
+    // Operation
+} catch (error) {
+    this._logError('Operation failed', {
+        operation: 'example',
+        error: error.message,
+        stack: error.stack
+    });
+}
+\`\`\`
+
+## Documentation
+
+See [Extension API Documentation](https://github.com/lamallamadel/ghost/blob/main/docs/extension-api.md) for complete API details.
 `;
 
         // VIOLATION: Direct fs.writeFileSync
@@ -1351,11 +1695,19 @@ See [Extension API Documentation](https://github.com/lamallamadel/ghost/blob/mai
 `);
 
         console.log(`${Colors.GREEN}✓${Colors.ENDC} Extension scaffolded successfully!\n`);
+        console.log(`${Colors.BOLD}Features included:${Colors.ENDC}`);
+        console.log(`  ${Colors.GREEN}✓${Colors.ENDC} TypeScript declaration file (index.d.ts)`);
+        console.log(`  ${Colors.GREEN}✓${Colors.ENDC} Comprehensive JSDoc comments`);
+        console.log(`  ${Colors.GREEN}✓${Colors.ENDC} Batch operations example`);
+        console.log(`  ${Colors.GREEN}✓${Colors.ENDC} Structured error handling and logging`);
+        console.log(`  ${Colors.GREEN}✓${Colors.ENDC} Git hooks integration (pre-commit, post-merge)`);
+        console.log(`  ${Colors.GREEN}✓${Colors.ENDC} Network rate limit with BE parameter (200KB)`);
+        console.log('');
         console.log(`${Colors.BOLD}Next steps:${Colors.ENDC}`);
         console.log(`  1. cd ${extId}`);
         console.log(`  2. npm install`);
-        console.log(`  3. Edit manifest.json to add capabilities`);
-        console.log(`  4. Edit index.js to implement your extension`);
+        console.log(`  3. Edit manifest.json to customize capabilities`);
+        console.log(`  4. Edit index.js to implement your extension logic`);
         console.log(`  5. ghost extension validate`);
         console.log(`  6. ghost extension install .`);
         console.log('');
