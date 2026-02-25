@@ -1,20 +1,45 @@
-import { useCallback, useEffect, useState } from 'react'
-import { Activity, ArrowRight, CheckCircle, XCircle, AlertCircle } from 'lucide-react'
+import { useCallback, useEffect, useState, useMemo } from 'react'
+import { Activity, ArrowRight, CheckCircle, XCircle, AlertCircle, TrendingUp } from 'lucide-react'
 import { ghost } from '@/ipc/ghost'
-import type { GatewayState } from '@/ipc/types'
+import type { GatewayState, PipelineRequest } from '@/ipc/types'
 import { useToastsStore } from '@/stores/useToastsStore'
+
+type StageMetrics = {
+  latency: number
+  errorRate: number
+  throughput: number
+  activeRequests: number
+}
+
+type AnimatedRequest = {
+  id: string
+  stage: number
+  progress: number
+}
+
+const STAGES = ['intercept', 'auth', 'audit', 'execute'] as const
 
 export function GatewayTab() {
   const pushToast = useToastsStore((s) => s.push)
   const [state, setState] = useState<GatewayState | null>(null)
   const [loading, setLoading] = useState(false)
   const [autoRefresh, setAutoRefresh] = useState(true)
+  const [animatedRequests, setAnimatedRequests] = useState<AnimatedRequest[]>([])
+  const [requestHistory, setRequestHistory] = useState<PipelineRequest[]>([])
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
       const res = await ghost.gatewayState()
       setState(res)
+      
+      setRequestHistory(prev => {
+        const combined = [...prev, ...res.recentRequests]
+        const unique = Array.from(
+          new Map(combined.map(r => [r.requestId, r])).values()
+        )
+        return unique.slice(-100)
+      })
     } catch (e) {
       pushToast({ title: 'État indisponible', message: String(e), tone: 'danger' })
     } finally {
@@ -32,6 +57,106 @@ export function GatewayTab() {
     return () => clearInterval(interval)
   }, [autoRefresh, load])
 
+  useEffect(() => {
+    if (!state) return
+
+    setAnimatedRequests(prev => {
+      const newAnimatedRequests: AnimatedRequest[] = []
+      
+      state.recentRequests.forEach(req => {
+        if (req.status === 'pending' || req.status === 'approved') {
+          const stageIndex = STAGES.indexOf(req.stage)
+          if (stageIndex !== -1) {
+            const existingReq = prev.find(ar => ar.id === req.requestId)
+            if (existingReq) {
+              newAnimatedRequests.push(existingReq)
+            } else {
+              newAnimatedRequests.push({
+                id: req.requestId,
+                stage: stageIndex,
+                progress: 0
+              })
+            }
+          }
+        }
+      })
+
+      return newAnimatedRequests
+    })
+  }, [state])
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setAnimatedRequests(prev => 
+        prev.map(req => {
+          let newProgress = req.progress + 0.05
+          let newStage = req.stage
+          
+          if (newProgress >= 1) {
+            newProgress = 0
+            newStage = req.stage + 1
+          }
+          
+          if (newStage >= STAGES.length) {
+            return null
+          }
+          
+          return { ...req, progress: newProgress, stage: newStage }
+        }).filter((r): r is AnimatedRequest => r !== null)
+      )
+    }, 50)
+    
+    return () => clearInterval(interval)
+  }, [])
+
+  const stageMetrics = useMemo(() => {
+    const now = Date.now()
+    const recentWindow = 60000
+    const recentReqs = requestHistory.filter(r => now - r.timestamp < recentWindow)
+    
+    const metrics: Record<string, StageMetrics> = {}
+    
+    STAGES.forEach(stage => {
+      const stageReqs = recentReqs.filter(r => r.stage === stage)
+      const completed = stageReqs.filter(r => r.status === 'completed' || r.status === 'approved')
+      const failed = stageReqs.filter(r => r.status === 'failed' || r.status === 'rejected')
+      const active = state?.recentRequests.filter(r => r.stage === stage && r.status === 'pending') || []
+      
+      const latencies: number[] = []
+      completed.forEach(req => {
+        const nextStageReqs = recentReqs.filter(r => 
+          r.requestId === req.requestId && 
+          STAGES.indexOf(r.stage) > STAGES.indexOf(stage)
+        )
+        if (nextStageReqs.length > 0) {
+          const latency = nextStageReqs[0].timestamp - req.timestamp
+          if (latency > 0 && latency < 10000) {
+            latencies.push(latency)
+          }
+        }
+      })
+      
+      const avgLatency = latencies.length > 0 
+        ? latencies.reduce((a, b) => a + b, 0) / latencies.length 
+        : 0
+      
+      const errorRate = stageReqs.length > 0 
+        ? failed.length / stageReqs.length 
+        : 0
+      
+      const throughput = (completed.length / (recentWindow / 1000))
+      
+      metrics[stage] = {
+        latency: avgLatency,
+        errorRate,
+        throughput,
+        activeRequests: active.length
+      }
+    })
+    
+    return metrics
+  }, [requestHistory, state])
+
   function getStageColor(stage: string) {
     switch (stage) {
       case 'intercept': return 'bg-blue-500/20 text-blue-300 border-blue-500/30'
@@ -40,6 +165,18 @@ export function GatewayTab() {
       case 'execute': return 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30'
       default: return 'bg-white/10 text-white/60 border-white/20'
     }
+  }
+
+  function getHealthColor(errorRate: number): string {
+    if (errorRate === 0) return 'bg-emerald-500'
+    if (errorRate < 0.1) return 'bg-yellow-500'
+    return 'bg-rose-500'
+  }
+
+  function getHealthIndicatorClass(errorRate: number): string {
+    if (errorRate === 0) return 'text-emerald-400 border-emerald-500/50'
+    if (errorRate < 0.1) return 'text-yellow-400 border-yellow-500/50'
+    return 'text-rose-400 border-rose-500/50'
   }
 
   function getStatusIcon(status: string) {
@@ -96,24 +233,118 @@ export function GatewayTab() {
 
         <div className="mb-6">
           <div className="mb-3 text-sm font-semibold">Pipeline visuel</div>
-          <div className="flex items-center justify-between gap-4 rounded-xl border border-white/10 bg-black/20 p-6">
-            {['Extension', 'Intercept', 'Auth', 'Audit', 'Execute'].map((stage, idx) => (
-              <div key={stage} className="flex items-center gap-4">
-                <div className="flex flex-col items-center gap-2">
-                  <div className={`flex h-16 w-16 items-center justify-center rounded-xl border ${getStageColor(stage.toLowerCase())}`}>
-                    <Activity size={24} className={idx === 0 || recentRequests.some(r => r.stage === stage.toLowerCase()) ? 'animate-pulse' : ''} />
+          <div className="relative rounded-xl border border-white/10 bg-black/20 p-6">
+            <div className="flex items-start justify-between gap-6">
+              {STAGES.map((stage, idx) => {
+                const metrics = stageMetrics[stage] || { latency: 0, errorRate: 0, throughput: 0, activeRequests: 0 }
+                const healthColor = getHealthColor(metrics.errorRate)
+                const healthClass = getHealthIndicatorClass(metrics.errorRate)
+                
+                return (
+                  <div key={stage} className="flex flex-1 items-center gap-6">
+                    <div className="relative flex flex-1 flex-col items-center gap-2">
+                      <div className={`relative flex h-24 w-24 items-center justify-center rounded-xl border-2 transition-all duration-300 ${getStageColor(stage)}`}>
+                        <Activity 
+                          size={32} 
+                          className={metrics.activeRequests > 0 ? 'animate-pulse' : ''} 
+                        />
+                        {metrics.activeRequests > 0 && (
+                          <div className="absolute -top-2 -right-2 flex h-6 w-6 items-center justify-center rounded-full bg-blue-500 text-xs font-bold animate-pulse">
+                            {metrics.activeRequests}
+                          </div>
+                        )}
+                        <div className={`absolute -bottom-1 -right-1 h-3 w-3 rounded-full ${healthColor} animate-pulse`} />
+                      </div>
+                      
+                      <div className="text-xs font-semibold capitalize">{stage}</div>
+                      
+                      <div className={`flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] transition-colors ${healthClass}`}>
+                        <div className={`h-1.5 w-1.5 rounded-full ${healthColor}`} />
+                        <span>
+                          {metrics.errorRate === 0 ? 'Healthy' : 
+                           metrics.errorRate < 0.1 ? 'Warning' : 'Error'}
+                        </span>
+                      </div>
+                      
+                      <div className="mt-1 space-y-0.5 text-center">
+                        <div className="flex items-center gap-1 text-[11px] text-white/60">
+                          <span className="font-mono">{metrics.latency.toFixed(0)}ms</span>
+                          <span className="text-white/40">latency</span>
+                        </div>
+                        <div className="flex items-center gap-1 text-[11px] text-white/60">
+                          <TrendingUp size={10} className="text-emerald-400" />
+                          <span className="font-mono">{metrics.throughput.toFixed(2)}</span>
+                          <span className="text-white/40">req/s</span>
+                        </div>
+                        <div className="text-[11px] text-white/40">
+                          {(metrics.errorRate * 100).toFixed(1)}% err
+                        </div>
+                      </div>
+                    </div>
+                    
+                    {idx < STAGES.length - 1 && (
+                      <div className="relative flex-shrink-0">
+                        <ArrowRight size={24} className="text-white/30" />
+                      </div>
+                    )}
                   </div>
-                  <div className="text-xs font-medium">{stage}</div>
-                  <div className="text-[11px] text-white/40">
-                    {stage === 'Extension' ? `${state?.extensions.length || 0} ext` : 
-                     recentRequests.filter(r => r.stage === stage.toLowerCase()).length}
-                  </div>
-                </div>
-                {idx < 4 ? (
-                  <ArrowRight size={20} className="text-white/30" />
-                ) : null}
-              </div>
-            ))}
+                )
+              })}
+            </div>
+            
+            <svg 
+              className="absolute top-0 left-0 h-full w-full pointer-events-none" 
+              style={{ zIndex: 10 }}
+            >
+              {animatedRequests.map((req) => {
+                const stageWidth = 100 / STAGES.length
+                const startX = req.stage * stageWidth + stageWidth / 2
+                const endX = (req.stage + 1) * stageWidth + stageWidth / 2
+                const currentX = startX + (endX - startX) * req.progress
+                
+                return (
+                  <g key={req.id}>
+                    <circle
+                      cx={`${currentX}%`}
+                      cy="50%"
+                      r="6"
+                      fill="#3b82f6"
+                      opacity="0.8"
+                      className="animate-pulse"
+                    >
+                      <animate
+                        attributeName="r"
+                        values="6;8;6"
+                        dur="1s"
+                        repeatCount="indefinite"
+                      />
+                    </circle>
+                    <circle
+                      cx={`${currentX}%`}
+                      cy="50%"
+                      r="12"
+                      fill="none"
+                      stroke="#3b82f6"
+                      strokeWidth="2"
+                      opacity="0.3"
+                    >
+                      <animate
+                        attributeName="r"
+                        values="12;16;12"
+                        dur="1s"
+                        repeatCount="indefinite"
+                      />
+                      <animate
+                        attributeName="opacity"
+                        values="0.3;0.1;0.3"
+                        dur="1s"
+                        repeatCount="indefinite"
+                      />
+                    </circle>
+                  </g>
+                )
+              })}
+            </svg>
           </div>
         </div>
 
