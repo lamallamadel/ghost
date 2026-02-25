@@ -31,14 +31,37 @@ try {
     }
 
     const testDir = path.join(__dirname, 'test');
-    const testFiles = fs.existsSync(testDir)
-        ? fs.readdirSync(testDir).filter(f => f.endsWith('.test.js')).sort()
-        : [];
+    
+    // Collect all test files including subdirectories
+    const testFiles = [];
+    
+    function collectTests(dir) {
+        if (!fs.existsSync(dir)) return;
+        
+        const entries = fs.readdirSync(dir, { withFileTypes: true });
+        for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name);
+            const relativePath = path.relative(testDir, fullPath);
+            
+            if (entry.isDirectory()) {
+                collectTests(fullPath);
+            } else if (entry.name.endsWith('.test.js')) {
+                testFiles.push({ name: relativePath, path: fullPath });
+            }
+        }
+    }
+    
+    collectTests(testDir);
+    testFiles.sort((a, b) => a.name.localeCompare(b.name));
 
-    for (const file of testFiles) {
-        const full = path.join(testDir, file);
-        console.log(`\n▶ Running ${file}`);
-        execSync(`node "${full}"`, { stdio: 'inherit' });
+    for (const { name, path: testPath } of testFiles) {
+        console.log(`\n▶ Running ${name}`);
+        try {
+            execSync(`node "${testPath}"`, { stdio: 'inherit' });
+        } catch (e) {
+            console.error(`\n❌ Test failed: ${name}`);
+            throw e;
+        }
     }
 
     console.log('\n🎉 All tests passed successfully!');
