@@ -1,6 +1,6 @@
 const { MessageInterceptor, Intent, IntentSchema } = require('./intercept');
 const { AuthorizationLayer, PermissionChecker, RateLimitManager, TokenBucket, TrafficPolicer } = require('./auth');
-const { AuditLayer, AuditLogger, NISTValidator, EntropyScanner } = require('./audit');
+const { AuditLayer, AuditLogger } = require('./audit');
 const { ExecutionLayer, ExecutionError, CircuitBreaker, TimeoutManager } = require('./execute');
 const { SingleRateThreeColorTokenBucket } = require('../qos/token-bucket');
 const { instrumentPipeline, Telemetry } = require('../telemetry');
@@ -11,14 +11,17 @@ class IOPipeline {
         this.authLayer = new AuthorizationLayer(options);
         this.auditLayer = new AuditLayer(options.auditLogPath);
         this.executionLayer = new ExecutionLayer();
+        this.extensionManifests = new Map();
     }
 
     registerExtension(extensionId, manifest) {
         this.authLayer.registerExtension(extensionId, manifest);
+        this.extensionManifests.set(extensionId, manifest);
     }
 
     unregisterExtension(extensionId) {
         this.authLayer.unregisterExtension(extensionId);
+        this.extensionManifests.delete(extensionId);
     }
 
     async process(rawMessage) {
@@ -41,7 +44,7 @@ class IOPipeline {
             this.auditLayer.logSecurityEvent(
                 intent.extensionId,
                 'AUTHORIZATION_DENIED',
-                { reason: authResult.reason, code: authResult.code }
+                { reason: authResult.reason, code: authResult.code, severity: 'high', rule: 'AUTHORIZATION' }
             );
             
             return {
@@ -53,7 +56,11 @@ class IOPipeline {
             };
         }
 
-        const auditResult = this.auditLayer.audit(intent, authResult);
+        const manifest = this.extensionManifests.get(intent.extensionId);
+        const manifestCapabilities = manifest ? manifest.capabilities : null;
+        
+        const auditLayerWithCapabilities = new AuditLayer(this.auditLayer.logger.logPath, manifestCapabilities);
+        const auditResult = auditLayerWithCapabilities.audit(intent, authResult);
         
         if (!auditResult.passed) {
             return {
@@ -68,7 +75,7 @@ class IOPipeline {
 
         try {
             const result = await this.executionLayer.execute(intent);
-            this.auditLayer.logExecution(intent, result);
+            auditLayerWithCapabilities.logExecution(intent, result);
             
             return {
                 success: true,
@@ -77,7 +84,7 @@ class IOPipeline {
                 warnings: auditResult.warnings
             };
         } catch (error) {
-            this.auditLayer.logExecution(intent, null, error);
+            auditLayerWithCapabilities.logExecution(intent, null, error);
             
             return {
                 success: false,
@@ -153,8 +160,6 @@ module.exports = {
     SingleRateThreeColorTokenBucket,
     AuditLayer,
     AuditLogger,
-    NISTValidator,
-    EntropyScanner,
     ExecutionLayer,
     ExecutionError,
     CircuitBreaker,

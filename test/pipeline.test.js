@@ -7,9 +7,9 @@ const {
     IntentSchema,
     AuthorizationLayer,
     AuditLayer,
-    ExecutionLayer,
-    EntropyScanner
+    ExecutionLayer
 } = require('../core/pipeline');
+const { EntropyValidator } = require('../core/validators');
 
 console.log('🧪 Testing 4-Layer I/O Control Pipeline...\n');
 
@@ -21,7 +21,7 @@ assert.ok(IntentSchema, 'IntentSchema should be defined');
 assert.ok(AuthorizationLayer, 'AuthorizationLayer should be defined');
 assert.ok(AuditLayer, 'AuditLayer should be defined');
 assert.ok(ExecutionLayer, 'ExecutionLayer should be defined');
-assert.ok(EntropyScanner, 'EntropyScanner should be defined');
+assert.ok(EntropyValidator, 'EntropyValidator should be defined');
 console.log('✅ All modules imported successfully\n');
 
 console.log('▶ Test 2: JSON-RPC 2.0 compliance validation');
@@ -430,10 +430,11 @@ function continueTests() {
     console.log('✅ Authorization layer works correctly\n');
 
     console.log('▶ Test 8: Entropy scanner');
-    const highEntropyString = 'AKIAIOSFODNN7EXAMPLE';
-    const scan = EntropyScanner.scanForSecrets(highEntropyString);
+    const highEntropyString = 'AKIA1234567890ABCDEF';
+    const entropyValidator = new EntropyValidator();
+    const scan = entropyValidator.scanContent(highEntropyString);
     assert.strictEqual(scan.hasSecrets, true, 'Should detect AWS key pattern');
-    assert.ok(scan.findings.length > 0, 'Should have findings');
+    assert.ok(scan.secrets.length > 0, 'Should have secrets');
     console.log('✅ Entropy scanner detects secrets\n');
 
     console.log('▶ Test 9: Pipeline integration');
