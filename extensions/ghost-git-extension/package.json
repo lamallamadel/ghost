@@ -1,11 +1,12 @@
 {
-  "name": "ghost-git-extension",
+  "name": "@ghost/git-extension",
   "version": "1.0.0",
   "description": "Git operations extension for Ghost CLI with AI-powered commit generation, security scanning, version management, and merge resolution",
   "main": "index.js",
   "scripts": {
     "test": "node test.js",
     "validate": "node validate-manifest.js",
+    "build": "echo 'No build step required for CommonJS module'",
     "example": "node example-integration.js"
   },
   "keywords": [
@@ -14,12 +15,35 @@
     "extension",
     "ai",
     "security",
-    "versioning"
+    "versioning",
+    "commit-generation",
+    "merge-resolution"
   ],
   "author": "Ghost CLI Team",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/lamallamadel/ghost.git",
+    "directory": "extensions/ghost-git-extension"
+  },
+  "bugs": {
+    "url": "https://github.com/lamallamadel/ghost/issues"
+  },
+  "homepage": "https://github.com/lamallamadel/ghost/tree/main/extensions/ghost-git-extension#readme",
   "engines": {
     "node": ">=14.0.0"
   },
-  "dependencies": {}
+  "peerDependencies": {},
+  "dependencies": {},
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
+  },
+  "files": [
+    "index.js",
+    "extension.js",
+    "manifest.json",
+    "validate-manifest.js",
+    "README.md"
+  ]
 }
