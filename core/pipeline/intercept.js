@@ -4,7 +4,7 @@ class Intent {
     constructor(data) {
         this._type = data.type;
         this._operation = data.operation;
-        this._params = Object.freeze({ ...data.params });
+        this._params = this._deepFreeze({ ...data.params });
         this._extensionId = data.extensionId;
         this._timestamp = Date.now();
         this._requestId = data.requestId || this._generateRequestId();
@@ -17,6 +17,22 @@ class Intent {
     get extensionId() { return this._extensionId; }
     get timestamp() { return this._timestamp; }
     get requestId() { return this._requestId; }
+
+    _deepFreeze(obj) {
+        if (obj === null || typeof obj !== 'object') {
+            return obj;
+        }
+
+        Object.freeze(obj);
+
+        Object.getOwnPropertyNames(obj).forEach(prop => {
+            if (obj[prop] !== null && typeof obj[prop] === 'object' && !Object.isFrozen(obj[prop])) {
+                this._deepFreeze(obj[prop]);
+            }
+        });
+
+        return obj;
+    }
 
     _generateRequestId() {
         return `${this._extensionId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -47,28 +63,33 @@ class IntentSchema {
     static validate(intent) {
         const errors = [];
 
+        if (!intent || typeof intent !== 'object' || Array.isArray(intent)) {
+            errors.push('Intent must be a non-null object');
+            return { valid: false, errors };
+        }
+
         if (!intent.type || typeof intent.type !== 'string') {
-            errors.push('Missing or invalid "type" field');
+            errors.push('Missing or invalid "type" field (must be a non-empty string)');
         } else if (!this.VALID_TYPES.includes(intent.type)) {
-            errors.push(`Invalid type: ${intent.type}. Must be one of: ${this.VALID_TYPES.join(', ')}`);
+            errors.push(`Invalid type: "${intent.type}". Must be one of: ${this.VALID_TYPES.join(', ')}`);
         }
 
         if (!intent.operation || typeof intent.operation !== 'string') {
-            errors.push('Missing or invalid "operation" field');
+            errors.push('Missing or invalid "operation" field (must be a non-empty string)');
         } else if (intent.type && this.VALID_OPERATIONS[intent.type]) {
             if (!this.VALID_OPERATIONS[intent.type].includes(intent.operation)) {
-                errors.push(`Invalid operation "${intent.operation}" for type "${intent.type}"`);
+                errors.push(`Invalid operation "${intent.operation}" for type "${intent.type}". Valid operations: ${this.VALID_OPERATIONS[intent.type].join(', ')}`);
             }
         }
 
         if (!intent.params || typeof intent.params !== 'object' || Array.isArray(intent.params)) {
-            errors.push('Missing or invalid "params" field (must be object)');
+            errors.push('Missing or invalid "params" field (must be a non-null object)');
         } else {
             this._validateParams(intent, errors);
         }
 
         if (!intent.extensionId || typeof intent.extensionId !== 'string') {
-            errors.push('Missing or invalid "extensionId" field');
+            errors.push('Missing or invalid "extensionId" field (must be a non-empty string)');
         }
 
         return { valid: errors.length === 0, errors };
@@ -78,43 +99,93 @@ class IntentSchema {
         const { type, operation, params } = intent;
 
         if (type === 'filesystem') {
-            if (!params.path || typeof params.path !== 'string') {
-                errors.push('filesystem operations require valid "params.path"');
-            }
-            if (operation === 'write' && params.content === undefined) {
-                errors.push('write operation requires "params.content"');
-            }
-            if (operation === 'mkdir' && params.recursive !== undefined && typeof params.recursive !== 'boolean') {
-                errors.push('mkdir "params.recursive" must be boolean');
+            this._validateFilesystemParams(operation, params, errors);
+        } else if (type === 'network') {
+            this._validateNetworkParams(params, errors);
+        } else if (type === 'git') {
+            this._validateGitParams(params, errors);
+        } else if (type === 'process') {
+            this._validateProcessParams(params, errors);
+        }
+    }
+
+    static _validateFilesystemParams(operation, params, errors) {
+        if (!params.path || typeof params.path !== 'string') {
+            errors.push('filesystem operations require valid "params.path" (non-empty string)');
+        }
+
+        if (operation === 'write') {
+            if (params.content === undefined) {
+                errors.push('filesystem write operation requires "params.content" field');
             }
         }
 
-        if (type === 'network') {
-            if (!params.url || typeof params.url !== 'string') {
-                errors.push('network operations require valid "params.url"');
+        if (operation === 'mkdir') {
+            if (params.recursive !== undefined && typeof params.recursive !== 'boolean') {
+                errors.push('filesystem mkdir "params.recursive" must be a boolean');
             }
+        }
+
+        if (params.encoding !== undefined && typeof params.encoding !== 'string') {
+            errors.push('filesystem "params.encoding" must be a string');
+        }
+    }
+
+    static _validateNetworkParams(params, errors) {
+        if (!params.url || typeof params.url !== 'string') {
+            errors.push('network operations require valid "params.url" (non-empty string)');
+        } else {
             try {
                 new URL(params.url);
             } catch (e) {
-                errors.push(`Invalid URL format: ${params.url}`);
-            }
-            if (params.method && !['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD'].includes(params.method)) {
-                errors.push(`Invalid HTTP method: ${params.method}`);
+                errors.push(`Invalid URL format in "params.url": ${params.url}`);
             }
         }
 
-        if (type === 'git') {
-            if (params.args && !Array.isArray(params.args)) {
-                errors.push('git "params.args" must be an array');
+        if (params.method !== undefined) {
+            const validMethods = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'];
+            if (!validMethods.includes(params.method)) {
+                errors.push(`Invalid HTTP method "${params.method}". Must be one of: ${validMethods.join(', ')}`);
             }
         }
 
-        if (type === 'process') {
-            if (!params.command || typeof params.command !== 'string') {
-                errors.push('process operations require valid "params.command"');
+        if (params.headers !== undefined && (typeof params.headers !== 'object' || Array.isArray(params.headers))) {
+            errors.push('network "params.headers" must be an object');
+        }
+
+        if (params.body !== undefined && typeof params.body !== 'string') {
+            errors.push('network "params.body" must be a string');
+        }
+    }
+
+    static _validateGitParams(params, errors) {
+        if (params.args !== undefined && !Array.isArray(params.args)) {
+            errors.push('git "params.args" must be an array');
+        }
+
+        if (params.args && Array.isArray(params.args)) {
+            for (let i = 0; i < params.args.length; i++) {
+                if (typeof params.args[i] !== 'string') {
+                    errors.push(`git "params.args[${i}]" must be a string`);
+                }
             }
-            if (params.args && !Array.isArray(params.args)) {
-                errors.push('process "params.args" must be an array');
+        }
+    }
+
+    static _validateProcessParams(params, errors) {
+        if (!params.command || typeof params.command !== 'string') {
+            errors.push('process operations require valid "params.command" (non-empty string)');
+        }
+
+        if (params.args !== undefined && !Array.isArray(params.args)) {
+            errors.push('process "params.args" must be an array');
+        }
+
+        if (params.args && Array.isArray(params.args)) {
+            for (let i = 0; i < params.args.length; i++) {
+                if (typeof params.args[i] !== 'string') {
+                    errors.push(`process "params.args[${i}]" must be a string`);
+                }
             }
         }
     }
@@ -129,9 +200,11 @@ class MessageInterceptor {
         try {
             const message = typeof rawMessage === 'string' ? JSON.parse(rawMessage) : rawMessage;
             
-            if (!message || typeof message !== 'object') {
+            if (!message || typeof message !== 'object' || Array.isArray(message)) {
                 throw new Error('Message must be a JSON object');
             }
+
+            this._validateJsonRpc2(message);
 
             return message;
         } catch (error) {
@@ -139,19 +212,45 @@ class MessageInterceptor {
         }
     }
 
+    _validateJsonRpc2(message) {
+        if (message.jsonrpc !== '2.0') {
+            throw new Error('JSON-RPC field "jsonrpc" must be exactly "2.0"');
+        }
+
+        if (message.id === undefined || message.id === null) {
+            throw new Error('JSON-RPC field "id" is required (must be string, number, or null for notifications)');
+        }
+
+        if (typeof message.id !== 'string' && typeof message.id !== 'number' && message.id !== null) {
+            throw new Error('JSON-RPC field "id" must be a string, number, or null');
+        }
+
+        if (!message.method || typeof message.method !== 'string') {
+            throw new Error('JSON-RPC field "method" is required and must be a non-empty string');
+        }
+
+        if (message.params !== undefined) {
+            if (typeof message.params !== 'object' || message.params === null) {
+                throw new Error('JSON-RPC field "params" must be an object or array when present');
+            }
+        }
+    }
+
     normalize(message) {
+        const messageParams = message.params || {};
+        
         const intentData = {
-            type: message.type || message.capability,
-            operation: message.operation || message.method,
-            params: message.params || message.parameters || {},
-            extensionId: message.extensionId || message.extension_id || message.ext_id,
-            requestId: message.requestId || message.id
+            type: message.type || messageParams.type || message.capability,
+            operation: message.operation || messageParams.operation || message.method,
+            params: messageParams.params || message.parameters || {},
+            extensionId: message.extensionId || messageParams.extensionId || message.extension_id || message.ext_id,
+            requestId: message.requestId || messageParams.requestId || message.id
         };
 
         const validation = IntentSchema.validate(intentData);
         
         if (!validation.valid) {
-            throw new Error(`Schema validation failed:\n  - ${validation.errors.join('\n  - ')}`);
+            throw new Error(`Intent schema validation failed:\n  - ${validation.errors.join('\n  - ')}`);
         }
 
         return new Intent(intentData);
@@ -187,6 +286,22 @@ class MessageInterceptor {
         stream.on('error', (error) => {
             if (onError) {
                 onError(new Error(`Stream error: ${error.message}`));
+            }
+        });
+
+        stream.on('end', () => {
+            if (this.buffer.trim()) {
+                const line = this.buffer.trim();
+                try {
+                    const message = this.deserialize(line);
+                    const intent = this.normalize(message);
+                    onIntent(intent);
+                } catch (error) {
+                    if (onError) {
+                        onError(error);
+                    }
+                }
+                this.buffer = '';
             }
         });
 
