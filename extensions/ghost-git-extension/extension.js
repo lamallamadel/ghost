@@ -6,9 +6,7 @@
  * Uses JSON-RPC to communicate with Ghost core for all I/O operations
  */
 
-const fs = require('fs');
 const path = require('path');
-const os = require('os');
 
 class ExtensionRPCClient {
     constructor(coreHandler) {
@@ -182,10 +180,17 @@ class GitExtension {
     }
 
     async getStagedDiff() {
+        await this.rpc.log('debug', `Reading staged diff`);
+        
         const filesOutput = await this.rpc.gitExec(['diff', '--cached', '--name-only']);
-        if (!filesOutput) return { text: "", map: {}, files: [] };
+        if (!filesOutput) {
+            await this.rpc.log('debug', `No staged files found`);
+            return { text: "", map: {}, files: [] };
+        }
 
         const files = filesOutput.split('\n').filter(f => f.trim());
+        await this.rpc.log('debug', `Found ${files.length} staged files`);
+        
         let fullDiff = "";
         const fileMap = {};
         const validFiles = [];
@@ -194,6 +199,7 @@ class GitExtension {
             f = f.trim().replace(/^"|"$/g, '');
             if (!f) continue;
 
+            await this.rpc.log('debug', `Reading diff for file: ${f}`);
             const content = await this.rpc.gitExec(['diff', '--cached', `"${f}"`]);
             if (content) {
                 fullDiff += `\n--- ${f} ---\n${content}\n`;
@@ -201,6 +207,11 @@ class GitExtension {
                 validFiles.push(f);
             }
         }
+
+        await this.rpc.log('debug', `Staged diff read complete`, { 
+            totalFiles: validFiles.length,
+            totalDiffLength: fullDiff.length
+        });
 
         return { text: fullDiff, map: fileMap, files: validFiles };
     }
@@ -282,7 +293,13 @@ class GitExtension {
     }
 
     async callAI(provider, apiKey, model, systemPrompt, userPrompt, temperature = 0.3, jsonMode = false) {
-        await this.rpc.log('INFO', `AI call via ${provider}`, { model });
+        await this.rpc.log('info', `Initiating AI call`, { 
+            provider, 
+            model, 
+            temperature, 
+            jsonMode,
+            promptLength: userPrompt.length 
+        });
 
         const config = this.AI_PROVIDERS[provider] || this.AI_PROVIDERS.groq;
         
@@ -316,14 +333,32 @@ class GitExtension {
             }
         };
 
+        await this.rpc.log('debug', `Sending request to ${provider} API`, { 
+            hostname: config.hostname,
+            path: config.path
+        });
+
         const response = await this.rpc.httpsRequest(options, payload);
         const data = JSON.parse(response);
+        
+        await this.rpc.log('debug', `Received response from ${provider} API`, { 
+            responseLength: response.length 
+        });
+        
         return data.choices[0].message.content;
     }
 
     async callAnthropic(config, apiKey, model, systemPrompt, userPrompt, temperature) {
+        const actualModel = model.includes('claude') ? model : "claude-3-5-sonnet-20240620";
+        
+        await this.rpc.log('debug', `Calling Anthropic API`, { 
+            model: actualModel,
+            maxTokens: 1024,
+            temperature
+        });
+        
         const payload = {
-            model: model.includes('claude') ? model : "claude-3-5-sonnet-20240620",
+            model: actualModel,
             max_tokens: 1024,
             system: systemPrompt,
             messages: [{ role: "user", content: userPrompt }],
@@ -344,12 +379,24 @@ class GitExtension {
 
         const response = await this.rpc.httpsRequest(options, payload);
         const data = JSON.parse(response);
+        
+        await this.rpc.log('debug', `Anthropic API response received`, { 
+            responseLength: response.length,
+            contentLength: data.content?.[0]?.text?.length || 0
+        });
+        
         return data.content[0].text;
     }
 
     async callGemini(config, apiKey, model, systemPrompt, userPrompt, temperature) {
         const modelName = model.includes('gemini') ? model : "gemini-1.5-flash";
         const path = `${config.path}${modelName}:generateContent?key=${apiKey}`;
+        
+        await this.rpc.log('debug', `Calling Gemini API`, { 
+            model: modelName,
+            maxOutputTokens: 1024,
+            temperature
+        });
         
         const payload = {
             contents: [{
@@ -373,14 +420,41 @@ class GitExtension {
 
         const response = await this.rpc.httpsRequest(options, payload);
         const data = JSON.parse(response);
+        
+        await this.rpc.log('debug', `Gemini API response received`, { 
+            responseLength: response.length,
+            contentLength: data.candidates?.[0]?.content?.parts?.[0]?.text?.length || 0
+        });
+        
         return data.candidates[0].content.parts[0].text;
     }
 
     async generateCommit(diffText, customPrompt, provider, apiKey, model) {
+        await this.rpc.log('info', `Starting commit message generation`, { 
+            provider, 
+            model,
+            diffLength: diffText.length,
+            hasCustomPrompt: !!customPrompt
+        });
+        
         const sysPrompt = customPrompt || "Tu es un assistant Git expert. Génère UNIQUEMENT un message de commit suivant la convention 'Conventional Commits' (ex: feat: add login). Sois concis, descriptif et professionnel. N'utilise pas de markdown (pas de backticks), pas de guillemets autour du message.";
         
-        let commitMsg = await this.callAI(provider, apiKey, model, sysPrompt, `Diff :\n${diffText.substring(0, 12000)}`);
+        const truncatedDiff = diffText.substring(0, 12000);
+        
+        await this.rpc.log('debug', `Preparing diff for AI analysis`, { 
+            originalLength: diffText.length,
+            truncatedLength: truncatedDiff.length,
+            truncated: diffText.length > 12000
+        });
+        
+        let commitMsg = await this.callAI(provider, apiKey, model, sysPrompt, `Diff :\n${truncatedDiff}`);
         commitMsg = commitMsg.trim().replace(/^['"`]|['"`]$/g, '');
+        
+        await this.rpc.log('info', `Commit message generated successfully`, { 
+            messageLength: commitMsg.length,
+            messagePreview: commitMsg.substring(0, 60)
+        });
+        
         return commitMsg;
     }
 
@@ -413,7 +487,7 @@ class GitExtension {
             const audit = JSON.parse(res);
             
             if (audit.is_breach) {
-                await this.rpc.log('SECURITY_ALERT', `Secret détecté : ${audit.reason}`, { details: audit });
+                await this.rpc.log('warn', `Secret détecté : ${audit.reason}`, { details: audit });
                 return { blocked: true, reason: audit.reason };
             }
             return { blocked: false, reason: 'False positives confirmed' };
@@ -423,7 +497,7 @@ class GitExtension {
     }
 
     async performFullAudit(flags = {}) {
-        await this.rpc.log('INFO', 'Starting full security audit');
+        await this.rpc.log('info', 'Starting full security audit');
         
         const ignoredPatterns = await this.loadGhostIgnore();
         const isFileIgnored = (f) => ignoredPatterns.some(p => f.includes(p));
