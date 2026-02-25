@@ -139,6 +139,15 @@ class ExtensionLoader {
      * - Capability declarations must be well-formed (delegated to validateCapabilities)
      * - Throws on ANY validation failure (fail-closed security model)
      * 
+     * VALIDATION COVERAGE:
+     * - id: required, string, lowercase alphanumeric with hyphens, not empty
+     * - name: required, string, not empty
+     * - version: required, string, semver format (X.Y.Z), not empty
+     * - main: required, string, not empty (file existence checked separately)
+     * - capabilities: required, object (not null, not array)
+     * 
+     * See test/extensions/extension-loader.test.js for comprehensive test coverage
+     * 
      * @param {Object} manifest - Parsed manifest object
      * @returns {boolean} True if validation passes
      * @throws {Error} With detailed validation failures if validation fails
@@ -171,7 +180,7 @@ class ExtensionLoader {
         }
 
         // Validate required capabilities field (fail-closed: must be object)
-        if (!manifest.capabilities || typeof manifest.capabilities !== 'object') {
+        if (!manifest.capabilities || typeof manifest.capabilities !== 'object' || Array.isArray(manifest.capabilities)) {
             errors.push('Missing or invalid "capabilities" field');
         } else {
             // Delegate capability validation (fail-closed: accumulates errors)
@@ -195,6 +204,19 @@ class ExtensionLoader {
      * - Git capabilities: read/write must be booleans (explicit permission model)
      * - Hooks capabilities: must be array of valid hook names (whitelist validation)
      * - Accumulates all errors for comprehensive failure reporting
+     * 
+     * CAPABILITY VALIDATION COVERAGE:
+     * - filesystem.read: array or undefined
+     * - filesystem.write: array or undefined
+     * - network.allowlist: array of URLs (protocol + domain only), or undefined
+     * - network.rateLimit.cir: positive integer (≥ 1)
+     * - network.rateLimit.bc: positive integer (≥ 1)
+     * - network.rateLimit.be: non-negative integer (≥ 0) or undefined
+     * - git.read: boolean or undefined
+     * - git.write: boolean or undefined
+     * - hooks: array of whitelisted hook names or undefined
+     * 
+     * See test/extensions/extension-loader.test.js for comprehensive test coverage
      * 
      * @param {Object} capabilities - Capabilities object from manifest
      * @param {Array<string>} errors - Error accumulator array (mutated)

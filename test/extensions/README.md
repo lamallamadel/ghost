@@ -1,106 +1,125 @@
-# Extension Isolation and Functionality Test Suite
+# Extension Tests
 
-This directory contains tests proving extension isolation and end-to-end functionality.
+This directory contains comprehensive tests for Ghost CLI's extension system, covering extension loading, validation, isolation, and execution.
 
 ## Test Files
 
-### isolation.test.js
-Tests proving crashing extensions don't affect gateway or other extensions.
+### `extension-loader.test.js`
+**50 comprehensive unit tests** for the admission controller logic in `core/extension-loader.js`.
 
-**Tests:**
-1. Crashing extension does not kill runtime
-2. Multiple extensions run in isolation
-3. Crash isolation - working extension unaffected by crash
-4. Extension auto-restart after crash
-5. Extension state isolation verification
-6. Runtime continues after extension failure
-7. Timeout handling doesn't block other extensions
-8. Clean shutdown of all extensions
-9. Extension error events propagate correctly
-10. Process-level isolation verification
+Tests cover:
+- ✅ Manifest validation (all required fields)
+- ✅ Type validation (string, object, array, boolean checks)
+- ✅ Format validation (regex patterns for id, version, URLs)
+- ✅ Capability validation (filesystem, network, git, hooks)
+- ✅ Main file existence verification
+- ✅ JSON parsing error handling
+- ✅ Error logging verification
+- ✅ Edge cases and graceful degradation
 
-**Coverage:**
-- Extension crash handling
-- Auto-restart with exponential backoff
-- Process-level isolation (separate PIDs)
-- Error event propagation
-- Timeout isolation
-- Runtime stability under extension failures
-- State isolation between extensions
+See [`EXTENSION_LOADER_TEST_COVERAGE.md`](./EXTENSION_LOADER_TEST_COVERAGE.md) for detailed coverage documentation.
+
+### `git-extension.test.js`
+End-to-end tests for the Ghost Git Extension, including:
+- Extension initialization and RPC handling
+- Git operations (status, diff, commit)
+- Secret scanning and entropy calculation
+- Version management (semver parsing, bumping)
+- Conventional commit message parsing
+- Gateway integration and authorization
+
+### `isolation.test.js`
+Tests for extension process isolation and fault tolerance:
+- Extension crash handling and recovery
+- Auto-restart after failures
+- Concurrent extension execution
+- Timeout handling
 - Clean shutdown procedures
-
-### git-extension.test.js
-End-to-end tests of Git extension functionality via gateway.
-
-**Tests:**
-1. Git extension initialization
-2. Check Git repository
-3. Get staged diff
-4. Shannon entropy calculation
-5. Secret scanning
-6. Semver parsing and manipulation
-7. Conventional commit message parsing
-8. RPC request handling
-9. RPC error handling
-10. Extension factory function
-11. Gateway integration - extension registration
-12. Gateway - authorized git read operation
-13. Gateway - unauthorized git write operation
-14. Version file operations (package.json)
-15. GhostIgnore pattern loading
-16. Security audit through gateway blocks secrets
-17. Extension method getStagedDiff via RPC
-18. Extension maintains state across calls
-19. Concurrent request handling
-20. End-to-end git operation through full pipeline
-
-**Coverage:**
-- Git extension core functionality
-- RPC communication layer
-- Semver operations (parse, bump, compare)
-- Conventional commit parsing
-- Security scanning (entropy, secrets)
-- Gateway authorization for git operations
-- Read vs write permission enforcement
-- Version management features
-- Concurrent request handling
-- Full pipeline integration (intercept → auth → audit → execute)
+- Error event propagation
 
 ## Running Tests
-
-Run individual test files:
-```bash
-node test/extensions/isolation.test.js
-node test/extensions/git-extension.test.js
-```
 
 Run all extension tests:
 ```bash
 npm test
 ```
 
-## Isolation Guarantees Proven
+Run a specific test file:
+```bash
+node test/extensions/extension-loader.test.js
+node test/extensions/git-extension.test.js
+node test/extensions/isolation.test.js
+```
 
-These tests prove:
-1. ✅ Extensions run in isolated processes (separate PIDs)
-2. ✅ Extension crashes don't affect gateway or other extensions
-3. ✅ Failed extensions auto-restart with limits
-4. ✅ Extension timeouts don't block gateway
-5. ✅ Extension state is isolated (no cross-contamination)
-6. ✅ Gateway continues operating when extensions fail
-7. ✅ Error events propagate without blocking
-8. ✅ Clean shutdown handles all extension states
+## Test Philosophy
 
-## Functionality Guarantees Proven
+### Fail-Closed Security Model
+All tests verify Ghost's fail-closed security approach:
+- Invalid configurations are rejected (no defaults)
+- Missing resources cause load failures
+- Validation errors are logged explicitly
+- Extensions cannot bypass security checks
 
-These tests prove:
-1. ✅ Git extension functions correctly through gateway
-2. ✅ RPC communication works bidirectionally
-3. ✅ Authorization enforces manifest permissions
-4. ✅ Security scanning detects secrets and high entropy
-5. ✅ Semver operations work correctly
-6. ✅ Conventional commits parsed for version bumps
-7. ✅ Concurrent requests handled properly
-8. ✅ Full pipeline validates all operations
-9. ✅ Read/write permissions enforced separately
-10. ✅ Extension maintains state across calls
+### Comprehensive Coverage
+Tests cover:
+- ✅ Happy path (valid configurations)
+- ✅ Error paths (invalid configurations)
+- ✅ Edge cases (empty strings, null values, malformed JSON)
+- ✅ Type mismatches (string vs number, object vs array)
+- ✅ Format violations (regex patterns, enums)
+- ✅ Security boundaries (URL validation, hook whitelisting)
+
+### Test Output
+Each test provides clear output:
+```
+▶ Test N: Description
+✅ Expected behavior verified
+```
+
+Failed tests show:
+```
+❌ Test failed: Error message
+[Stack trace]
+```
+
+## Extension Loader Validation Rules
+
+The admission controller validates all aspects of extension manifests:
+
+### Required Fields
+- `id` - Lowercase alphanumeric with hyphens
+- `name` - Non-empty string
+- `version` - Semver format (X.Y.Z)
+- `main` - Non-empty string, file must exist
+- `capabilities` - Object (not null, not array)
+
+### Capabilities Validation
+- **Filesystem**: `read` and `write` must be arrays (if present)
+- **Network**: `allowlist` must be array of valid URLs (protocol + domain only)
+- **Network Rate Limit**: `cir` and `bc` must be positive integers, `be` must be non-negative
+- **Git**: `read` and `write` must be booleans (if present)
+- **Hooks**: Must be array of whitelisted hook names (if present)
+
+### Fail Conditions
+Extensions are rejected if:
+- Required fields are missing or invalid
+- Field types don't match expectations
+- Format patterns are violated
+- Main file doesn't exist
+- JSON is malformed
+- Capability declarations are invalid
+
+## Test Maintenance
+
+When adding new validation rules:
+1. Add validation logic to `core/extension-loader.js`
+2. Add corresponding tests to `extension-loader.test.js`
+3. Update `EXTENSION_LOADER_TEST_COVERAGE.md` with new rules
+4. Ensure error messages are descriptive and logged
+
+## Related Documentation
+
+- [`EXTENSION_LOADER_TEST_COVERAGE.md`](./EXTENSION_LOADER_TEST_COVERAGE.md) - Detailed test coverage
+- [`../../core/manifest-schema.json`](../../core/manifest-schema.json) - Complete manifest schema
+- [`../../docs/extension-api.md`](../../docs/extension-api.md) - Extension API documentation
+- [`../../AGENTS.md`](../../AGENTS.md) - Agent development guide
