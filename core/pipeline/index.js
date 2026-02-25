@@ -2,7 +2,7 @@ const { MessageInterceptor, Intent, IntentSchema } = require('./intercept');
 const { AuthorizationLayer, PermissionChecker, RateLimitManager, TokenBucket, TrafficPolicer } = require('./auth');
 const { AuditLayer, AuditLogger, NISTValidator, EntropyScanner } = require('./audit');
 const { ExecutionLayer, ExecutionError, CircuitBreaker, TimeoutManager } = require('./execute');
-const { TwoRateThreeColorTokenBucket } = require('../qos/token-bucket');
+const { SingleRateThreeColorTokenBucket } = require('../qos/token-bucket');
 const { instrumentPipeline, Telemetry } = require('../telemetry');
 
 class IOPipeline {
@@ -150,7 +150,7 @@ module.exports = {
     RateLimitManager,
     TokenBucket,
     TrafficPolicer,
-    TwoRateThreeColorTokenBucket,
+    SingleRateThreeColorTokenBucket,
     AuditLayer,
     AuditLogger,
     NISTValidator,

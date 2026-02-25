@@ -1,6 +1,6 @@
 const assert = require('assert');
 const { TokenBucket, RateLimitManager } = require('../../core/pipeline/auth');
-const { TwoRateThreeColorTokenBucket, TrafficPolicer } = require('../../core/qos/token-bucket');
+const { SingleRateThreeColorTokenBucket, TrafficPolicer } = require('../../core/qos/token-bucket');
 
 console.log('🧪 Testing Rate Limiter and Token Bucket Math...\n');
 
@@ -76,9 +76,9 @@ const afterReset = manager2.checkLimit('ext-2', 1);
 assert.strictEqual(afterReset.allowed, true, 'Should allow after reset');
 console.log('✅ Rate limit reset works\n');
 
-// Test 9: Two-Rate Three-Color Token Bucket (trTCM)
-console.log('▶ Test 9: Two-Rate Three-Color Token Bucket');
-const trTCM = new TwoRateThreeColorTokenBucket({
+// Test 9: Single-Rate Three-Color Token Bucket (srTCM)
+console.log('▶ Test 9: Single-Rate Three-Color Token Bucket');
+const trTCM = new SingleRateThreeColorTokenBucket({
     cir: 60,  // Committed Information Rate
     bc: 100,  // Committed Burst Size
     be: 50    // Excess Burst Size
@@ -102,7 +102,7 @@ console.log('✅ Yellow (exceeding) traffic classified\n');
 
 // Test 11: Red traffic (violating)
 console.log('▶ Test 11: Red (violating) traffic');
-const trTCM2 = new TwoRateThreeColorTokenBucket({
+const trTCM2 = new SingleRateThreeColorTokenBucket({
     cir: 60,
     bc: 10,
     be: 10
@@ -188,7 +188,7 @@ console.log('✅ Violating traffic dropped\n');
 
 // Test 15: Token bucket refill math validation
 console.log('▶ Test 15: Token bucket refill math validation');
-const mathBucket = new TwoRateThreeColorTokenBucket({
+const mathBucket = new SingleRateThreeColorTokenBucket({
     cir: 120, // 120 tokens per minute = 2 tokens per second
     bc: 100,
     be: 50
@@ -199,18 +199,19 @@ mathBucket.excessTokens = 25;
 mathBucket.lastRefill = Date.now() - 1000; // 1 second ago
 
 const mathState = mathBucket.getState();
-// After 1 second at 2 tokens/sec, should add ~2 tokens to each bucket
+// After 1 second at 2 tokens/sec, should add ~2 tokens
+// In srTCM: tokens fill Bc first (50 + 2 = 52), no overflow to Be
 // committedTokens: 50 + 2 = 52
-// excessTokens: 25 + 2 = 27
+// excessTokens: 25 (unchanged, no overflow)
 assert.ok(mathState.committedTokens >= 51 && mathState.committedTokens <= 53, 
     `Committed tokens should be ~52, got ${mathState.committedTokens}`);
-assert.ok(mathState.excessTokens >= 26 && mathState.excessTokens <= 28, 
-    `Excess tokens should be ~27, got ${mathState.excessTokens}`);
+assert.strictEqual(mathState.excessTokens, 25, 
+    `Excess tokens should stay at 25 (no overflow), got ${mathState.excessTokens}`);
 console.log(`✅ Refill math validated (committed: ${mathState.committedTokens}, excess: ${mathState.excessTokens})\n`);
 
 // Test 16: Burst size validation
 console.log('▶ Test 16: Burst size enforcement');
-const burstBucket = new TwoRateThreeColorTokenBucket({
+const burstBucket = new SingleRateThreeColorTokenBucket({
     cir: 60,
     bc: 10,   // Small committed burst
     be: 100   // Large excess burst

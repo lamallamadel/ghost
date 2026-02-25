@@ -2,7 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-class TwoRateThreeColorTokenBucket {
+class SingleRateThreeColorTokenBucket {
     constructor(config) {
         this.cir = config.cir;
         this.bc = config.bc;
@@ -50,8 +50,15 @@ class TwoRateThreeColorTokenBucket {
         const tokensToAdd = (elapsed * this.cir) / 60;
         
         if (tokensToAdd > 0) {
-            this.committedTokens = Math.min(this.bc, this.committedTokens + tokensToAdd);
-            this.excessTokens = Math.min(this.be, this.excessTokens + tokensToAdd);
+            const spaceInCommitted = this.bc - this.committedTokens;
+            const tokensForCommitted = Math.min(tokensToAdd, spaceInCommitted);
+            this.committedTokens += tokensForCommitted;
+            
+            const overflow = tokensToAdd - tokensForCommitted;
+            if (overflow > 0) {
+                this.excessTokens = Math.min(this.be, this.excessTokens + overflow);
+            }
+            
             this.lastRefill = now;
         }
     }
@@ -105,7 +112,7 @@ class TrafficPolicer {
                 const state = JSON.parse(data);
                 
                 for (const [extensionId, config] of Object.entries(state)) {
-                    this.buckets.set(extensionId, new TwoRateThreeColorTokenBucket(config));
+                    this.buckets.set(extensionId, new SingleRateThreeColorTokenBucket(config));
                 }
             }
         } catch (error) {
@@ -136,7 +143,7 @@ class TrafficPolicer {
         }
 
         if (!this.buckets.has(extensionId)) {
-            this.buckets.set(extensionId, new TwoRateThreeColorTokenBucket({
+            this.buckets.set(extensionId, new SingleRateThreeColorTokenBucket({
                 cir: config.cir,
                 bc: config.bc,
                 be: config.be || config.bc
@@ -212,6 +219,6 @@ class TrafficPolicer {
 }
 
 module.exports = {
-    TwoRateThreeColorTokenBucket,
+    SingleRateThreeColorTokenBucket,
     TrafficPolicer
 };

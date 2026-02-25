@@ -2,7 +2,7 @@ const assert = require('assert');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { TrafficPolicer, TwoRateThreeColorTokenBucket } = require('../core/qos/token-bucket');
+const { TrafficPolicer, SingleRateThreeColorTokenBucket } = require('../core/qos/token-bucket');
 
 console.log('🧪 Testing Token Bucket Traffic Policing Engine...\n');
 
@@ -10,11 +10,11 @@ const testPersistencePath = path.join(os.tmpdir(), 'test-rate-limits.json');
 
 console.log('▶ Test 1: Module imports');
 assert.ok(TrafficPolicer, 'TrafficPolicer should be defined');
-assert.ok(TwoRateThreeColorTokenBucket, 'TwoRateThreeColorTokenBucket should be defined');
+assert.ok(SingleRateThreeColorTokenBucket, 'SingleRateThreeColorTokenBucket should be defined');
 console.log('✅ Modules imported successfully\n');
 
-console.log('▶ Test 2: TwoRateThreeColorTokenBucket creation');
-const bucket = new TwoRateThreeColorTokenBucket({
+console.log('▶ Test 2: SingleRateThreeColorTokenBucket creation');
+const bucket = new SingleRateThreeColorTokenBucket({
     cir: 60,
     bc: 100,
     be: 200
