@@ -242,6 +242,10 @@ class ExtensionLoader {
                 if (typeof rl.bc !== 'number' || rl.bc < 1) {
                     errors.push('capabilities.network.rateLimit.bc must be a positive integer');
                 }
+                
+                if (rl.be !== undefined && (typeof rl.be !== 'number' || rl.be < 0)) {
+                    errors.push('capabilities.network.rateLimit.be must be a non-negative integer');
+                }
             }
         }
 

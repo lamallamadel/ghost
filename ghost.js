@@ -947,6 +947,9 @@ See [Extension API Documentation](https://github.com/lamallamadel/ghost/blob/mai
                     if (!net_cap.rateLimit.cir || !net_cap.rateLimit.bc) {
                         errors.push('Network rate limit requires both "cir" and "bc" fields');
                     }
+                    if (net_cap.rateLimit.be !== undefined && typeof net_cap.rateLimit.be !== 'number') {
+                        errors.push('Network rate limit "be" must be a number if specified');
+                    }
                 }
             }
 

@@ -1,64 +1,185 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://ghost-cli.dev/schemas/manifest.json",
   "title": "Ghost Extension Manifest",
-  "description": "Schema for Ghost CLI extension manifests defining capability contracts",
+  "description": "Schema for Ghost CLI extension manifests defining Zero Trust capability contracts. All capabilities follow a fail-closed security model where undeclared permissions are denied by default. This schema enforces explicit declaration of all required resources and operations.",
   "type": "object",
   "required": ["id", "name", "version", "main", "capabilities"],
   "properties": {
     "id": {
       "type": "string",
       "pattern": "^[a-z0-9-]+$",
-      "description": "Unique identifier for the extension (lowercase alphanumeric with hyphens)"
+      "description": "Unique identifier for the extension (lowercase alphanumeric with hyphens only). This ID is used for permission tracking, audit logging, and extension registry lookups. Must be globally unique across all Ghost extensions.",
+      "examples": [
+        "my-extension",
+        "ghost-git-extension",
+        "code-formatter",
+        "security-scanner",
+        "api-integration"
+      ]
     },
     "name": {
       "type": "string",
       "minLength": 1,
-      "description": "Human-readable name of the extension"
+      "description": "Human-readable name of the extension displayed in CLI output and desktop monitoring console",
+      "examples": [
+        "My Extension",
+        "Ghost Git Extension",
+        "Code Formatter",
+        "Security Scanner",
+        "API Integration"
+      ]
     },
     "version": {
       "type": "string",
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
-      "description": "Semantic version (major.minor.patch)"
+      "description": "Semantic version (major.minor.patch) following semver specification. Used for dependency resolution and compatibility checking.",
+      "examples": [
+        "1.0.0",
+        "2.3.4",
+        "0.1.0",
+        "10.15.3"
+      ]
     },
     "description": {
       "type": "string",
-      "description": "Brief description of the extension's functionality"
+      "description": "Brief description of the extension's functionality and purpose. Displayed in extension listings and help text.",
+      "examples": [
+        "Git operations with AI-powered features",
+        "Automated code formatting and linting",
+        "Security vulnerability scanning for dependencies",
+        "GitHub API integration for issue management"
+      ]
     },
     "author": {
       "type": "string",
-      "description": "Extension author name or organization"
+      "description": "Extension author name or organization. Used for attribution and support contact information.",
+      "examples": [
+        "John Doe",
+        "Acme Corporation",
+        "OpenSource Contributors",
+        "security-team@example.com"
+      ]
     },
     "main": {
       "type": "string",
-      "description": "Entry point file (relative path from extension root)"
+      "description": "Entry point file (relative path from extension root). This file must export a class or object implementing the extension interface.",
+      "examples": [
+        "index.js",
+        "src/main.js",
+        "dist/extension.js",
+        "lib/extension.js"
+      ]
     },
     "capabilities": {
       "type": "object",
-      "description": "Declared capabilities and resource requirements",
+      "description": "Zero Trust capability declarations defining the complete security boundary for this extension. All resource access must be explicitly declared here. Fail-closed: any undeclared capability will be denied by the authorization layer. This contract is validated at load time and enforced at runtime by the Ghost pipeline.",
       "properties": {
         "filesystem": {
           "type": "object",
-          "description": "Filesystem access permissions",
+          "description": "Filesystem access permissions using glob pattern matching for path authorization. Patterns are matched against absolute and relative paths. Fail-closed: paths not matching any declared pattern are denied. Uses minimatch library for glob evaluation (supports **, *, ?, [abc], {a,b}, !(pattern)).",
           "properties": {
             "read": {
               "type": "array",
               "items": {
                 "type": "string"
               },
-              "description": "Glob patterns for read-only file access"
+              "description": "Glob patterns for read-only file access. Grants permission for operations: read, readdir, stat. Fail-closed: paths not matching any pattern are denied. Use narrow patterns following principle of least privilege. Patterns are evaluated in order; first match grants access.",
+              "examples": [
+                [
+                  "**/*.js",
+                  "**/*.json",
+                  "src/**"
+                ],
+                [
+                  "package.json",
+                  "tsconfig.json",
+                  "dist/**/*"
+                ],
+                [
+                  "**/*"
+                ],
+                [
+                  "src/**/*.{js,ts}",
+                  "test/**/*.{js,ts}",
+                  "*.md"
+                ],
+                [
+                  "config/**",
+                  "!config/secrets.json"
+                ]
+              ]
             },
             "write": {
               "type": "array",
               "items": {
                 "type": "string"
               },
-              "description": "Glob patterns for write access"
+              "description": "Glob patterns for write access. Grants permission for operations: write, mkdir, unlink, rmdir. Fail-closed: paths not matching any pattern are denied. Write permissions should be minimal and scoped to specific output directories. Empty array means read-only filesystem access.",
+              "examples": [
+                [
+                  "dist/**",
+                  "build/**"
+                ],
+                [
+                  ".git/**",
+                  "package.json"
+                ],
+                [],
+                [
+                  "output/**",
+                  "logs/**/*.log"
+                ],
+                [
+                  ".cache/**",
+                  "temp/**"
+                ]
+              ]
             }
-          }
+          },
+          "examples": [
+            {
+              "read": [
+                "**/*.js",
+                "package.json"
+              ],
+              "write": [
+                "dist/**"
+              ]
+            },
+            {
+              "read": [
+                "src/**",
+                "test/**"
+              ],
+              "write": []
+            },
+            {
+              "read": [
+                "**/*"
+              ],
+              "write": [
+                ".git/**",
+                "package.json",
+                ".ghostrc"
+              ]
+            },
+            {
+              "read": [
+                "src/**/*.{js,ts,jsx,tsx}",
+                "*.config.js"
+              ],
+              "write": [
+                "dist/**",
+                "build/**",
+                ".cache/**"
+              ]
+            }
+          ]
         },
         "network": {
           "type": "object",
-          "description": "Network access permissions",
+          "description": "Network access permissions with URL allowlisting and traffic policing. Implements defense-in-depth with both authorization (allowlist) and rate limiting (trTCM). Fail-closed: requests to non-allowlisted URLs are denied. Rate limits prevent resource exhaustion and enforce fair use.",
           "properties": {
             "allowlist": {
               "type": "array",
@@ -66,40 +187,182 @@
                 "type": "string",
                 "pattern": "^https?://[^/]+$"
               },
-              "description": "Allowed domains/URLs (protocol and domain only)"
+              "description": "Allowed domains/URLs (protocol and domain only, no paths). Fail-closed: requests to non-allowlisted URLs are denied. Pattern must match exactly: protocol (http/https) + domain + optional port. Path-level restrictions should be handled in extension logic. Supports domain wildcards via subdomain matching (e.g., api.github.com allows api.github.com/* but not github.com).",
+              "examples": [
+                [
+                  "https://api.github.com",
+                  "https://api.openai.com"
+                ],
+                [
+                  "https://api.example.com",
+                  "http://localhost:3000"
+                ],
+                [],
+                [
+                  "https://api.groq.com",
+                  "https://api.anthropic.com",
+                  "https://generativelanguage.googleapis.com"
+                ],
+                [
+                  "https://registry.npmjs.org",
+                  "https://api.github.com"
+                ]
+              ]
             },
             "rateLimit": {
               "type": "object",
-              "description": "Committed Information Rate (CIR) and Burst Committed (Bc) rate limits",
+              "description": "Two-Rate Three-Color Marker (trTCM RFC 2698) traffic policing parameters for rate limiting network requests. Uses dual token bucket algorithm with committed (CIR/Bc) and excess (Be) burst capacity. Green traffic: within CIR, consumes Bc tokens. Yellow traffic: exceeds CIR but within Be, consumes Be tokens. Red traffic: exceeds both, rejected. Tokens replenish at CIR per minute. Prevents resource exhaustion, enforces fair use, and protects downstream APIs.",
               "properties": {
                 "cir": {
                   "type": "integer",
                   "minimum": 1,
-                  "description": "Committed Information Rate - sustained requests per minute"
+                  "description": "Committed Information Rate (CIR) - sustained requests per minute. Tokens replenish at this rate. Defines the normal operating rate for the extension. Should be set based on typical usage patterns and downstream API limits. Too low causes throttling, too high risks rate limit violations on downstream services.",
+                  "examples": [
+                    60,
+                    100,
+                    1000,
+                    30,
+                    500
+                  ]
                 },
                 "bc": {
                   "type": "integer",
                   "minimum": 1,
-                  "description": "Burst Committed - maximum burst size in requests"
+                  "description": "Burst Committed (Bc) - maximum burst size in requests for committed rate bucket. Must be >= CIR. Allows temporary bursts above sustained rate. Set to accommodate legitimate burst patterns (e.g., batch operations, startup initialization). Typical ratio: Bc = CIR * 1.5 to 2.0 for moderate bursting, or Bc = CIR * 5+ for high-burst scenarios.",
+                  "examples": [
+                    100,
+                    500,
+                    5000,
+                    100,
+                    1000
+                  ]
+                },
+                "be": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Burst Excess (Be) - additional burst capacity beyond Bc for excess rate bucket. Optional, defaults to 0 (no excess burst). Provides secondary burst buffer for exceptional cases. Excess tokens are consumed only after Bc bucket is empty. Useful for handling occasional spikes while maintaining strict rate discipline. Set to 0 for strict rate limiting, or to 20-50% of Bc for tolerance of rare spikes.",
+                  "examples": [
+                    0,
+                    50,
+                    1000,
+                    200,
+                    100
+                  ]
                 }
               },
-              "required": ["cir", "bc"]
+              "required": [
+                "cir",
+                "bc"
+              ],
+              "examples": [
+                {
+                  "cir": 60,
+                  "bc": 100
+                },
+                {
+                  "cir": 100,
+                  "bc": 500,
+                  "be": 200
+                },
+                {
+                  "cir": 1000,
+                  "bc": 5000,
+                  "be": 1000
+                },
+                {
+                  "cir": 30,
+                  "bc": 60,
+                  "be": 20
+                },
+                {
+                  "cir": 100000,
+                  "bc": 500000,
+                  "be": 0
+                }
+              ]
             }
-          }
+          },
+          "examples": [
+            {
+              "allowlist": [
+                "https://api.github.com",
+                "https://api.openai.com"
+              ],
+              "rateLimit": {
+                "cir": 60,
+                "bc": 100
+              }
+            },
+            {
+              "allowlist": [
+                "https://api.example.com"
+              ],
+              "rateLimit": {
+                "cir": 100,
+                "bc": 500,
+                "be": 200
+              }
+            },
+            {
+              "allowlist": [
+                "https://api.groq.com",
+                "https://api.anthropic.com",
+                "https://generativelanguage.googleapis.com"
+              ],
+              "rateLimit": {
+                "cir": 100,
+                "bc": 500,
+                "be": 200
+              }
+            },
+            {
+              "allowlist": [],
+              "rateLimit": {
+                "cir": 60,
+                "bc": 100
+              }
+            }
+          ]
         },
         "git": {
           "type": "object",
-          "description": "Git operations permissions",
+          "description": "Git operations permissions with explicit read/write authorization. Implements separation of concerns between read-only inspection and write operations that modify repository state. Fail-closed: defaults to false if not specified. Read operations: status, log, diff, show, ls-files, branch (list), tag (list). Write operations: commit, branch (create/delete), tag (create/delete), push, reset, checkout, merge, rebase.",
           "properties": {
             "read": {
               "type": "boolean",
-              "description": "Allow reading git repository data"
+              "description": "Allow reading git repository data. Grants permission for non-mutating git operations: status, log, diff, show, ls-files, branch --list, tag --list, remote --verbose. Fail-closed: defaults to false if not specified. Read-only access is safe for inspection, reporting, and analysis extensions.",
+              "examples": [
+                true,
+                false
+              ]
             },
             "write": {
               "type": "boolean",
-              "description": "Allow modifying git repository (commits, branches, etc.)"
+              "description": "Allow modifying git repository state. Grants permission for mutating git operations: commit, add, rm, branch (create/delete), tag (create/delete), push, fetch, pull, reset, checkout, merge, rebase, cherry-pick. Fail-closed: defaults to false if not specified. Write access should be granted only to trusted extensions that manage repository state (e.g., commit generators, version managers).",
+              "examples": [
+                true,
+                false
+              ]
             }
-          }
+          },
+          "examples": [
+            {
+              "read": true,
+              "write": false
+            },
+            {
+              "read": true,
+              "write": true
+            },
+            {
+              "read": false,
+              "write": false
+            },
+            {
+              "read": true
+            },
+            {}
+          ]
         },
         "hooks": {
           "type": "array",
@@ -114,9 +377,114 @@
               "pre-rebase"
             ]
           },
-          "description": "Git hooks the extension wants to register for"
+          "description": "Git hooks the extension wants to register for. Fail-closed: only whitelisted hook names from the enum are allowed. Hooks enable extensions to intercept git operations at specific lifecycle points. Pre-hooks (pre-commit, pre-push, commit-msg, pre-rebase) can block operations by returning non-zero exit codes. Post-hooks (post-commit, post-checkout) are informational only. Hook declarations are validated against the enum at manifest load time.",
+          "examples": [
+            [
+              "pre-commit",
+              "commit-msg"
+            ],
+            [
+              "pre-push"
+            ],
+            [],
+            [
+              "pre-commit",
+              "commit-msg",
+              "pre-push"
+            ],
+            [
+              "post-commit",
+              "post-checkout"
+            ]
+          ]
         }
-      }
+      },
+      "examples": [
+        {
+          "filesystem": {
+            "read": [
+              "**/*.js",
+              "package.json"
+            ],
+            "write": [
+              "dist/**"
+            ]
+          },
+          "network": {
+            "allowlist": [
+              "https://api.github.com"
+            ],
+            "rateLimit": {
+              "cir": 60,
+              "bc": 100
+            }
+          },
+          "git": {
+            "read": true,
+            "write": false
+          }
+        },
+        {
+          "filesystem": {
+            "read": [
+              "**/*"
+            ],
+            "write": [
+              ".git/**",
+              "package.json"
+            ]
+          },
+          "network": {
+            "allowlist": [
+              "https://api.groq.com",
+              "https://api.anthropic.com"
+            ],
+            "rateLimit": {
+              "cir": 100,
+              "bc": 500,
+              "be": 200
+            }
+          },
+          "git": {
+            "read": true,
+            "write": true
+          },
+          "hooks": [
+            "pre-commit",
+            "commit-msg",
+            "pre-push"
+          ]
+        },
+        {
+          "filesystem": {
+            "read": [
+              "src/**/*.{js,ts}",
+              "test/**"
+            ],
+            "write": [
+              "coverage/**",
+              "reports/**"
+            ]
+          }
+        },
+        {
+          "git": {
+            "read": true
+          }
+        },
+        {
+          "network": {
+            "allowlist": [
+              "https://registry.npmjs.org"
+            ],
+            "rateLimit": {
+              "cir": 30,
+              "bc": 60,
+              "be": 20
+            }
+          }
+        }
+      ]
     },
     "permissions": {
       "type": "array",
@@ -133,19 +501,274 @@
           "env:read"
         ]
       },
-      "description": "Required system permissions"
+      "description": "Required system permissions enumeration. Fail-closed: only whitelisted permission strings from the enum are valid. This provides a high-level permission model complementing the granular capability declarations. Permissions are validated at manifest load time and checked at runtime. filesystem:read/write correspond to capabilities.filesystem, network:http/https to capabilities.network, git:read/write to capabilities.git. process:spawn and env:read are standalone permissions for process execution and environment variable access.",
+      "examples": [
+        [
+          "filesystem:read",
+          "git:read"
+        ],
+        [
+          "filesystem:read",
+          "filesystem:write",
+          "network:https",
+          "git:read",
+          "git:write"
+        ],
+        [],
+        [
+          "network:https",
+          "env:read"
+        ],
+        [
+          "filesystem:read",
+          "filesystem:write",
+          "network:https",
+          "git:read",
+          "git:write",
+          "process:spawn"
+        ]
+      ]
     },
     "dependencies": {
       "type": "object",
-      "description": "NPM dependencies required by the extension",
+      "description": "NPM dependencies required by the extension. Follows standard package.json format with package names as keys and version specifiers as values. Dependencies are installed during extension installation. Use semantic versioning ranges for flexibility.",
       "additionalProperties": {
         "type": "string"
-      }
+      },
+      "examples": [
+        {
+          "@ghost/extension-sdk": "^1.0.0",
+          "axios": "^1.6.0"
+        },
+        {},
+        {
+          "@ghost/extension-sdk": "^1.0.0",
+          "lodash": "^4.17.21",
+          "chalk": "^4.1.2"
+        },
+        {
+          "minimatch": "^9.0.0",
+          "glob": "^10.0.0"
+        }
+      ]
     },
     "config": {
       "type": "object",
-      "description": "Default configuration values",
-      "additionalProperties": true
+      "description": "Default configuration values for the extension. These values can be overridden by user configuration in ~/.ghostrc or project-level .ghostrc files. Use this for sensible defaults that users may want to customize.",
+      "additionalProperties": true,
+      "examples": [
+        {
+          "apiEndpoint": "https://api.example.com",
+          "timeout": 5000
+        },
+        {},
+        {
+          "maxRetries": 3,
+          "logLevel": "info",
+          "enableCache": true
+        },
+        {
+          "llmProvider": "groq",
+          "model": "llama-3.3-70b-versatile",
+          "temperature": 0.7
+        }
+      ]
     }
-  }
+  },
+  "examples": [
+    {
+      "id": "my-extension",
+      "name": "My Extension",
+      "version": "1.0.0",
+      "description": "Example extension with minimal permissions",
+      "author": "John Doe",
+      "main": "index.js",
+      "capabilities": {
+        "filesystem": {
+          "read": [
+            "**/*.js",
+            "package.json"
+          ],
+          "write": [
+            "dist/**"
+          ]
+        },
+        "network": {
+          "allowlist": [
+            "https://api.example.com"
+          ],
+          "rateLimit": {
+            "cir": 60,
+            "bc": 100
+          }
+        },
+        "git": {
+          "read": true,
+          "write": false
+        }
+      },
+      "permissions": [
+        "filesystem:read",
+        "filesystem:write",
+        "network:https",
+        "git:read"
+      ]
+    },
+    {
+      "id": "ghost-git-extension",
+      "name": "Ghost Git Extension",
+      "version": "1.0.0",
+      "description": "Git operations extension with AI-powered features",
+      "main": "index.js",
+      "capabilities": {
+        "filesystem": {
+          "read": [
+            "**/*"
+          ],
+          "write": [
+            ".git/**",
+            "package.json"
+          ]
+        },
+        "network": {
+          "allowlist": [
+            "https://api.groq.com",
+            "https://api.openai.com",
+            "https://api.anthropic.com",
+            "https://generativelanguage.googleapis.com"
+          ],
+          "rateLimit": {
+            "cir": 100,
+            "bc": 500,
+            "be": 200
+          }
+        },
+        "git": {
+          "read": true,
+          "write": true
+        },
+        "hooks": [
+          "pre-commit",
+          "commit-msg",
+          "pre-push"
+        ]
+      }
+    },
+    {
+      "id": "code-formatter",
+      "name": "Code Formatter",
+      "version": "2.1.5",
+      "description": "Automated code formatting and linting",
+      "author": "Dev Team",
+      "main": "src/formatter.js",
+      "capabilities": {
+        "filesystem": {
+          "read": [
+            "src/**/*.{js,ts,jsx,tsx}",
+            "*.config.js",
+            ".prettierrc",
+            ".eslintrc"
+          ],
+          "write": [
+            "src/**/*.{js,ts,jsx,tsx}"
+          ]
+        }
+      },
+      "permissions": [
+        "filesystem:read",
+        "filesystem:write"
+      ],
+      "dependencies": {
+        "@ghost/extension-sdk": "^1.0.0",
+        "prettier": "^3.0.0",
+        "eslint": "^8.50.0"
+      },
+      "config": {
+        "tabWidth": 2,
+        "semi": true,
+        "singleQuote": true
+      }
+    },
+    {
+      "id": "api-integration",
+      "name": "API Integration Helper",
+      "version": "1.2.0",
+      "description": "GitHub and GitLab API integration for issue management",
+      "author": "Acme Corporation",
+      "main": "lib/integration.js",
+      "capabilities": {
+        "network": {
+          "allowlist": [
+            "https://api.github.com",
+            "https://gitlab.com"
+          ],
+          "rateLimit": {
+            "cir": 30,
+            "bc": 60,
+            "be": 20
+          }
+        },
+        "filesystem": {
+          "read": [
+            ".git/config",
+            "package.json"
+          ],
+          "write": []
+        },
+        "git": {
+          "read": true,
+          "write": false
+        }
+      },
+      "permissions": [
+        "filesystem:read",
+        "network:https",
+        "git:read",
+        "env:read"
+      ],
+      "dependencies": {
+        "@ghost/extension-sdk": "^1.0.0",
+        "octokit": "^3.0.0"
+      },
+      "config": {
+        "defaultRepo": "owner/repo",
+        "autoLabel": true
+      }
+    },
+    {
+      "id": "security-scanner",
+      "name": "Security Vulnerability Scanner",
+      "version": "0.9.1",
+      "description": "Scans dependencies for known vulnerabilities",
+      "author": "security-team@example.com",
+      "main": "scanner.js",
+      "capabilities": {
+        "filesystem": {
+          "read": [
+            "package.json",
+            "package-lock.json",
+            "yarn.lock",
+            "pnpm-lock.yaml"
+          ],
+          "write": [
+            "security-report.json"
+          ]
+        },
+        "network": {
+          "allowlist": [
+            "https://registry.npmjs.org"
+          ],
+          "rateLimit": {
+            "cir": 100,
+            "bc": 200
+          }
+        }
+      },
+      "permissions": [
+        "filesystem:read",
+        "filesystem:write",
+        "network:https"
+      ]
+    }
+  ]
 }
