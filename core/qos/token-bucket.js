@@ -121,19 +121,57 @@ class TrafficPolicer {
     }
 
     _saveState() {
+        const tempPath = this.persistencePath + '.tmp';
+        let backupPath = null;
+        
         try {
             const state = {};
             for (const [extensionId, bucket] of this.buckets.entries()) {
                 state[extensionId] = bucket.serialize();
             }
             
-            fs.writeFileSync(
-                this.persistencePath, 
-                JSON.stringify(state, null, 2), 
-                'utf8'
-            );
+            const stateJSON = JSON.stringify(state, null, 2);
+            
+            if (fs.existsSync(this.persistencePath)) {
+                backupPath = this.persistencePath + '.backup';
+                try {
+                    fs.copyFileSync(this.persistencePath, backupPath);
+                } catch (backupError) {
+                    console.error('[TrafficPolicer] Failed to create backup:', backupError.message);
+                    backupPath = null;
+                }
+            }
+            
+            fs.writeFileSync(tempPath, stateJSON, 'utf8');
+            
+            fs.renameSync(tempPath, this.persistencePath);
+            
+            if (backupPath && fs.existsSync(backupPath)) {
+                try {
+                    fs.unlinkSync(backupPath);
+                } catch (cleanupError) {
+                    console.error('[TrafficPolicer] Failed to cleanup backup:', cleanupError.message);
+                }
+            }
         } catch (error) {
             console.error('[TrafficPolicer] Failed to save state:', error.message);
+            
+            if (fs.existsSync(tempPath)) {
+                try {
+                    fs.unlinkSync(tempPath);
+                } catch (cleanupError) {
+                    console.error('[TrafficPolicer] Failed to cleanup temp file:', cleanupError.message);
+                }
+            }
+            
+            if (backupPath && fs.existsSync(backupPath)) {
+                try {
+                    fs.renameSync(backupPath, this.persistencePath);
+                    console.error('[TrafficPolicer] Restored from backup after failed write');
+                } catch (rollbackError) {
+                    console.error('[TrafficPolicer] Failed to rollback from backup:', rollbackError.message);
+                }
+            }
         }
     }
 
