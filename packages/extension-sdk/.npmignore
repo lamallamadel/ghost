@@ -20,12 +20,17 @@ tsconfig.*.json
 
 # Documentation source
 docs/
+PUBLISHING.md
+RELEASE_NOTES.md
 
 # Internal tooling
 scripts/
 tools/
 .vscode/
 .idea/
+
+# Package artifacts
+*.tgz
 
 # Git
 .git/

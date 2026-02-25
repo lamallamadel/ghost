@@ -10,11 +10,14 @@
     "lib/**/*.js",
     "lib/**/*.d.ts",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG.md"
   ],
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "prepublishOnly": "node -e \"const fs=require('fs');const pkg=JSON.parse(fs.readFileSync('package.json'));if(!pkg.version||pkg.version==='0.0.0')throw new Error('Version must be set before publishing');const idx=fs.readFileSync('index.js','utf8');const dts=fs.readFileSync('index.d.ts','utf8');if(!idx||!dts)throw new Error('Missing required files');console.log('✓ Package validation passed')\""
+    "verify": "node scripts/verify-publish.js",
+    "pack:test": "npm pack && node scripts/test-install.js",
+    "prepublishOnly": "node scripts/verify-publish.js"
   },
   "keywords": [
     "ghost",
