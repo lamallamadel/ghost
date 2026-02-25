@@ -150,16 +150,84 @@ class ExtensionProcess extends EventEmitter {
     }
 
     async _spawnProcess() {
+        const fs = require('fs');
+        const path = require('path');
+
+        try {
+            this._validateManifest();
+            
+            const mainFile = path.join(this.extensionPath, this.manifest.main);
+            if (!fs.existsSync(mainFile)) {
+                throw new Error(
+                    `Main file does not exist: ${mainFile} (extension: ${this.extensionId})`
+                );
+            }
+        } catch (error) {
+            throw error;
+        }
+
         return new Promise((resolve, reject) => {
-            const startupTimeoutId = setTimeout(() => {
-                reject(new Error(`Extension ${this.extensionId} failed to start within ${this.startupTimeout}ms`));
-                if (this.process) {
-                    this.process.kill();
+            let startupTimeoutId = null;
+            let isResolved = false;
+            let stderrBuffer = [];
+            const maxStderrLines = 100;
+
+            const cleanup = () => {
+                if (startupTimeoutId) {
+                    clearTimeout(startupTimeoutId);
+                    startupTimeoutId = null;
                 }
+                
+                if (this.process && !this.process.killed) {
+                    try {
+                        this.process.kill('SIGKILL');
+                    } catch (e) {
+                    }
+                    this.process = null;
+                }
+                
+                stderrBuffer = [];
+            };
+
+            const rejectOnce = (error) => {
+                if (!isResolved) {
+                    isResolved = true;
+                    cleanup();
+                    reject(error);
+                }
+            };
+
+            const resolveOnce = () => {
+                if (!isResolved) {
+                    isResolved = true;
+                    if (startupTimeoutId) {
+                        clearTimeout(startupTimeoutId);
+                        startupTimeoutId = null;
+                    }
+                    resolve();
+                }
+            };
+
+            startupTimeoutId = setTimeout(() => {
+                const stderrContext = stderrBuffer.length > 0 
+                    ? ` stderr: ${stderrBuffer.join(' | ')}` 
+                    : '';
+                
+                this._logStructuredError('startup_timeout', {
+                    timeout: this.startupTimeout,
+                    stderrLines: stderrBuffer.length,
+                    stderr: stderrBuffer
+                });
+                
+                rejectOnce(
+                    new Error(
+                        `Extension ${this.extensionId} failed to start within ${this.startupTimeout}ms.${stderrContext}`
+                    )
+                );
             }, this.startupTimeout);
 
             try {
-                const mainFile = require('path').join(this.extensionPath, this.manifest.main);
+                const mainFile = path.join(this.extensionPath, this.manifest.main);
                 
                 this.process = spawn('node', [mainFile], {
                     stdio: ['pipe', 'pipe', 'pipe'],
@@ -186,18 +254,66 @@ class ExtensionProcess extends EventEmitter {
                 });
 
                 rlStderr.on('line', (line) => {
-                    this.emit('stderr', { extensionId: this.extensionId, line });
+                    stderrBuffer.push(line);
+                    if (stderrBuffer.length > maxStderrLines) {
+                        stderrBuffer.shift();
+                    }
+                    
+                    this._logStructuredError('stderr', {
+                        line,
+                        timestamp: new Date().toISOString()
+                    });
+                    
+                    this.emit('stderr', { 
+                        extensionId: this.extensionId, 
+                        line,
+                        timestamp: new Date().toISOString()
+                    });
                 });
 
                 this.process.on('error', (error) => {
-                    clearTimeout(startupTimeoutId);
-                    this.emit('error', { extensionId: this.extensionId, error: error.message });
-                    reject(error);
+                    this._logStructuredError('process_error', {
+                        error: error.message,
+                        code: error.code,
+                        errno: error.errno,
+                        stderr: stderrBuffer
+                    });
+                    
+                    this.emit('error', { 
+                        extensionId: this.extensionId, 
+                        error: error.message,
+                        code: error.code 
+                    });
+                    
+                    rejectOnce(error);
                 });
 
                 this.process.on('exit', (code, signal) => {
-                    clearTimeout(startupTimeoutId);
-                    const exitInfo = { extensionId: this.extensionId, code, signal };
+                    const exitInfo = { 
+                        extensionId: this.extensionId, 
+                        code, 
+                        signal,
+                        stderr: stderrBuffer.length > 0 ? stderrBuffer : undefined
+                    };
+                    
+                    if (!isResolved) {
+                        this._logStructuredError('premature_exit', {
+                            code,
+                            signal,
+                            stderr: stderrBuffer
+                        });
+                        
+                        const stderrContext = stderrBuffer.length > 0 
+                            ? ` stderr: ${stderrBuffer.join(' | ')}` 
+                            : '';
+                        
+                        rejectOnce(
+                            new Error(
+                                `Extension ${this.extensionId} exited prematurely (code: ${code}, signal: ${signal}).${stderrContext}`
+                            )
+                        );
+                    }
+                    
                     this.emit('exit', exitInfo);
                     
                     if (this.state === 'RUNNING') {
@@ -207,19 +323,90 @@ class ExtensionProcess extends EventEmitter {
 
                 this._sendRequest('init', { config: this.manifest.config || {} }, this.startupTimeout)
                     .then(() => {
-                        clearTimeout(startupTimeoutId);
-                        resolve();
+                        resolveOnce();
                     })
                     .catch((error) => {
-                        clearTimeout(startupTimeoutId);
-                        reject(error);
+                        this._logStructuredError('init_failed', {
+                            error: error.message,
+                            stderr: stderrBuffer
+                        });
+                        
+                        rejectOnce(error);
                     });
 
             } catch (error) {
-                clearTimeout(startupTimeoutId);
-                reject(error);
+                this._logStructuredError('spawn_exception', {
+                    error: error.message,
+                    stack: error.stack
+                });
+                
+                rejectOnce(error);
             }
         });
+    }
+
+    _validateManifest() {
+        const requiredFields = ['id', 'name', 'version', 'main'];
+        const missingFields = [];
+
+        for (const field of requiredFields) {
+            if (!this.manifest[field]) {
+                missingFields.push(field);
+            }
+        }
+
+        if (missingFields.length > 0) {
+            throw new Error(
+                `Invalid manifest for extension ${this.extensionId}: missing required fields: ${missingFields.join(', ')}`
+            );
+        }
+
+        if (typeof this.manifest.id !== 'string' || this.manifest.id.trim().length === 0) {
+            throw new Error(
+                `Invalid manifest for extension ${this.extensionId}: 'id' must be a non-empty string`
+            );
+        }
+
+        if (typeof this.manifest.name !== 'string' || this.manifest.name.trim().length === 0) {
+            throw new Error(
+                `Invalid manifest for extension ${this.extensionId}: 'name' must be a non-empty string`
+            );
+        }
+
+        if (typeof this.manifest.version !== 'string' || this.manifest.version.trim().length === 0) {
+            throw new Error(
+                `Invalid manifest for extension ${this.extensionId}: 'version' must be a non-empty string`
+            );
+        }
+
+        if (typeof this.manifest.main !== 'string' || this.manifest.main.trim().length === 0) {
+            throw new Error(
+                `Invalid manifest for extension ${this.extensionId}: 'main' must be a non-empty string`
+            );
+        }
+
+        const versionRegex = /^\d+\.\d+\.\d+/;
+        if (!versionRegex.test(this.manifest.version)) {
+            throw new Error(
+                `Invalid manifest for extension ${this.extensionId}: 'version' must follow semver format (e.g., 1.0.0)`
+            );
+        }
+    }
+
+    _logStructuredError(errorType, details) {
+        const logEntry = {
+            timestamp: new Date().toISOString(),
+            extensionId: this.extensionId,
+            errorType,
+            details,
+            state: this.state
+        };
+
+        this.emit('structured-error', logEntry);
+
+        if (this.options.enableErrorLogging !== false) {
+            console.error(`[Ghost Runtime Error] ${JSON.stringify(logEntry)}`);
+        }
     }
 
     _handleMessage(line) {
