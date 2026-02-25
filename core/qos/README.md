@@ -2,26 +2,41 @@
 
 ## Overview
 
-The Token Bucket traffic policing engine implements a two-rate three-color marker (trTCM) algorithm as specified in RFC 2698. It provides per-extension rate limiting with CIR-based token replenishment and three-color classification.
+The Token Bucket traffic policing engine implements a Single Rate Three-Color Marker (srTCM) algorithm as specified in RFC 2697. It provides per-extension rate limiting with CIR-based token replenishment and three-color classification.
 
 ## Architecture
 
-### Two-Rate Three-Color Token Bucket
+### Single Rate Three-Color Token Bucket (RFC 2697)
 
-The implementation uses two token buckets:
+The implementation uses two token buckets replenished at a single rate:
 
 - **Committed Bucket (Bc)**: Holds tokens for conforming traffic (green)
 - **Excess Bucket (Be)**: Holds tokens for exceeding traffic (yellow)
 
-Both buckets are replenished at the **Committed Information Rate (CIR)** measured in tokens per minute.
+Both buckets are replenished at the **Committed Information Rate (CIR)** measured in tokens per minute. This differs from RFC 2698's trTCM which uses two separate rates (CIR and PIR).
+
+### Token Replenishment with Bc-First Overflow
+
+RFC 2697 srTCM specifies that tokens are added to the committed bucket first, with overflow going to the excess bucket:
+
+1. Calculate tokens to add based on elapsed time: `tokens_to_add = (elapsed_seconds * CIR) / 60`
+2. Fill Bc up to its capacity
+3. Remaining tokens overflow to Be, capped at Be capacity
+
+This behavior ensures committed traffic always has priority, while allowing burst capacity for temporary spikes.
 
 ### Three-Color Classification
 
-Traffic is classified into three categories:
+Traffic is classified into three categories based on token consumption:
 
-1. **Conforming (Green)**: Traffic within the committed rate - tokens available in Bc
-2. **Exceeding (Yellow)**: Traffic above committed but within excess rate - tokens available in Be
-3. **Violating (Red)**: Traffic exceeding both committed and excess rates - no tokens available
+1. **Conforming (Green)**: Tokens consumed from Bc - traffic within committed rate
+2. **Exceeding (Yellow)**: Tokens consumed from Be when Bc exhausted - traffic above committed but within excess rate
+3. **Violating (Red)**: Both Bc and Be exhausted - traffic exceeding all rate limits
+
+The `classify()` method implements strict srTCM semantics:
+- First attempts to consume from Bc (green classification)
+- If Bc insufficient, attempts to consume from Be (yellow classification)
+- If both insufficient, marks as red (violating)
 
 ## Features
 
@@ -31,6 +46,7 @@ Tokens are added to both buckets at the CIR rate:
 - Formula: `tokens_to_add = (elapsed_seconds * CIR) / 60`
 - Committed tokens capped at Bc capacity
 - Excess tokens capped at Be capacity
+- Bc is filled first, then overflow goes to Be (RFC 2697 compliance)
 
 ### Per-Extension State Persistence
 
@@ -99,14 +115,14 @@ const policer = new TrafficPolicer({
 **`cleanup(extensionId)`**
 - Removes extension state and persists
 
-### TwoRateThreeColorTokenBucket
+### SingleRateThreeColorTokenBucket
 
 Low-level bucket implementation (typically not used directly).
 
 ```javascript
-const { TwoRateThreeColorTokenBucket } = require('./core/qos/token-bucket');
+const { SingleRateThreeColorTokenBucket } = require('./core/qos/token-bucket');
 
-const bucket = new TwoRateThreeColorTokenBucket({
+const bucket = new SingleRateThreeColorTokenBucket({
     cir: 60,      // 60 tokens/min
     bc: 100,      // Committed burst
     be: 200       // Excess burst
@@ -166,3 +182,4 @@ pipeline.resetTrafficPolicer('my-extension');
 - State persistence ensures rate limits survive process restarts
 - Token replenishment is time-based, not request-based (prevents gaming)
 - Separate buckets prevent burst abuse while allowing legitimate spikes
+- RFC 2697 compliant implementation ensures predictable traffic shaping behavior
