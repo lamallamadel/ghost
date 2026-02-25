@@ -7,7 +7,15 @@
   "capabilities": {
     "filesystem": {
       "read": ["**/*"],
-      "write": [".git/**", "package.json", ".ghost-versionrc", ".ghostignore", ".ghostrc", "~/.ghost*"]
+      "write": [
+        ".git/**",
+        "package.json",
+        ".ghost-versionrc",
+        ".ghostignore",
+        ".ghostrc",
+        "~/.ghost*",
+        "~/.ghost/audit.log"
+      ]
     },
     "network": {
       "allowlist": [
@@ -17,8 +25,12 @@
         "https://generativelanguage.googleapis.com"
       ],
       "rateLimit": {
+        "_comment_cir": "CIR (Committed Information Rate): 100000 bytes/min sustained rate for AI API calls. Supports typical LLM request/response sizes (2-10KB prompts, 5-50KB responses) at normal operation frequency (5-10 requests/min = 50-500KB/min sustained).",
         "cir": 100000,
-        "bc": 500000
+        "_comment_bc": "Bc (Burst Committed): 500000 bytes committed burst capacity (5x CIR). Accommodates burst scenarios like initial project analysis, batch commit generation, or large diff processing where 5-10 requests fire in quick succession before returning to sustained rate.",
+        "bc": 500000,
+        "_comment_be": "Be (Burst Excess): 1000000 bytes excess burst capacity (2x Bc). Handles exceptional spikes for large repository diffs (100KB+), comprehensive merge conflict AI analysis, or verbose AI responses during complex operations. Provides headroom for AI response variability without red-dropping legitimate traffic.",
+        "be": 1000000
       }
     },
     "git": {
@@ -26,5 +38,13 @@
       "write": true
     },
     "hooks": ["pre-commit", "commit-msg", "pre-push"]
-  }
+  },
+  "permissions": [
+    "filesystem:read",
+    "filesystem:write",
+    "network:https",
+    "git:read",
+    "git:write",
+    "process:spawn"
+  ]
 }
