@@ -58,7 +58,10 @@ class ExtensionProcess extends EventEmitter {
         
         for (const [requestId, request] of this.pendingRequests) {
             clearTimeout(request.timeoutId);
-            request.reject(new Error('Extension process stopped'));
+            const error = new Error('Extension process stopped');
+            error.code = -32603;
+            error.data = { reason: 'Extension shutdown' };
+            request.reject(error);
         }
         this.pendingRequests.clear();
 
@@ -410,36 +413,201 @@ class ExtensionProcess extends EventEmitter {
     }
 
     _handleMessage(line) {
+        let message;
+        
         try {
-            const message = JSON.parse(line);
-            
-            if (message.id && this.pendingRequests.has(message.id)) {
-                const request = this.pendingRequests.get(message.id);
-                clearTimeout(request.timeoutId);
-                this.pendingRequests.delete(message.id);
-
-                if (message.error) {
-                    request.reject(new Error(message.error.message || 'Unknown error'));
-                } else {
-                    request.resolve(message.result);
-                }
-            } else if (message.method === 'heartbeat') {
-                this.lastHeartbeat = Date.now();
-                this._sendResponse(message.id, { alive: true });
-            } else if (message.method) {
-                this.emit('notification', {
-                    extensionId: this.extensionId,
-                    method: message.method,
-                    params: message.params
-                });
-            }
+            message = JSON.parse(line);
         } catch (error) {
+            this._sendErrorResponse(null, -32700, 'Parse error', { 
+                originalMessage: line.substring(0, 100),
+                parseError: error.message 
+            });
             this.emit('error', {
                 extensionId: this.extensionId,
-                error: `Failed to parse message: ${error.message}`,
-                line
+                error: `JSON-RPC Parse error: ${error.message}`,
+                line: line.substring(0, 100)
+            });
+            return;
+        }
+
+        const validationError = this._validateJsonRpcMessage(message);
+        if (validationError) {
+            this._sendErrorResponse(
+                typeof message.id !== 'undefined' ? message.id : null,
+                validationError.code,
+                validationError.message,
+                validationError.data
+            );
+            this.emit('error', {
+                extensionId: this.extensionId,
+                error: `JSON-RPC validation error: ${validationError.message}`,
+                message
+            });
+            return;
+        }
+
+        if (this._isResponse(message)) {
+            this._handleResponse(message);
+        } else if (this._isRequest(message)) {
+            this._handleRequest(message);
+        } else if (this._isNotification(message)) {
+            this._handleNotification(message);
+        }
+    }
+
+    _validateJsonRpcMessage(message) {
+        if (typeof message !== 'object' || message === null) {
+            return {
+                code: -32600,
+                message: 'Invalid Request',
+                data: { reason: 'Message must be an object' }
+            };
+        }
+
+        if (message.jsonrpc !== '2.0') {
+            return {
+                code: -32600,
+                message: 'Invalid Request',
+                data: { reason: 'Missing or invalid "jsonrpc" field (must be "2.0")' }
+            };
+        }
+
+        const hasMethod = 'method' in message;
+        const hasResult = 'result' in message;
+        const hasError = 'error' in message;
+        const hasId = 'id' in message;
+
+        if (hasMethod) {
+            if (typeof message.method !== 'string') {
+                return {
+                    code: -32600,
+                    message: 'Invalid Request',
+                    data: { reason: '"method" must be a string' }
+                };
+            }
+            if (message.method.startsWith('rpc.')) {
+                return {
+                    code: -32600,
+                    message: 'Invalid Request',
+                    data: { reason: 'Method names starting with "rpc." are reserved' }
+                };
+            }
+            if (hasId && message.id !== null && typeof message.id !== 'string' && typeof message.id !== 'number') {
+                return {
+                    code: -32600,
+                    message: 'Invalid Request',
+                    data: { reason: '"id" must be a string, number, or null' }
+                };
+            }
+        } else if (hasResult || hasError) {
+            if (!hasId) {
+                return {
+                    code: -32600,
+                    message: 'Invalid Request',
+                    data: { reason: 'Response must have "id" field' }
+                };
+            }
+            if (hasResult && hasError) {
+                return {
+                    code: -32600,
+                    message: 'Invalid Request',
+                    data: { reason: 'Response cannot have both "result" and "error"' }
+                };
+            }
+            if (!hasResult && !hasError) {
+                return {
+                    code: -32600,
+                    message: 'Invalid Request',
+                    data: { reason: 'Response must have either "result" or "error"' }
+                };
+            }
+            if (hasError) {
+                if (typeof message.error !== 'object' || message.error === null) {
+                    return {
+                        code: -32600,
+                        message: 'Invalid Request',
+                        data: { reason: '"error" must be an object' }
+                    };
+                }
+                if (typeof message.error.code !== 'number') {
+                    return {
+                        code: -32600,
+                        message: 'Invalid Request',
+                        data: { reason: '"error.code" must be a number' }
+                    };
+                }
+                if (typeof message.error.message !== 'string') {
+                    return {
+                        code: -32600,
+                        message: 'Invalid Request',
+                        data: { reason: '"error.message" must be a string' }
+                    };
+                }
+            }
+        } else {
+            return {
+                code: -32600,
+                message: 'Invalid Request',
+                data: { reason: 'Message must have "method" (request/notification) or "result"/"error" (response)' }
+            };
+        }
+
+        return null;
+    }
+
+    _isResponse(message) {
+        return ('result' in message || 'error' in message) && 'id' in message;
+    }
+
+    _isRequest(message) {
+        return 'method' in message && 'id' in message;
+    }
+
+    _isNotification(message) {
+        return 'method' in message && !('id' in message);
+    }
+
+    _handleResponse(message) {
+        if (!this.pendingRequests.has(message.id)) {
+            this.emit('error', {
+                extensionId: this.extensionId,
+                error: 'Received response for unknown request ID',
+                responseId: message.id
+            });
+            return;
+        }
+
+        const request = this.pendingRequests.get(message.id);
+        clearTimeout(request.timeoutId);
+        this.pendingRequests.delete(message.id);
+
+        if (message.error) {
+            const error = new Error(message.error.message || 'Unknown error');
+            error.code = message.error.code;
+            error.data = message.error.data;
+            request.reject(error);
+        } else {
+            request.resolve(message.result);
+        }
+    }
+
+    _handleRequest(message) {
+        if (message.method === 'heartbeat') {
+            this.lastHeartbeat = Date.now();
+            this._sendResponse(message.id, { alive: true });
+        } else {
+            this._sendErrorResponse(message.id, -32601, 'Method not found', {
+                method: message.method
             });
         }
+    }
+
+    _handleNotification(message) {
+        this.emit('notification', {
+            extensionId: this.extensionId,
+            method: message.method,
+            params: message.params
+        });
     }
 
     _sendRequest(method, params = {}, timeout = null) {
@@ -449,12 +617,31 @@ class ExtensionProcess extends EventEmitter {
                 return;
             }
 
+            if (typeof method !== 'string' || method.length === 0) {
+                reject(new Error('Method must be a non-empty string'));
+                return;
+            }
+
+            if (method.startsWith('rpc.')) {
+                reject(new Error('Method names starting with "rpc." are reserved'));
+                return;
+            }
+
             const requestId = this.nextRequestId++;
             const requestTimeout = timeout || this.responseTimeout;
 
             const timeoutId = setTimeout(() => {
-                this.pendingRequests.delete(requestId);
-                reject(new Error(`Request timeout for method ${method} after ${requestTimeout}ms`));
+                if (this.pendingRequests.has(requestId)) {
+                    this.pendingRequests.delete(requestId);
+                    const error = new Error(`Request timeout for method ${method} after ${requestTimeout}ms`);
+                    error.code = -32603;
+                    error.data = { 
+                        method, 
+                        timeout: requestTimeout,
+                        requestId 
+                    };
+                    reject(error);
+                }
             }, requestTimeout);
 
             this.pendingRequests.set(requestId, {
@@ -473,17 +660,25 @@ class ExtensionProcess extends EventEmitter {
             };
 
             try {
-                this.process.stdin.write(JSON.stringify(envelope) + '\n');
+                const messageStr = JSON.stringify(envelope);
+                this.process.stdin.write(messageStr + '\n');
             } catch (error) {
                 clearTimeout(timeoutId);
                 this.pendingRequests.delete(requestId);
-                reject(error);
+                const wrappedError = new Error(`Failed to send request: ${error.message}`);
+                wrappedError.code = -32603;
+                wrappedError.data = { method, originalError: error.message };
+                reject(wrappedError);
             }
         });
     }
 
     _sendResponse(id, result) {
         if (!this.process || this.process.killed) {
+            return;
+        }
+
+        if (id === null || id === undefined) {
             return;
         }
 
@@ -494,11 +689,44 @@ class ExtensionProcess extends EventEmitter {
         };
 
         try {
-            this.process.stdin.write(JSON.stringify(envelope) + '\n');
+            const messageStr = JSON.stringify(envelope);
+            this.process.stdin.write(messageStr + '\n');
         } catch (error) {
             this.emit('error', {
                 extensionId: this.extensionId,
-                error: `Failed to send response: ${error.message}`
+                error: `Failed to send response: ${error.message}`,
+                id
+            });
+        }
+    }
+
+    _sendErrorResponse(id, code, message, data = undefined) {
+        if (!this.process || this.process.killed) {
+            return;
+        }
+
+        const envelope = {
+            jsonrpc: '2.0',
+            id: id !== undefined ? id : null,
+            error: {
+                code,
+                message
+            }
+        };
+
+        if (data !== undefined) {
+            envelope.error.data = data;
+        }
+
+        try {
+            const messageStr = JSON.stringify(envelope);
+            this.process.stdin.write(messageStr + '\n');
+        } catch (error) {
+            this.emit('error', {
+                extensionId: this.extensionId,
+                error: `Failed to send error response: ${error.message}`,
+                id,
+                errorCode: code
             });
         }
     }
