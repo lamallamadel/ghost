@@ -404,5 +404,6 @@ module.exports = {
     PermissionChecker,
     RateLimitManager,
     TokenBucket,
-    TrafficPolicer
+    TrafficPolicer,
+    GlobMatcher
 };

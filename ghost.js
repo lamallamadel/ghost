@@ -7,6 +7,7 @@ const Gateway = require('./core/gateway');
 const { ExtensionRuntime } = require('./core/runtime');
 const { IOPipeline, instrumentPipeline } = require('./core/pipeline');
 const { AuditLogger } = require('./core/pipeline/audit');
+const { GlobMatcher } = require('./core/pipeline/auth');
 
 const USER_EXTENSIONS_DIR = path.join(os.homedir(), '.ghost', 'extensions');
 const BUNDLED_EXTENSIONS_DIR = path.join(__dirname, 'extensions');
@@ -1795,12 +1796,38 @@ See [Extension API Documentation](https://github.com/lamallamadel/ghost/blob/mai
                 const fs_cap = manifest.capabilities.filesystem;
                 if (fs_cap.read && Array.isArray(fs_cap.read)) {
                     console.log(`  ${Colors.DIM}- Filesystem read: ${fs_cap.read.length} pattern(s)${Colors.ENDC}`);
+                    
+                    fs_cap.read.forEach(pattern => {
+                        try {
+                            GlobMatcher.match('test/file.txt', pattern);
+                            
+                            if (pattern === '**/*' || pattern === '**') {
+                                warnings.push(`Filesystem read pattern "${pattern}" is overly permissive (matches all files)`);
+                            }
+                        } catch (e) {
+                            errors.push(`Invalid filesystem read glob pattern: "${pattern}" - ${e.message}`);
+                        }
+                    });
                 }
                 if (fs_cap.write && Array.isArray(fs_cap.write)) {
                     console.log(`  ${Colors.DIM}- Filesystem write: ${fs_cap.write.length} pattern(s)${Colors.ENDC}`);
                     if (fs_cap.write.length > 0) {
                         warnings.push('Extension requests write access to filesystem');
                     }
+                    
+                    fs_cap.write.forEach(pattern => {
+                        try {
+                            GlobMatcher.match('test/file.txt', pattern);
+                            
+                            if (pattern === '**/*' || pattern === '**') {
+                                warnings.push(`Filesystem write pattern "${pattern}" is DANGEROUS - allows writing to all files`);
+                            } else if (pattern === '*' || pattern === '/*') {
+                                warnings.push(`Filesystem write pattern "${pattern}" is overly permissive`);
+                            }
+                        } catch (e) {
+                            errors.push(`Invalid filesystem write glob pattern: "${pattern}" - ${e.message}`);
+                        }
+                    });
                 }
             }
 
@@ -1811,6 +1838,24 @@ See [Extension API Documentation](https://github.com/lamallamadel/ghost/blob/mai
                     net_cap.allowlist.forEach(url => {
                         if (!/^https?:\/\/[^/]+$/.test(url)) {
                             errors.push(`Invalid network allowlist entry: ${url} (must be protocol + domain only)`);
+                        } else {
+                            try {
+                                const parsedUrl = new URL(url);
+                                const hostname = parsedUrl.hostname;
+                                
+                                if (!hostname || hostname === 'localhost' || /^127\.\d+\.\d+\.\d+$/.test(hostname) || /^0\.0\.0\.0$/.test(hostname)) {
+                                    warnings.push(`Network allowlist entry "${url}" uses localhost or loopback address`);
+                                } else if (/^\d+\.\d+\.\d+\.\d+$/.test(hostname)) {
+                                    warnings.push(`Network allowlist entry "${url}" uses IP address instead of domain name`);
+                                } else {
+                                    const domainParts = hostname.split('.');
+                                    if (domainParts.length < 2 || domainParts.some(part => part === '')) {
+                                        errors.push(`Network allowlist entry "${url}" has invalid domain structure`);
+                                    }
+                                }
+                            } catch (e) {
+                                errors.push(`Network allowlist entry "${url}" is not a valid URL`);
+                            }
                         }
                     });
                 }
@@ -1820,6 +1865,25 @@ See [Extension API Documentation](https://github.com/lamallamadel/ghost/blob/mai
                     }
                     if (net_cap.rateLimit.be !== undefined && typeof net_cap.rateLimit.be !== 'number') {
                         errors.push('Network rate limit "be" must be a number if specified');
+                    }
+                    
+                    if (!net_cap.rateLimit.be) {
+                        errors.push('Network rate limit missing required "be" (excess burst size) parameter');
+                    }
+                    
+                    if (net_cap.rateLimit.be && net_cap.rateLimit.bc && net_cap.rateLimit.be < net_cap.rateLimit.bc) {
+                        warnings.push(`Network rate limit: Be (${net_cap.rateLimit.be}) is less than Bc (${net_cap.rateLimit.bc}). This means no burst capacity above committed rate.`);
+                    }
+                    
+                    if (net_cap.rateLimit.cir && net_cap.rateLimit.bc) {
+                        const refillTimeSeconds = (net_cap.rateLimit.bc / net_cap.rateLimit.cir) * 60;
+                        const tokensPerSecond = net_cap.rateLimit.cir / 60;
+                        console.log(`  ${Colors.DIM}- Rate limit simulation:${Colors.ENDC}`);
+                        console.log(`    ${Colors.DIM}CIR: ${net_cap.rateLimit.cir} tokens/min (${tokensPerSecond.toFixed(2)} tokens/sec)${Colors.ENDC}`);
+                        console.log(`    ${Colors.DIM}Bc (committed burst): ${net_cap.rateLimit.bc} tokens${Colors.ENDC}`);
+                        console.log(`    ${Colors.DIM}Be (excess burst): ${net_cap.rateLimit.be || 0} bytes${Colors.ENDC}`);
+                        console.log(`    ${Colors.DIM}Bucket refills to capacity in: ${refillTimeSeconds.toFixed(1)}s${Colors.ENDC}`);
+                        console.log(`    ${Colors.DIM}Sustained rate: 1 request every ${(60 / net_cap.rateLimit.cir).toFixed(2)}s${Colors.ENDC}`);
                     }
                 }
             }
@@ -1836,7 +1900,32 @@ See [Extension API Documentation](https://github.com/lamallamadel/ghost/blob/mai
             }
 
             if (manifest.capabilities.hooks && Array.isArray(manifest.capabilities.hooks)) {
+                const ALLOWED_HOOKS = [
+                    'pre-commit',
+                    'commit-msg',
+                    'pre-push',
+                    'post-merge',
+                    'pre-rebase',
+                    'post-checkout',
+                    'post-commit',
+                    'pre-applypatch',
+                    'post-applypatch',
+                    'pre-receive',
+                    'post-receive',
+                    'update'
+                ];
+                
                 console.log(`  ${Colors.DIM}- Git hooks: ${manifest.capabilities.hooks.join(', ')}${Colors.ENDC}`);
+                
+                manifest.capabilities.hooks.forEach(hook => {
+                    if (!ALLOWED_HOOKS.includes(hook)) {
+                        errors.push(`Invalid git hook: "${hook}". Allowed hooks are: ${ALLOWED_HOOKS.join(', ')}`);
+                    }
+                });
+                
+                if (manifest.capabilities.hooks.length === 0) {
+                    warnings.push('Git hooks capability declared but no hooks specified');
+                }
             }
         }
 
