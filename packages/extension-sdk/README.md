@@ -1890,6 +1890,115 @@ module.exports = CodeAnalyzer;
 - [Manifest Reference](https://github.com/lamallamadel/ghost/blob/main/core/MANIFEST_REFERENCE.md)
 - [Extension Development Guide](https://github.com/lamallamadel/ghost/blob/main/core/EXTENSION_GUIDE.md)
 
+## Publishing Checklist
+
+Before publishing a new version of `@ghost/extension-sdk` to npm, complete the following steps:
+
+### Pre-Publish Verification
+
+1. **Run Tests**
+   ```bash
+   npm test
+   ```
+   Ensure all tests pass before proceeding.
+
+2. **Bump Version**
+   ```bash
+   npm version patch  # for bug fixes
+   npm version minor  # for new features
+   npm version major  # for breaking changes
+   ```
+   This updates `package.json` and creates a git tag.
+
+3. **Update Changelog**
+   - Move changes from `[Unreleased]` section to new version section in `CHANGELOG.md`
+   - Add release date in format `[X.Y.Z] - YYYY-MM-DD`
+   - Follow [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) format
+   - Update version comparison links at bottom of file
+
+4. **Validate TypeScript Definitions**
+   ```bash
+   # Verify .d.ts files are present and valid
+   ls -la index.d.ts lib/*.d.ts
+   ```
+   Ensure all TypeScript definition files exist.
+
+5. **Verify Package Contents**
+   ```bash
+   npm pack --dry-run
+   ```
+   Review the list of files that will be included in the package.
+
+6. **Test Local Installation**
+   ```bash
+   npm pack
+   npm install -g ghost-extension-sdk-*.tgz
+   # Test the package works as expected
+   ```
+
+7. **Review Documentation**
+   - Ensure README.md is up to date
+   - Verify all API examples work
+   - Check that links are not broken
+
+8. **Check Git Status**
+   ```bash
+   git status
+   ```
+   Ensure CHANGELOG.md updates are committed.
+
+### Publishing
+
+#### Automated (Recommended)
+
+Push a version tag to trigger automated publishing via GitHub Actions:
+
+```bash
+git push origin main
+git push origin v1.0.0  # Replace with your version
+```
+
+The GitHub workflow will automatically:
+- Validate the package
+- Run the prepublishOnly hook
+- Publish to npm registry
+
+#### Manual
+
+If manual publishing is needed:
+
+```bash
+npm publish --access public
+```
+
+### Post-Publish Verification
+
+1. **Verify on npm**
+   ```bash
+   npm view @ghost/extension-sdk
+   ```
+   Check that the new version appears on npm registry.
+
+2. **Test Installation**
+   ```bash
+   npm install @ghost/extension-sdk@latest
+   ```
+   Verify the package can be installed from npm.
+
+3. **Create GitHub Release**
+   - Go to GitHub releases page
+   - Create release from version tag
+   - Copy changelog entries to release notes
+
+### Prepublish Hook
+
+The `prepublishOnly` script automatically validates:
+- Version is set (not 0.0.0)
+- Required files exist (index.js, index.d.ts)
+- Package structure is valid
+
+This hook runs automatically before `npm publish` to prevent publishing invalid packages.
+
 ## License
 
 MIT

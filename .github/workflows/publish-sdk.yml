@@ -1,0 +1,119 @@
+name: Publish Extension SDK
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Extract version from tag
+        id: version
+        run: |
+          TAG=${GITHUB_REF#refs/tags/v}
+          echo "VERSION=$TAG" >> $GITHUB_OUTPUT
+          echo "Publishing version: $TAG"
+
+      - name: Verify package version matches tag
+        working-directory: ./packages/extension-sdk
+        run: |
+          PACKAGE_VERSION=$(node -p "require('./package.json').version")
+          if [ "$PACKAGE_VERSION" != "${{ steps.version.outputs.VERSION }}" ]; then
+            echo "Error: package.json version ($PACKAGE_VERSION) does not match git tag (${{ steps.version.outputs.VERSION }})"
+            exit 1
+          fi
+          echo "✓ Version verified: $PACKAGE_VERSION"
+
+      - name: Install dependencies
+        working-directory: ./packages/extension-sdk
+        run: npm install --ignore-scripts
+
+      - name: Validate package structure
+        working-directory: ./packages/extension-sdk
+        run: |
+          echo "Validating required files..."
+          test -f index.js || { echo "Missing index.js"; exit 1; }
+          test -f index.d.ts || { echo "Missing index.d.ts"; exit 1; }
+          test -f lib/sdk.js || { echo "Missing lib/sdk.js"; exit 1; }
+          test -f lib/sdk.d.ts || { echo "Missing lib/sdk.d.ts"; exit 1; }
+          test -f lib/rpc-client.js || { echo "Missing lib/rpc-client.js"; exit 1; }
+          test -f lib/rpc-client.d.ts || { echo "Missing lib/rpc-client.d.ts"; exit 1; }
+          test -f lib/intent-builder.js || { echo "Missing lib/intent-builder.js"; exit 1; }
+          test -f lib/intent-builder.d.ts || { echo "Missing lib/intent-builder.d.ts"; exit 1; }
+          test -f lib/errors.js || { echo "Missing lib/errors.js"; exit 1; }
+          test -f README.md || { echo "Missing README.md"; exit 1; }
+          test -f LICENSE || { echo "Missing LICENSE"; exit 1; }
+          test -f CHANGELOG.md || { echo "Missing CHANGELOG.md"; exit 1; }
+          echo "✓ All required files present"
+
+      - name: Check CHANGELOG updated
+        working-directory: ./packages/extension-sdk
+        run: |
+          if grep -q "## \[${{ steps.version.outputs.VERSION }}\]" CHANGELOG.md; then
+            echo "✓ CHANGELOG.md includes version ${{ steps.version.outputs.VERSION }}"
+          else
+            echo "Error: CHANGELOG.md does not include version ${{ steps.version.outputs.VERSION }}"
+            exit 1
+          fi
+
+      - name: Verify package contents
+        working-directory: ./packages/extension-sdk
+        run: |
+          echo "Verifying package contents with npm pack --dry-run..."
+          npm pack --dry-run
+
+      - name: Run prepublishOnly validation
+        working-directory: ./packages/extension-sdk
+        run: npm run prepublishOnly
+
+      - name: Publish to npm
+        working-directory: ./packages/extension-sdk
+        run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Verify publication
+        run: |
+          echo "Waiting for npm registry to update..."
+          sleep 10
+          PUBLISHED_VERSION=$(npm view @ghost/extension-sdk version 2>/dev/null || echo "")
+          if [ "$PUBLISHED_VERSION" = "${{ steps.version.outputs.VERSION }}" ]; then
+            echo "✓ Successfully published @ghost/extension-sdk@${{ steps.version.outputs.VERSION }}"
+          else
+            echo "Warning: Could not verify publication (got version: $PUBLISHED_VERSION)"
+          fi
+
+      - name: Create GitHub Release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref }}
+          release_name: Extension SDK ${{ steps.version.outputs.VERSION }}
+          body: |
+            Published @ghost/extension-sdk@${{ steps.version.outputs.VERSION }} to npm.
+            
+            Install via:
+            ```bash
+            npm install @ghost/extension-sdk@${{ steps.version.outputs.VERSION }}
+            ```
+            
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/packages/extension-sdk/CHANGELOG.md) for full release notes.
+          draft: false
+          prerelease: false
