@@ -1,8 +1,9 @@
 class RPCClient {
-    constructor(extensionId) {
+    constructor(extensionId, options = {}) {
         this.extensionId = extensionId;
         this.pendingRequests = new Map();
         this.requestCounter = 0;
+        this.timeout = options.timeout || 30000;
         
         if (process.send) {
             process.on('message', (message) => this._handleResponse(message));
@@ -31,7 +32,7 @@ class RPCClient {
             const timeout = setTimeout(() => {
                 this.pendingRequests.delete(requestId);
                 reject(new Error('Request timeout'));
-            }, 30000);
+            }, this.timeout);
 
             this.pendingRequests.get(requestId).timeout = timeout;
 
@@ -59,7 +60,7 @@ class RPCClient {
 
             const timeout = setTimeout(() => {
                 reject(new Error('Request timeout'));
-            }, 30000);
+            }, this.timeout);
 
             const responseHandler = (data) => {
                 try {

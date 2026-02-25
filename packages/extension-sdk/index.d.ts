@@ -39,6 +39,31 @@ export interface GitExecParams {
     args?: string[];
 }
 
+export interface SDKOptions {
+    timeout?: number;
+}
+
+export class IntentError extends Error {
+    code?: string;
+    stage?: string;
+    requestId?: string;
+    constructor(message: string, code?: string, stage?: string, requestId?: string);
+}
+
+export class ValidationError extends Error {
+    code: string;
+    stage: string;
+    requestId?: string;
+    constructor(message: string, code?: string, stage?: string, requestId?: string);
+}
+
+export class RateLimitError extends Error {
+    code: string;
+    stage: string;
+    requestId?: string;
+    constructor(message: string, code?: string, stage?: string, requestId?: string);
+}
+
 export class IntentBuilder {
     constructor(extensionId: string);
     filesystem(operation: string, params: Record<string, any>): IntentParams;
@@ -48,15 +73,18 @@ export class IntentBuilder {
 }
 
 export class RPCClient {
-    constructor(extensionId: string);
+    constructor(extensionId: string, options?: SDKOptions);
     send(intent: IntentParams): Promise<IntentResponse>;
     sendBatch(intents: IntentParams[]): Promise<IntentResponse[]>;
 }
 
 export class ExtensionSDK {
-    constructor(extensionId: string);
+    constructor(extensionId: string, options?: SDKOptions);
     
     emitIntent(intent: IntentParams): Promise<IntentResponse>;
+    
+    requestBatch(requests: IntentParams[]): Promise<IntentResponse[]>;
+    requestFileReadBatch(paths: string[]): Promise<string[]>;
     
     requestFileRead(params: FileReadParams): Promise<string>;
     requestFileWrite(params: FileWriteParams): Promise<void>;

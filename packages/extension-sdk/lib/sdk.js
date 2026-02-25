@@ -1,20 +1,21 @@
 const { IntentBuilder } = require('./intent-builder');
 const { RPCClient } = require('./rpc-client');
+const { IntentError, ValidationError, RateLimitError } = require('./errors');
 
 class ExtensionSDK {
-    constructor(extensionId) {
+    constructor(extensionId, options = {}) {
         if (!extensionId || typeof extensionId !== 'string') {
-            throw new Error('Extension ID is required');
+            throw new ValidationError('Extension ID is required', 'MISSING_EXTENSION_ID', 'initialization');
         }
         
         this.extensionId = extensionId;
-        this.rpcClient = new RPCClient(extensionId);
+        this.rpcClient = new RPCClient(extensionId, options);
         this.intentBuilder = new IntentBuilder(extensionId);
     }
 
     async emitIntent(intent) {
         if (!intent || typeof intent !== 'object') {
-            throw new Error('Intent must be an object');
+            throw new ValidationError('Intent must be an object', 'INVALID_INTENT', 'validation');
         }
 
         const fullIntent = {
@@ -23,124 +24,219 @@ class ExtensionSDK {
             requestId: intent.requestId || this._generateRequestId()
         };
 
-        return await this.rpcClient.send(fullIntent);
+        try {
+            return await this.rpcClient.send(fullIntent);
+        } catch (error) {
+            throw this._handleError(error, fullIntent.requestId);
+        }
+    }
+
+    async requestBatch(requests) {
+        if (!Array.isArray(requests)) {
+            throw new ValidationError('Requests must be an array', 'INVALID_BATCH_REQUEST', 'validation');
+        }
+
+        if (requests.length === 0) {
+            return [];
+        }
+
+        for (const request of requests) {
+            if (!request || typeof request !== 'object') {
+                throw new ValidationError('Each request must be an object', 'INVALID_BATCH_REQUEST_ITEM', 'validation');
+            }
+        }
+
+        const intents = requests.map(request => ({
+            ...request,
+            extensionId: this.extensionId,
+            requestId: request.requestId || this._generateRequestId()
+        }));
+
+        try {
+            return await this.rpcClient.sendBatch(intents);
+        } catch (error) {
+            throw this._handleError(error);
+        }
+    }
+
+    async requestFileReadBatch(paths) {
+        if (!Array.isArray(paths)) {
+            throw new ValidationError('Paths must be an array', 'INVALID_PATHS', 'validation');
+        }
+
+        if (paths.length === 0) {
+            return [];
+        }
+
+        for (const path of paths) {
+            if (!path || typeof path !== 'string') {
+                throw new ValidationError('Each path must be a non-empty string', 'INVALID_PATH', 'validation');
+            }
+        }
+
+        const intents = paths.map(path => 
+            this.intentBuilder.filesystem('read', { path, encoding: 'utf8' })
+        );
+
+        try {
+            const responses = await this.rpcClient.sendBatch(intents);
+            
+            return responses.map((response, index) => {
+                if (!response.success) {
+                    throw this._createErrorFromResponse(response, intents[index].requestId);
+                }
+                return response.result;
+            });
+        } catch (error) {
+            throw this._handleError(error);
+        }
     }
 
     async requestFileRead(params) {
         const { path, encoding = 'utf8' } = params;
         
         if (!path || typeof path !== 'string') {
-            throw new Error('File path is required');
+            throw new ValidationError('File path is required', 'MISSING_FILE_PATH', 'validation');
         }
 
         const intent = this.intentBuilder.filesystem('read', { path, encoding });
-        const response = await this.rpcClient.send(intent);
+        
+        try {
+            const response = await this.rpcClient.send(intent);
 
-        if (!response.success) {
-            throw new Error(response.error || 'File read failed');
+            if (!response.success) {
+                throw this._createErrorFromResponse(response, intent.requestId);
+            }
+
+            return response.result;
+        } catch (error) {
+            throw this._handleError(error, intent.requestId);
         }
-
-        return response.result;
     }
 
     async requestFileWrite(params) {
         const { path, content, encoding = 'utf8' } = params;
         
         if (!path || typeof path !== 'string') {
-            throw new Error('File path is required');
+            throw new ValidationError('File path is required', 'MISSING_FILE_PATH', 'validation');
         }
 
         if (content === undefined) {
-            throw new Error('File content is required');
+            throw new ValidationError('File content is required', 'MISSING_FILE_CONTENT', 'validation');
         }
 
         const intent = this.intentBuilder.filesystem('write', { path, content, encoding });
-        const response = await this.rpcClient.send(intent);
+        
+        try {
+            const response = await this.rpcClient.send(intent);
 
-        if (!response.success) {
-            throw new Error(response.error || 'File write failed');
+            if (!response.success) {
+                throw this._createErrorFromResponse(response, intent.requestId);
+            }
+
+            return response.result;
+        } catch (error) {
+            throw this._handleError(error, intent.requestId);
         }
-
-        return response.result;
     }
 
     async requestFileReadDir(params) {
         const { path } = params;
         
         if (!path || typeof path !== 'string') {
-            throw new Error('Directory path is required');
+            throw new ValidationError('Directory path is required', 'MISSING_DIRECTORY_PATH', 'validation');
         }
 
         const intent = this.intentBuilder.filesystem('readdir', { path });
-        const response = await this.rpcClient.send(intent);
+        
+        try {
+            const response = await this.rpcClient.send(intent);
 
-        if (!response.success) {
-            throw new Error(response.error || 'Directory read failed');
+            if (!response.success) {
+                throw this._createErrorFromResponse(response, intent.requestId);
+            }
+
+            return response.result;
+        } catch (error) {
+            throw this._handleError(error, intent.requestId);
         }
-
-        return response.result;
     }
 
     async requestFileStat(params) {
         const { path } = params;
         
         if (!path || typeof path !== 'string') {
-            throw new Error('File path is required');
+            throw new ValidationError('File path is required', 'MISSING_FILE_PATH', 'validation');
         }
 
         const intent = this.intentBuilder.filesystem('stat', { path });
-        const response = await this.rpcClient.send(intent);
+        
+        try {
+            const response = await this.rpcClient.send(intent);
 
-        if (!response.success) {
-            throw new Error(response.error || 'File stat failed');
+            if (!response.success) {
+                throw this._createErrorFromResponse(response, intent.requestId);
+            }
+
+            return response.result;
+        } catch (error) {
+            throw this._handleError(error, intent.requestId);
         }
-
-        return response.result;
     }
 
     async requestNetworkCall(params) {
         const { url, method = 'GET', headers = {}, body } = params;
         
         if (!url || typeof url !== 'string') {
-            throw new Error('URL is required');
+            throw new ValidationError('URL is required', 'MISSING_URL', 'validation');
         }
 
         try {
             new URL(url);
         } catch (e) {
-            throw new Error(`Invalid URL: ${url}`);
+            throw new ValidationError(`Invalid URL: ${url}`, 'INVALID_URL', 'validation');
         }
 
         const operation = method.toLowerCase();
         const intent = this.intentBuilder.network(operation, { url, method, headers, body });
-        const response = await this.rpcClient.send(intent);
+        
+        try {
+            const response = await this.rpcClient.send(intent);
 
-        if (!response.success) {
-            throw new Error(response.error || 'Network call failed');
+            if (!response.success) {
+                throw this._createErrorFromResponse(response, intent.requestId);
+            }
+
+            return response.result;
+        } catch (error) {
+            throw this._handleError(error, intent.requestId);
         }
-
-        return response.result;
     }
 
     async requestGitExec(params) {
         const { operation, args = [] } = params;
         
         if (!operation || typeof operation !== 'string') {
-            throw new Error('Git operation is required');
+            throw new ValidationError('Git operation is required', 'MISSING_GIT_OPERATION', 'validation');
         }
 
         if (!Array.isArray(args)) {
-            throw new Error('Git args must be an array');
+            throw new ValidationError('Git args must be an array', 'INVALID_GIT_ARGS', 'validation');
         }
 
         const intent = this.intentBuilder.git(operation, { args });
-        const response = await this.rpcClient.send(intent);
+        
+        try {
+            const response = await this.rpcClient.send(intent);
 
-        if (!response.success) {
-            throw new Error(response.error || 'Git operation failed');
+            if (!response.success) {
+                throw this._createErrorFromResponse(response, intent.requestId);
+            }
+
+            return response.result;
+        } catch (error) {
+            throw this._handleError(error, intent.requestId);
         }
-
-        return response.result;
     }
 
     async requestGitStatus(args = []) {
@@ -161,6 +257,35 @@ class ExtensionSDK {
 
     _generateRequestId() {
         return `${this.extensionId}-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    }
+
+    _createErrorFromResponse(response, requestId) {
+        const errorMessage = response.error || 'Request failed';
+        const errorCode = response.code;
+        const errorStage = response.stage;
+        const responseRequestId = response.requestId || requestId;
+
+        if (errorCode === 'RATE_LIMIT_EXCEEDED' || errorStage === 'rate-limit') {
+            return new RateLimitError(errorMessage, errorCode, errorStage, responseRequestId);
+        }
+
+        if (errorStage === 'validation' || errorCode && errorCode.includes('VALIDATION')) {
+            return new ValidationError(errorMessage, errorCode, errorStage, responseRequestId);
+        }
+
+        return new IntentError(errorMessage, errorCode, errorStage, responseRequestId);
+    }
+
+    _handleError(error, requestId) {
+        if (error instanceof IntentError || error instanceof ValidationError || error instanceof RateLimitError) {
+            return error;
+        }
+
+        if (error.message === 'Request timeout') {
+            return new IntentError('Request timeout', 'TIMEOUT', 'transport', requestId);
+        }
+
+        return new IntentError(error.message || 'Unknown error', 'UNKNOWN_ERROR', 'unknown', requestId);
     }
 }
 
