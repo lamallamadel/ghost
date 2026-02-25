@@ -34,10 +34,33 @@ class ExtensionProcess extends EventEmitter {
         this.shutdownTimer = null;
         this.killTimer = null;
         
+        this.heartbeatPingInterval = options.heartbeatPingInterval || 15000;
+        this.heartbeatPongTimeout = options.heartbeatPongTimeout || 30000;
+        this.degradedThreshold = options.degradedThreshold || 2000;
+        this.consecutiveFailureLimit = options.consecutiveFailureLimit || 3;
+        
+        this.consecutiveHeartbeatFailures = 0;
+        this.heartbeatMetrics = {
+            totalPings: 0,
+            totalPongs: 0,
+            totalFailures: 0,
+            totalTimeouts: 0,
+            responseTimes: [],
+            lastResponseTime: null,
+            minResponseTime: null,
+            maxResponseTime: null,
+            avgResponseTime: null,
+            successRate: null
+        };
+        this.healthState = 'HEALTHY';
+        this.lastPingTime = null;
+        this.pendingPing = null;
+        
         this.validStateTransitions = {
             'STOPPED': ['STARTING'],
             'STARTING': ['RUNNING', 'FAILED', 'STOPPED'],
-            'RUNNING': ['STOPPING', 'FAILED'],
+            'RUNNING': ['STOPPING', 'FAILED', 'DEGRADED'],
+            'DEGRADED': ['RUNNING', 'STOPPING', 'FAILED'],
             'STOPPING': ['STOPPED', 'FAILED'],
             'FAILED': ['STARTING', 'STOPPED']
         };
@@ -89,6 +112,7 @@ class ExtensionProcess extends EventEmitter {
             'shutdown_timeout': 'SHUTDOWN_TIMEOUT',
             'unexpected_exit': 'UNEXPECTED_EXIT',
             'unresponsive': 'UNRESPONSIVE',
+            'heartbeat_failure': 'HEARTBEAT_FAILURE',
             'restart_limit_exceeded': 'RESTART_LIMIT_EXCEEDED',
             'validation_error': 'VALIDATION_ERROR',
             'spawn_error': 'SPAWN_ERROR'
@@ -111,6 +135,8 @@ class ExtensionProcess extends EventEmitter {
         try {
             await this._spawnProcess();
             this.lastHeartbeat = Date.now();
+            this.healthState = 'HEALTHY';
+            this.consecutiveHeartbeatFailures = 0;
             this._startHeartbeatMonitoring();
             this.consecutiveRestarts = 0;
             this._transitionState('RUNNING', 'startup_success', {
@@ -293,6 +319,7 @@ class ExtensionProcess extends EventEmitter {
         return {
             extensionId: this.extensionId,
             state: this.state,
+            healthState: this.healthState,
             pid: this.process ? this.process.pid : null,
             restartCount: this.restartCount,
             consecutiveRestarts: this.consecutiveRestarts,
@@ -300,7 +327,21 @@ class ExtensionProcess extends EventEmitter {
             pendingRequests: this.pendingRequests.size,
             uptime: this.state === 'RUNNING' && this.lastHeartbeat 
                 ? Date.now() - this.lastHeartbeat 
-                : 0
+                : 0,
+            heartbeat: {
+                consecutiveFailures: this.consecutiveHeartbeatFailures,
+                metrics: {
+                    totalPings: this.heartbeatMetrics.totalPings,
+                    totalPongs: this.heartbeatMetrics.totalPongs,
+                    totalFailures: this.heartbeatMetrics.totalFailures,
+                    totalTimeouts: this.heartbeatMetrics.totalTimeouts,
+                    lastResponseTime: this.heartbeatMetrics.lastResponseTime,
+                    minResponseTime: this.heartbeatMetrics.minResponseTime,
+                    maxResponseTime: this.heartbeatMetrics.maxResponseTime,
+                    avgResponseTime: this.heartbeatMetrics.avgResponseTime,
+                    successRate: this.heartbeatMetrics.successRate
+                }
+            }
         };
     }
 
@@ -747,11 +788,72 @@ class ExtensionProcess extends EventEmitter {
         if (message.method === 'heartbeat') {
             this.lastHeartbeat = Date.now();
             this._sendResponse(message.id, { alive: true });
+        } else if (message.method === 'pong') {
+            this._handlePongResponse(message);
         } else {
             this._sendErrorResponse(message.id, -32601, 'Method not found', {
                 method: message.method
             });
         }
+    }
+
+    _handlePongResponse(message) {
+        const now = Date.now();
+        
+        if (this.lastPingTime) {
+            const responseTime = now - this.lastPingTime;
+            
+            this.heartbeatMetrics.lastResponseTime = responseTime;
+            this.heartbeatMetrics.totalPongs++;
+            this.heartbeatMetrics.responseTimes.push(responseTime);
+            
+            if (this.heartbeatMetrics.responseTimes.length > 100) {
+                this.heartbeatMetrics.responseTimes.shift();
+            }
+            
+            if (this.heartbeatMetrics.minResponseTime === null || responseTime < this.heartbeatMetrics.minResponseTime) {
+                this.heartbeatMetrics.minResponseTime = responseTime;
+            }
+            
+            if (this.heartbeatMetrics.maxResponseTime === null || responseTime > this.heartbeatMetrics.maxResponseTime) {
+                this.heartbeatMetrics.maxResponseTime = responseTime;
+            }
+            
+            const sum = this.heartbeatMetrics.responseTimes.reduce((a, b) => a + b, 0);
+            this.heartbeatMetrics.avgResponseTime = Math.round(sum / this.heartbeatMetrics.responseTimes.length);
+            
+            const totalAttempts = this.heartbeatMetrics.totalPings;
+            const totalSuccesses = this.heartbeatMetrics.totalPongs;
+            this.heartbeatMetrics.successRate = totalAttempts > 0 
+                ? Math.round((totalSuccesses / totalAttempts) * 100) / 100 
+                : null;
+            
+            if (responseTime > this.degradedThreshold) {
+                if (this.healthState !== 'DEGRADED') {
+                    this.healthState = 'DEGRADED';
+                    this.emit('degraded', {
+                        extensionId: this.extensionId,
+                        timestamp: now,
+                        responseTime,
+                        threshold: this.degradedThreshold
+                    });
+                }
+            } else {
+                if (this.healthState === 'DEGRADED') {
+                    this.healthState = 'HEALTHY';
+                    this.emit('recovered', {
+                        extensionId: this.extensionId,
+                        timestamp: now,
+                        responseTime
+                    });
+                }
+            }
+            
+            this.consecutiveHeartbeatFailures = 0;
+        }
+        
+        this.lastHeartbeat = now;
+        this._sendResponse(message.id, { timestamp: now });
     }
 
     _handleNotification(message) {
@@ -884,20 +986,131 @@ class ExtensionProcess extends EventEmitter {
     }
 
     _startHeartbeatMonitoring() {
+        this._clearPendingPing();
+        
         this.heartbeatInterval = setInterval(() => {
-            const timeSinceLastHeartbeat = Date.now() - this.lastHeartbeat;
+            this._performHeartbeatCheck();
+        }, this.heartbeatPingInterval);
+    }
+
+    _performHeartbeatCheck() {
+        const now = Date.now();
+        
+        if (this.pendingPing) {
+            const pendingDuration = now - this.lastPingTime;
             
-            if (timeSinceLastHeartbeat > this.heartbeatTimeout) {
-                this.emit('unresponsive', {
+            if (pendingDuration > this.heartbeatPongTimeout) {
+                this.heartbeatMetrics.totalTimeouts++;
+                this.heartbeatMetrics.totalFailures++;
+                this.consecutiveHeartbeatFailures++;
+                
+                const totalAttempts = this.heartbeatMetrics.totalPings;
+                const totalSuccesses = this.heartbeatMetrics.totalPongs;
+                this.heartbeatMetrics.successRate = totalAttempts > 0 
+                    ? Math.round((totalSuccesses / totalAttempts) * 100) / 100 
+                    : null;
+                
+                this.emit('heartbeat-timeout', {
                     extensionId: this.extensionId,
-                    timeSinceLastHeartbeat
+                    timestamp: now,
+                    consecutiveFailures: this.consecutiveHeartbeatFailures,
+                    timeout: this.heartbeatPongTimeout
                 });
                 
-                this._handleUnresponsiveExtension();
-            } else {
-                this._sendRequest('ping', {}, 5000).catch(() => {});
+                this._clearPendingPing();
+                
+                if (this.consecutiveHeartbeatFailures >= this.consecutiveFailureLimit) {
+                    this.emit('heartbeat-failure-limit', {
+                        extensionId: this.extensionId,
+                        timestamp: now,
+                        consecutiveFailures: this.consecutiveHeartbeatFailures,
+                        limit: this.consecutiveFailureLimit
+                    });
+                    
+                    this._handleHeartbeatFailure();
+                    return;
+                }
             }
-        }, this.heartbeatTimeout / 2);
+        }
+        
+        this._sendPing();
+    }
+
+    _sendPing() {
+        if (this.state !== 'RUNNING' && this.state !== 'DEGRADED') {
+            return;
+        }
+        
+        this._clearPendingPing();
+        
+        this.lastPingTime = Date.now();
+        this.heartbeatMetrics.totalPings++;
+        
+        const pingTimeout = setTimeout(() => {
+            if (this.pendingPing === pingTimeout) {
+                this.pendingPing = null;
+            }
+        }, this.heartbeatPongTimeout);
+        
+        this.pendingPing = pingTimeout;
+        
+        this._sendRequest('pong', { timestamp: this.lastPingTime }, this.heartbeatPongTimeout)
+            .then(() => {
+                this._clearPendingPing();
+            })
+            .catch((error) => {
+                this.heartbeatMetrics.totalFailures++;
+                this.consecutiveHeartbeatFailures++;
+                
+                const totalAttempts = this.heartbeatMetrics.totalPings;
+                const totalSuccesses = this.heartbeatMetrics.totalPongs;
+                this.heartbeatMetrics.successRate = totalAttempts > 0 
+                    ? Math.round((totalSuccesses / totalAttempts) * 100) / 100 
+                    : null;
+                
+                this.emit('heartbeat-failure', {
+                    extensionId: this.extensionId,
+                    timestamp: Date.now(),
+                    consecutiveFailures: this.consecutiveHeartbeatFailures,
+                    error: error.message
+                });
+                
+                this._clearPendingPing();
+                
+                if (this.consecutiveHeartbeatFailures >= this.consecutiveFailureLimit) {
+                    this.emit('heartbeat-failure-limit', {
+                        extensionId: this.extensionId,
+                        timestamp: Date.now(),
+                        consecutiveFailures: this.consecutiveHeartbeatFailures,
+                        limit: this.consecutiveFailureLimit
+                    });
+                    
+                    this._handleHeartbeatFailure();
+                }
+            });
+    }
+
+    _clearPendingPing() {
+        if (this.pendingPing) {
+            clearTimeout(this.pendingPing);
+            this.pendingPing = null;
+        }
+    }
+
+    async _handleHeartbeatFailure() {
+        this.emit('error', {
+            extensionId: this.extensionId,
+            error: `Extension failed ${this.consecutiveHeartbeatFailures} consecutive heartbeat checks`
+        });
+
+        try {
+            await this.restart('heartbeat_failure');
+        } catch (error) {
+            this.emit('error', {
+                extensionId: this.extensionId,
+                error: `Failed to restart after heartbeat failures: ${error.message}`
+            });
+        }
     }
 
     _stopHeartbeatMonitoring() {
@@ -905,6 +1118,7 @@ class ExtensionProcess extends EventEmitter {
             clearInterval(this.heartbeatInterval);
             this.heartbeatInterval = null;
         }
+        this._clearPendingPing();
     }
 
     async _handleUnresponsiveExtension() {
