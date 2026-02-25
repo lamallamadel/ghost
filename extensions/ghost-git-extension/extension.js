@@ -142,12 +142,63 @@ class GitExtension {
         this.DEFAULT_MODEL = "llama-3.3-70b-versatile";
         
         this.SECRET_REGEXES = [
-            { name: 'Generic API Key', regex: /(?:key|api|token|secret|auth)[_-]?(?:key|api|token|secret|auth)?\s*[:=]\s*["'](?!claude|gemini|llama|gpt|text-)([a-zA-Z0-9]{16,})["']/i },
-            { name: 'Groq API Key', regex: /gsk_[a-zA-Z0-9]{48}/g },
-            { name: 'GitHub Token', regex: /gh[pous]_[a-zA-Z0-9]{36}/g },
-            { name: 'Slack Token', regex: /xox[baprs]-[0-9a-zA-Z]{10,48}/g },
-            { name: 'AWS Access Key', regex: /AKIA[0-9A-Z]{16}/g },
-            { name: 'Private Key', regex: /-----BEGIN (RSA|EC|PGP|OPENSSH) PRIVATE KEY-----/g }
+            { name: 'Groq API Key', regex: /gsk_[a-zA-Z0-9]{48,}/g, severity: 'critical' },
+            { name: 'GitHub Token', regex: /gh[pous]_[a-zA-Z0-9]{36,}/g, severity: 'critical' },
+            { name: 'GitHub Classic Token', regex: /ghp_[a-zA-Z0-9]{36,}/g, severity: 'critical' },
+            { name: 'Slack Token', regex: /xox[baprs]-[0-9a-zA-Z]{10,48}/g, severity: 'high' },
+            { name: 'AWS Access Key', regex: /AKIA[0-9A-Z]{16}/g, severity: 'critical' },
+            { name: 'AWS Secret Key', regex: /[A-Za-z0-9/+=]{40}/g, severity: 'high' },
+            { name: 'Private Key Header', regex: /-----BEGIN (RSA|EC|PGP|OPENSSH|DSA) PRIVATE KEY-----/g, severity: 'critical' },
+            { name: 'Generic API Key', regex: /(?:key|api|token|secret|auth)[_-]?(?:key|api|token|secret|auth)?\s*[:=]\s*['"]([a-zA-Z0-9_\-]{16,})['"]?/gi, severity: 'medium' },
+            { name: 'Bearer Token', regex: /bearer\s+[a-zA-Z0-9_\-\.]{20,}/gi, severity: 'high' },
+            { name: 'Basic Auth', regex: /basic\s+[a-zA-Z0-9+/=]{20,}/gi, severity: 'high' },
+            { name: 'OpenAI API Key', regex: /sk-[a-zA-Z0-9]{48,}/g, severity: 'critical' },
+            { name: 'Anthropic API Key', regex: /sk-ant-[a-zA-Z0-9\-]{95,}/g, severity: 'critical' },
+            { name: 'JWT Token', regex: /eyJ[a-zA-Z0-9_-]*\.eyJ[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*/g, severity: 'medium' },
+            { name: 'Database Connection String', regex: /(mongodb|mysql|postgresql|postgres):\/\/[^:]+:[^@]+@[^\/]+/gi, severity: 'critical' },
+            { name: 'Generic Secret Pattern', regex: /(?:secret|password|passwd|pwd)[_-]?\s*[:=]\s*['"]?([a-zA-Z0-9!@#$%^&*()_+\-=]{8,})['"]?/gi, severity: 'medium' },
+            { name: 'Google Cloud Service Account Key', regex: /\{"type"\s*:\s*"service_account"[^}]*"private_key"\s*:\s*"[^"]+"/gi, severity: 'critical' },
+            { name: 'Google Cloud Private Key ID', regex: /"private_key_id"\s*:\s*"[a-f0-9]{40}"/gi, severity: 'critical' },
+            { name: 'Stripe Live Secret Key', regex: /sk_live_[a-zA-Z0-9]{24,}/g, severity: 'critical' },
+            { name: 'Stripe Live Restricted Key', regex: /rk_live_[a-zA-Z0-9]{24,}/g, severity: 'critical' },
+            { name: 'Twilio API Key', regex: /SK[a-f0-9]{32}/g, severity: 'critical' },
+            { name: 'Azure Storage Connection String', regex: /DefaultEndpointsProtocol=https?;.*AccountName=[^;]+;.*AccountKey=[a-zA-Z0-9+/=]{88}/gi, severity: 'critical' },
+            { name: 'Azure Shared Access Signature', regex: /\?sv=\d{4}-\d{2}-\d{2}&[^\s"']+/g, severity: 'high' }
+        ];
+
+        this.KNOWN_NON_SECRETS = [
+            'claude-3-5-sonnet',
+            'claude-3-opus',
+            'gemini-1.5-flash',
+            'gemini-1.5-pro',
+            'gemini-2.0-flash',
+            'llama-3.3-70b',
+            'llama-3.1-8b',
+            'gpt-4',
+            'gpt-3.5-turbo',
+            'anthropic',
+            'openai',
+            'google',
+            'groq',
+            'ConfigManager',
+            'AIEngine',
+            'DEFAULT_MODEL',
+            'getDashboardHTML',
+            'GhostMonitor',
+            'startConsoleServer',
+            'example',
+            'test',
+            'sample',
+            'placeholder',
+            'dummy',
+            'fixture',
+            'mock',
+            'AKIAIOSFODNN7EXAMPLE',
+            'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+            'base64',
+            'encoding',
+            'iVBORw0KGgo',
+            'data:image'
         ];
 
         this.AI_PROVIDERS = {
@@ -248,44 +299,70 @@ class GitExtension {
         }
     }
 
-    scanForSecrets(content) {
+    async scanForSecrets(content) {
         if (!content) return [];
         const suspicious = [];
         
-        const isExampleFixture = (str) => /EXAMPLE/i.test(str);
+        const isKnownNonSecret = (str) => {
+            if (/example|test|sample|placeholder|dummy|fixture|mock/i.test(str)) return true;
+            const lowerStr = str.toLowerCase();
+            return this.KNOWN_NON_SECRETS.some(ns => lowerStr.includes(ns.toLowerCase()));
+        };
 
-        for (const { name, regex } of this.SECRET_REGEXES) {
+        for (const { name, regex, severity } of this.SECRET_REGEXES) {
             const matches = content.match(regex);
             if (matches) {
-                matches.forEach(m => {
-                    if (m.length > 8 && !isExampleFixture(m)) {
-                        suspicious.push(`${m.substring(0, 15)}... (${name})`);
+                for (const m of matches) {
+                    if (m.length > 8 && !isKnownNonSecret(m)) {
+                        const display = m.length > 30 ? m.substring(0, 30) + '...' : m;
+                        suspicious.push({ 
+                            display: `${display} (${name})`, 
+                            type: name, 
+                            value: m,
+                            severity: severity || 'medium',
+                            method: 'regex'
+                        });
+                        await this.rpc.log('warn', 'SECURITY_ALERT: Secret pattern detected', {
+                            type: name,
+                            severity: severity || 'medium',
+                            method: 'regex',
+                            preview: display
+                        });
                     }
-                });
+                }
             }
         }
 
         const regex = /(['"])(.*?)(\1)|=\s*([^\s]+)/g;
         let match;
 
-        const KNOWN_NON_SECRETS = [
-            'claude-3-5-sonnet', 'gemini-1.5-flash', 'llama-3.3-70b', 
-            'anthropic', 'openai', 'google', 'groq',
-            'ConfigManager', 'AIEngine', 'DEFAULT_MODEL',
-            'getDashboardHTML', 'GhostMonitor', 'startConsoleServer'
-        ];
-
         while ((match = regex.exec(content)) !== null) {
             const candidate = match[2] || match[4];
             
-            if (!candidate || candidate.length < 12 || candidate.includes(' ')) continue;
+            if (!candidate || candidate.length < 16 || candidate.includes(' ')) continue;
 
-            if (KNOWN_NON_SECRETS.some(ns => candidate.includes(ns)) || isExampleFixture(candidate)) continue;
+            if (isKnownNonSecret(candidate)) continue;
             
-            if (this.calculateShannonEntropy(candidate) > 4.8) {
-                const display = candidate.substring(0, 15) + "...";
-                if (!suspicious.some(s => s.startsWith(display))) {
-                    suspicious.push(`${display} (High Entropy)`);
+            const entropy = this.calculateShannonEntropy(candidate);
+            if (entropy >= 4.5 && entropy <= 7.0) {
+                const display = candidate.length > 30 ? candidate.substring(0, 30) + '...' : candidate;
+                if (!suspicious.some(s => s.value === candidate)) {
+                    const severity = entropy > 5.5 ? 'high' : 'medium';
+                    suspicious.push({ 
+                        display: `${display} (High Entropy)`, 
+                        type: 'High Entropy String', 
+                        value: candidate,
+                        severity: severity,
+                        entropy: entropy.toFixed(2),
+                        method: 'entropy'
+                    });
+                    await this.rpc.log('warn', 'SECURITY_ALERT: High entropy string detected', {
+                        type: 'High Entropy String',
+                        severity: severity,
+                        entropy: entropy.toFixed(2),
+                        method: 'entropy',
+                        preview: display
+                    });
                 }
             }
         }
@@ -460,15 +537,35 @@ class GitExtension {
 
     async auditSecurity(diffMap, provider, apiKey, model, flags = {}) {
         const ignoredPatterns = await this.loadGhostIgnore();
-        const isIgnored = (str) => ignoredPatterns.some(pattern => str.includes(pattern));
+        const isIgnored = (secretObj) => {
+            const display = typeof secretObj === 'string' ? secretObj : secretObj.display;
+            return ignoredPatterns.some(pattern => display.includes(pattern));
+        };
 
         const potentialLeaks = {};
         for (const [fname, content] of Object.entries(diffMap)) {
-            const suspects = this.scanForSecrets(content).filter(s => !isIgnored(s));
-            if (suspects.length > 0) potentialLeaks[fname] = suspects;
+            const suspects = await this.scanForSecrets(content);
+            const filtered = suspects.filter(s => !isIgnored(s));
+            if (filtered.length > 0) {
+                potentialLeaks[fname] = filtered;
+                for (const suspect of filtered) {
+                    await this.rpc.log('warn', 'SECURITY_ALERT: Potential leak in staged file', {
+                        file: fname,
+                        type: suspect.type,
+                        severity: suspect.severity,
+                        method: suspect.method,
+                        preview: suspect.display
+                    });
+                }
+            }
         }
 
         if (Object.keys(potentialLeaks).length > 0) {
+            await this.rpc.log('warn', 'SECURITY_ALERT: Invoking AI validation for potential secrets', {
+                filesWithLeaks: Object.keys(potentialLeaks).length,
+                totalSecrets: Object.values(potentialLeaks).flat().length
+            });
+
             const securityPrompt = `Tu es un expert en cybersécurité. Analyse les extraits de code suivants pour détecter des secrets (clés API, mots de passe, tokens).
             
             CONTEXTE : L'utilisateur est en train de modifier le code source de l'outil 'Ghost CLI'.
@@ -481,15 +578,31 @@ class GitExtension {
             
             Réponds UNIQUEMENT au format JSON : {"is_breach": boolean, "reason": "string"}`;
 
-            const valPrompt = `${securityPrompt}\n\nSecrets potentiels : ${JSON.stringify(potentialLeaks)}`;
+            const leaksFormatted = {};
+            for (const [fname, suspects] of Object.entries(potentialLeaks)) {
+                leaksFormatted[fname] = suspects.map(s => ({
+                    type: s.type,
+                    severity: s.severity,
+                    preview: s.display
+                }));
+            }
+
+            const valPrompt = `${securityPrompt}\n\nSecrets potentiels : ${JSON.stringify(leaksFormatted)}`;
             
             const res = await this.callAI(provider, apiKey, model, "Tu es un expert en cybersécurité.", valPrompt, 0.3, true);
             const audit = JSON.parse(res);
             
             if (audit.is_breach) {
-                await this.rpc.log('warn', `Secret détecté : ${audit.reason}`, { details: audit });
+                await this.rpc.log('error', 'SECURITY_ALERT: Security breach confirmed by AI validation', { 
+                    reason: audit.reason,
+                    filesAffected: Object.keys(potentialLeaks),
+                    details: audit 
+                });
                 return { blocked: true, reason: audit.reason };
             }
+            await this.rpc.log('info', 'SECURITY_ALERT: False positives confirmed, allowing commit', {
+                reason: audit.reason
+            });
             return { blocked: false, reason: 'False positives confirmed' };
         }
         
@@ -497,7 +610,7 @@ class GitExtension {
     }
 
     async performFullAudit(flags = {}) {
-        await this.rpc.log('info', 'Starting full security audit');
+        await this.rpc.log('info', 'SECURITY_ALERT: Starting full security audit');
         
         const ignoredPatterns = await this.loadGhostIgnore();
         const isFileIgnored = (f) => ignoredPatterns.some(p => f.includes(p));
@@ -509,6 +622,10 @@ class GitExtension {
             !isFileIgnored(f)
         );
         
+        await this.rpc.log('info', 'SECURITY_ALERT: Scanning files for secrets', {
+            totalFiles: filteredFiles.length
+        });
+        
         let issues = 0;
         const findings = [];
         
@@ -519,16 +636,30 @@ class GitExtension {
                 if (stat.isDirectory) continue;
                 
                 const content = await this.rpc.readFile(filePath);
-                const suspects = this.scanForSecrets(content);
+                const suspects = await this.scanForSecrets(content);
                 
                 if (suspects.length > 0) {
                     findings.push({ file, suspects });
                     issues += suspects.length;
+                    for (const suspect of suspects) {
+                        await this.rpc.log('warn', 'SECURITY_ALERT: Secret found in repository file', {
+                            file: file,
+                            type: suspect.type,
+                            severity: suspect.severity,
+                            method: suspect.method,
+                            preview: suspect.display
+                        });
+                    }
                 }
             } catch (e) {
                 // Ignore binary files or read errors
             }
         }
+        
+        await this.rpc.log('info', 'SECURITY_ALERT: Full audit complete', {
+            totalIssues: issues,
+            filesWithIssues: findings.length
+        });
         
         return { issues, findings };
     }
