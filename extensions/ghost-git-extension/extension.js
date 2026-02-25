@@ -730,11 +730,21 @@ class GitExtension {
             notifications: { webhookUrl: null }
         };
         
+        await this.rpc.log('debug', 'Loading version configuration', { configPath });
+        
         const exists = await this.rpc.fileExists(configPath);
-        if (!exists) return { ...defaults, _path: configPath };
+        if (!exists) {
+            await this.rpc.log('debug', 'No .ghost-versionrc found, using defaults', { configPath });
+            return { ...defaults, _path: configPath };
+        }
         
         const raw = await this.rpc.readFile(configPath);
         const parsed = this.safeJsonParse(raw, {});
+        await this.rpc.log('debug', 'Version configuration loaded', { 
+            configPath,
+            versionFiles: parsed.versionFiles || defaults.versionFiles,
+            tagPrefix: parsed.tagPrefix || defaults.tagPrefix
+        });
         return { ...defaults, ...parsed, _path: configPath };
     }
 
@@ -770,73 +780,156 @@ class GitExtension {
     }
 
     async getLastTag(tagPrefix) {
+        await this.rpc.log('debug', 'Fetching last git tag', { tagPrefix });
+        
         const tag = await this.rpc.gitExec(['describe', '--tags', '--abbrev=0'], true);
-        if (!tag) return null;
+        if (!tag) {
+            await this.rpc.log('debug', 'No tags found in repository');
+            return null;
+        }
+        
+        await this.rpc.log('debug', 'Last tag retrieved', { tag, tagPrefix });
+        
         if (tagPrefix && tag.startsWith(tagPrefix)) return tag;
         return tag;
     }
 
     async computeBumpFromCommitsSince(ref) {
         const range = ref ? `${ref}..HEAD` : 'HEAD';
+        
+        await this.rpc.log('debug', 'Analyzing commits for version bump', { range });
+        
         const raw = await this.rpc.gitExec(['log', range, '--pretty=%s%n%b%n----END----'], true);
-        if (!raw) return null;
+        if (!raw) {
+            await this.rpc.log('debug', 'No commits found in range', { range });
+            return null;
+        }
+        
         const chunks = raw.split('----END----').map(s => s.trim()).filter(Boolean);
+        await this.rpc.log('debug', 'Parsed commit messages', { commitCount: chunks.length });
+        
         let required = null;
         const rank = { patch: 1, minor: 2, major: 3 };
+        const bumpCounts = { major: 0, minor: 0, patch: 0 };
+        
         for (const c of chunks) {
             const bump = this.conventionalRequiredBumpFromMessage(c);
             if (!bump) continue;
-            if (!required || rank[bump] > rank[required]) required = bump;
+            
+            bumpCounts[bump]++;
+            
+            if (!required || rank[bump] > rank[required]) {
+                required = bump;
+                await this.rpc.log('debug', 'Bump level increased', { 
+                    newLevel: bump,
+                    commitPreview: c.substring(0, 60)
+                });
+            }
             if (required === 'major') break;
         }
+        
+        await this.rpc.log('info', 'Commit analysis complete', {
+            totalCommits: chunks.length,
+            requiredBump: required,
+            majorCommits: bumpCounts.major,
+            minorCommits: bumpCounts.minor,
+            patchCommits: bumpCounts.patch
+        });
+        
         return required;
     }
 
     async handleVersionBump(bumpType, flags = {}) {
+        await this.rpc.log('info', 'Starting version bump', { bumpType, flags });
+        
         const versionConfig = await this.loadVersionConfig();
         const fileSpec = versionConfig.versionFiles[0];
         const repoRoot = await this.getRepoRoot();
         const relPath = path.resolve(repoRoot, fileSpec.path);
         
+        await this.rpc.log('debug', 'Reading version file', { 
+            path: relPath,
+            fileType: fileSpec.type
+        });
+        
         const originalText = await this.rpc.readFile(relPath);
         const currentV = this.readVersionFileVersion(originalText, fileSpec);
-        if (!currentV) throw new Error(`Unable to read version from ${fileSpec.path}`);
+        if (!currentV) {
+            await this.rpc.log('error', 'Failed to read version from file', { path: fileSpec.path });
+            throw new Error(`Unable to read version from ${fileSpec.path}`);
+        }
 
         let effectiveBump = bumpType;
         if (bumpType === 'auto') {
             const lastTag = await this.getLastTag(versionConfig.tagPrefix || 'v');
+            await this.rpc.log('debug', 'Computing automatic bump from commits', { lastTag });
             effectiveBump = await this.computeBumpFromCommitsSince(lastTag) || 'patch';
+            await this.rpc.log('info', 'Automatic bump determined', { 
+                effectiveBump,
+                lastTag,
+                source: 'conventional-commits'
+            });
         }
 
         const nextV = this.semverBump(currentV, effectiveBump);
         const nextStr = this.semverString(nextV);
+        const currentStr = this.semverString(currentV);
+        
+        await this.rpc.log('info', 'Version bump calculated', {
+            currentVersion: currentStr,
+            nextVersion: nextStr,
+            bumpType: effectiveBump
+        });
+        
         const nextText = this.writeVersionFileText(originalText, fileSpec, nextStr);
 
         if (flags.dryRun) {
+            await this.rpc.log('info', 'Dry run complete, no changes written', {
+                currentVersion: currentStr,
+                nextVersion: nextStr,
+                bump: effectiveBump
+            });
             return { 
                 dryRun: true, 
-                currentVersion: this.semverString(currentV), 
+                currentVersion: currentStr, 
                 nextVersion: nextStr, 
                 bump: effectiveBump 
             };
         }
 
+        await this.rpc.log('debug', 'Writing updated version file', { 
+            path: relPath,
+            newVersion: nextStr
+        });
         await this.rpc.writeFile(relPath, nextText);
+        
+        await this.rpc.log('debug', 'Staging version file', { path: fileSpec.path });
         await this.rpc.gitExec(['add', fileSpec.path]);
         
         const tagName = `${versionConfig.tagPrefix || 'v'}${nextStr}`;
         const shouldTag = flags.tag || versionConfig.autoTagAfterBump;
         
         if (shouldTag) {
+            await this.rpc.log('info', 'Creating version tag', { tagName });
             await this.rpc.gitExec(['tag', '-a', tagName, '-m', `Release ${tagName}`]);
+            
             if (flags.push) {
+                await this.rpc.log('info', 'Pushing tag to remote', { tagName });
                 await this.rpc.gitExec(['push', 'origin', tagName]);
             }
         }
 
+        await this.rpc.log('info', 'Version bump completed successfully', {
+            currentVersion: currentStr,
+            nextVersion: nextStr,
+            bump: effectiveBump,
+            tag: shouldTag ? tagName : null,
+            pushed: flags.push || false
+        });
+
         return { 
             success: true, 
-            currentVersion: this.semverString(currentV), 
+            currentVersion: currentStr, 
             nextVersion: nextStr, 
             bump: effectiveBump,
             tag: shouldTag ? tagName : null
@@ -844,21 +937,42 @@ class GitExtension {
     }
 
     async handleVersionCheck() {
+        await this.rpc.log('info', 'Starting version check');
+        
         const versionConfig = await this.loadVersionConfig();
         const fileSpec = versionConfig.versionFiles[0];
         const relPath = fileSpec.path;
+        
+        await this.rpc.log('debug', 'Reading version from HEAD and index', { path: relPath });
         
         const headText = await this.rpc.gitExec(['show', `HEAD:${relPath}`], true);
         const indexText = await this.rpc.gitExec(['show', `:${relPath}`], true);
         const headV = headText ? this.readVersionFileVersion(headText, fileSpec) : null;
         const indexV = indexText ? this.readVersionFileVersion(indexText, fileSpec) : null;
         
-        if (!headV || !indexV) throw new Error(`Unable to read ${relPath} from git`);
+        if (!headV || !indexV) {
+            await this.rpc.log('error', 'Failed to read version from git', { 
+                path: relPath,
+                hasHeadVersion: !!headV,
+                hasIndexVersion: !!indexV
+            });
+            throw new Error(`Unable to read ${relPath} from git`);
+        }
+        
         const diff = this.semverDiffType(headV, indexV);
+        const headVersionStr = this.semverString(headV);
+        const indexVersionStr = this.semverString(indexV);
+        
+        await this.rpc.log('info', 'Version check completed', {
+            headVersion: headVersionStr,
+            indexVersion: indexVersionStr,
+            diff,
+            hasChange: diff !== 'none'
+        });
         
         return { 
-            headVersion: this.semverString(headV), 
-            indexVersion: this.semverString(indexV), 
+            headVersion: headVersionStr, 
+            indexVersion: indexVersionStr, 
             diff 
         };
     }
