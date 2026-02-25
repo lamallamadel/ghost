@@ -103,11 +103,49 @@ export type ExtensionManifest = {
   permissions?: string[]
 }
 
+export type IntentTypeBreakdown = {
+  filesystem: number
+  network: number
+  git: number
+  process: number
+}
+
+export type LatencyPercentiles = {
+  p50: number
+  p95: number
+  p99: number
+}
+
+export type ThroughputDataPoint = {
+  timestamp: number
+  requestsPerMinute: number
+}
+
+export type RateLimitCompliance = {
+  green: number
+  yellow: number
+  red: number
+}
+
+export type RequestSizeStats = {
+  avgRequestBytes: number
+  avgResponseBytes: number
+}
+
+export type ExtensionMetrics = {
+  latency?: LatencyPercentiles
+  throughputHistory?: ThroughputDataPoint[]
+  intentBreakdown?: IntentTypeBreakdown
+  rateLimitCompliance?: RateLimitCompliance
+  requestSizeStats?: RequestSizeStats
+}
+
 export type ExtensionStats = {
   requestsApproved: number
   requestsRejected: number
   requestsRateLimited: number
   lastActivity?: string
+  metrics?: ExtensionMetrics
 }
 
 export type RuntimeHealthState = 'healthy' | 'degraded' | 'crashed' | 'restarting'

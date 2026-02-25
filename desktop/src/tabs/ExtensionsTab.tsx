@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Package, CheckCircle, XCircle, Clock, ShieldCheck, AlertTriangle, TrendingUp, Activity, Zap, Skull, RotateCw, Timer, History, Cpu, MemoryStick } from 'lucide-react'
+import { Package, CheckCircle, XCircle, Clock, ShieldCheck, AlertTriangle, TrendingUp, Activity, Zap, Skull, RotateCw, Timer, History, Cpu, MemoryStick, BarChart3, Network, FileText, GitBranch, Terminal, Gauge, HardDrive } from 'lucide-react'
 import { ghost } from '@/ipc/ghost'
 import type { GatewayState, TrafficPolicerState, ManualOverrideRequest, RuntimeHealthState, ExtensionInfo } from '@/ipc/types'
 import { useToastsStore } from '@/stores/useToastsStore'
+import { ExtensionMetricsChart } from '@/components/ExtensionMetricsChart'
 
 function HealthBadge({ health }: { health: RuntimeHealthState }) {
   const configs = {
@@ -198,6 +199,187 @@ function RuntimeHealthSection({ ext }: { ext: ExtensionInfo }) {
           )}
         </div>
       </div>
+    </div>
+  )
+}
+
+function MetricsDashboard({ ext }: { ext: ExtensionInfo }) {
+  const metrics = ext.stats.metrics
+  if (!metrics) return null
+
+  const hasAnyMetrics = metrics.latency || metrics.throughputHistory || metrics.intentBreakdown || metrics.rateLimitCompliance || metrics.requestSizeStats
+
+  if (!hasAnyMetrics) return null
+
+  return (
+    <div className="space-y-4">
+      <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-white/60">
+        <BarChart3 size={14} />
+        <span>I/O Performance Metrics</span>
+      </div>
+
+      {metrics.latency && (
+        <div className="rounded-lg border border-white/10 bg-black/30 p-4">
+          <div className="mb-3 text-xs font-semibold text-white/60">Average Latency</div>
+          <div className="grid grid-cols-3 gap-4">
+            <div>
+              <div className="mb-1 text-xs text-white/40">p50 (Median)</div>
+              <div className="font-mono text-lg font-semibold text-blue-400">
+                {metrics.latency.p50.toFixed(1)}<span className="text-xs text-white/40">ms</span>
+              </div>
+            </div>
+            <div>
+              <div className="mb-1 text-xs text-white/40">p95</div>
+              <div className="font-mono text-lg font-semibold text-yellow-400">
+                {metrics.latency.p95.toFixed(1)}<span className="text-xs text-white/40">ms</span>
+              </div>
+            </div>
+            <div>
+              <div className="mb-1 text-xs text-white/40">p99</div>
+              <div className="font-mono text-lg font-semibold text-rose-400">
+                {metrics.latency.p99.toFixed(1)}<span className="text-xs text-white/40">ms</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {metrics.throughputHistory && metrics.throughputHistory.length > 0 && (
+        <ExtensionMetricsChart
+          data={metrics.throughputHistory}
+          title="Request Throughput (Last 15 Minutes)"
+          color="#3b82f6"
+          height={100}
+        />
+      )}
+
+      {metrics.intentBreakdown && (
+        <div className="rounded-lg border border-white/10 bg-black/30 p-4">
+          <div className="mb-3 text-xs font-semibold text-white/60">Intent Type Breakdown</div>
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <FileText size={14} className="text-purple-400" />
+                <span className="text-xs text-white/60">Filesystem</span>
+              </div>
+              <span className="font-mono text-sm font-semibold text-purple-400">
+                {metrics.intentBreakdown.filesystem}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Network size={14} className="text-blue-400" />
+                <span className="text-xs text-white/60">Network</span>
+              </div>
+              <span className="font-mono text-sm font-semibold text-blue-400">
+                {metrics.intentBreakdown.network}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <GitBranch size={14} className="text-orange-400" />
+                <span className="text-xs text-white/60">Git</span>
+              </div>
+              <span className="font-mono text-sm font-semibold text-orange-400">
+                {metrics.intentBreakdown.git}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Terminal size={14} className="text-cyan-400" />
+                <span className="text-xs text-white/60">Process</span>
+              </div>
+              <span className="font-mono text-sm font-semibold text-cyan-400">
+                {metrics.intentBreakdown.process}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {metrics.rateLimitCompliance && (
+        <div className="rounded-lg border border-white/10 bg-black/30 p-4">
+          <div className="mb-3 flex items-center gap-2 text-xs font-semibold text-white/60">
+            <Gauge size={14} />
+            <span>Rate Limit Compliance</span>
+          </div>
+          <div className="space-y-3">
+            <div>
+              <div className="mb-2 flex items-center justify-between text-xs">
+                <span className="text-emerald-400">Green (Normal)</span>
+                <span className="font-mono text-emerald-400">
+                  {((metrics.rateLimitCompliance.green / (metrics.rateLimitCompliance.green + metrics.rateLimitCompliance.yellow + metrics.rateLimitCompliance.red)) * 100 || 0).toFixed(1)}%
+                </span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-white/10">
+                <div
+                  className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-500"
+                  style={{ 
+                    width: `${((metrics.rateLimitCompliance.green / (metrics.rateLimitCompliance.green + metrics.rateLimitCompliance.yellow + metrics.rateLimitCompliance.red)) * 100 || 0)}%` 
+                  }}
+                />
+              </div>
+            </div>
+            <div>
+              <div className="mb-2 flex items-center justify-between text-xs">
+                <span className="text-yellow-400">Yellow (Warning)</span>
+                <span className="font-mono text-yellow-400">
+                  {((metrics.rateLimitCompliance.yellow / (metrics.rateLimitCompliance.green + metrics.rateLimitCompliance.yellow + metrics.rateLimitCompliance.red)) * 100 || 0).toFixed(1)}%
+                </span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-white/10">
+                <div
+                  className="h-full bg-gradient-to-r from-yellow-500 to-yellow-400 transition-all duration-500"
+                  style={{ 
+                    width: `${((metrics.rateLimitCompliance.yellow / (metrics.rateLimitCompliance.green + metrics.rateLimitCompliance.yellow + metrics.rateLimitCompliance.red)) * 100 || 0)}%` 
+                  }}
+                />
+              </div>
+            </div>
+            <div>
+              <div className="mb-2 flex items-center justify-between text-xs">
+                <span className="text-rose-400">Red (Throttled)</span>
+                <span className="font-mono text-rose-400">
+                  {((metrics.rateLimitCompliance.red / (metrics.rateLimitCompliance.green + metrics.rateLimitCompliance.yellow + metrics.rateLimitCompliance.red)) * 100 || 0).toFixed(1)}%
+                </span>
+              </div>
+              <div className="h-2 overflow-hidden rounded-full bg-white/10">
+                <div
+                  className="h-full bg-gradient-to-r from-rose-500 to-rose-400 transition-all duration-500"
+                  style={{ 
+                    width: `${((metrics.rateLimitCompliance.red / (metrics.rateLimitCompliance.green + metrics.rateLimitCompliance.yellow + metrics.rateLimitCompliance.red)) * 100 || 0)}%` 
+                  }}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {metrics.requestSizeStats && (
+        <div className="rounded-lg border border-white/10 bg-black/30 p-4">
+          <div className="mb-3 flex items-center gap-2 text-xs font-semibold text-white/60">
+            <HardDrive size={14} />
+            <span>Request Size Statistics</span>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <div className="mb-1 text-xs text-white/40">Avg Request Size</div>
+              <div className="font-mono text-lg font-semibold text-purple-400">
+                {(metrics.requestSizeStats.avgRequestBytes / 1024).toFixed(2)}
+                <span className="text-xs text-white/40"> KB</span>
+              </div>
+            </div>
+            <div>
+              <div className="mb-1 text-xs text-white/40">Avg Response Size</div>
+              <div className="font-mono text-lg font-semibold text-cyan-400">
+                {(metrics.requestSizeStats.avgResponseBytes / 1024).toFixed(2)}
+                <span className="text-xs text-white/40"> KB</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -495,6 +677,8 @@ export function ExtensionsTab() {
                 {isExpanded ? (
                   <div className="mt-4 space-y-4 border-t border-white/10 pt-4">
                     <RuntimeHealthSection ext={ext} />
+
+                    <MetricsDashboard ext={ext} />
 
                     <div>
                       <div className="mb-2 text-xs font-semibold text-white/60">Capabilities</div>
