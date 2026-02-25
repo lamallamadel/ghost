@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState, useMemo } from 'react'
-import { Activity, ArrowRight, CheckCircle, XCircle, AlertCircle, TrendingUp, X, ChevronDown, ChevronUp } from 'lucide-react'
+import { Activity, ArrowRight, CheckCircle, XCircle, AlertCircle, TrendingUp, X, ChevronDown, ChevronUp, Wifi, WifiOff } from 'lucide-react'
 import { ghost } from '@/ipc/ghost'
 import type { GatewayState, PipelineRequest } from '@/ipc/types'
 import { useToastsStore } from '@/stores/useToastsStore'
+import { useTelemetryWebSocket, type SpanEvent, type TelemetryEvent } from '@/hooks/useTelemetryWebSocket'
 
 type StageMetrics = {
   latency: number
@@ -19,6 +20,25 @@ type AnimatedRequest = {
 
 const STAGES = ['intercept', 'auth', 'audit', 'execute'] as const
 
+function ConnectionStatusIndicator({ status }: { status: 'connected' | 'connecting' | 'disconnected' | 'error' }) {
+  const config = {
+    connected: { color: 'bg-emerald-500', label: 'Live', icon: Wifi },
+    connecting: { color: 'bg-yellow-500 animate-pulse', label: 'Reconnecting', icon: Wifi },
+    disconnected: { color: 'bg-rose-500', label: 'Disconnected', icon: WifiOff },
+    error: { color: 'bg-rose-500', label: 'Error', icon: WifiOff },
+  }
+
+  const { color, label, icon: Icon } = config[status]
+
+  return (
+    <div className="flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2 py-1">
+      <div className={`h-2 w-2 rounded-full ${color}`} />
+      <Icon size={12} className="text-white/60" />
+      <span className="text-xs text-white/60">{label}</span>
+    </div>
+  )
+}
+
 export function GatewayTab() {
   const pushToast = useToastsStore((s) => s.push)
   const [state, setState] = useState<GatewayState | null>(null)
@@ -27,6 +47,70 @@ export function GatewayTab() {
   const [animatedRequests, setAnimatedRequests] = useState<AnimatedRequest[]>([])
   const [requestHistory, setRequestHistory] = useState<PipelineRequest[]>([])
   const [expandedRequest, setExpandedRequest] = useState<string | null>(null)
+
+  const handleTelemetryEvent = useCallback((event: TelemetryEvent) => {
+    if (event.type === 'span') {
+      const spans = Array.isArray(event.data) ? event.data : [event.data]
+      
+      spans.forEach((span: SpanEvent) => {
+        if (span.attributes.requestId && span.attributes.extensionId) {
+          const stage = span.attributes.stage as string
+          const status = span.attributes.status as string
+          
+          if (STAGES.includes(stage as typeof STAGES[number])) {
+            const pipelineRequest: PipelineRequest = {
+              requestId: span.attributes.requestId as string,
+              extensionId: span.attributes.extensionId as string,
+              type: span.attributes.type as string || 'unknown',
+              operation: span.attributes.operation as string || 'unknown',
+              timestamp: span.startTime,
+              stage: stage as PipelineRequest['stage'],
+              status: status as PipelineRequest['status'] || 'pending',
+              dropReason: span.attributes.dropReason as string,
+              dropLayer: span.attributes.dropLayer as 'auth' | 'audit',
+            }
+
+            setRequestHistory(prev => {
+              const exists = prev.find(r => 
+                r.requestId === pipelineRequest.requestId && 
+                r.stage === pipelineRequest.stage
+              )
+              if (exists) return prev
+              
+              const updated = [...prev, pipelineRequest]
+              return updated.slice(-100)
+            })
+
+            if (status === 'pending' || status === 'approved') {
+              setAnimatedRequests(prev => {
+                const stageIndex = STAGES.indexOf(stage as typeof STAGES[number])
+                const existing = prev.find(ar => ar.id === pipelineRequest.requestId)
+                if (existing) return prev
+                
+                return [...prev, {
+                  id: pipelineRequest.requestId,
+                  stage: stageIndex,
+                  progress: 0
+                }]
+              })
+            }
+          }
+        }
+      })
+    }
+  }, [])
+
+  const telemetry = useTelemetryWebSocket({
+    autoReconnect: true,
+    onEvent: handleTelemetryEvent,
+  })
+
+  useEffect(() => {
+    telemetry.subscribe(['span'])
+    return () => {
+      telemetry.unsubscribe(['span'])
+    }
+  }, [telemetry])
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -37,7 +121,7 @@ export function GatewayTab() {
       setRequestHistory(prev => {
         const combined = [...prev, ...res.recentRequests]
         const unique = Array.from(
-          new Map(combined.map(r => [r.requestId, r])).values()
+          new Map(combined.map(r => [r.requestId + r.stage, r])).values()
         )
         return unique.slice(-100)
       })
@@ -53,10 +137,10 @@ export function GatewayTab() {
   }, [load])
 
   useEffect(() => {
-    if (!autoRefresh) return
+    if (!autoRefresh || telemetry.connectionState === 'connected') return
     const interval = setInterval(load, 2000)
     return () => clearInterval(interval)
-  }, [autoRefresh, load])
+  }, [autoRefresh, load, telemetry.connectionState])
 
   useEffect(() => {
     if (!state) return
@@ -247,9 +331,12 @@ export function GatewayTab() {
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-white/5 px-4 py-3 backdrop-blur">
-        <div>
-          <div className="text-sm font-semibold">Pipeline I/O</div>
-          <div className="text-xs text-white/60">Flux en temps réel: Extension → Intercept → Auth → Audit → Execute</div>
+        <div className="flex items-center gap-3">
+          <div>
+            <div className="text-sm font-semibold">Pipeline I/O</div>
+            <div className="text-xs text-white/60">Flux en temps réel: Extension → Intercept → Auth → Audit → Execute</div>
+          </div>
+          <ConnectionStatusIndicator status={telemetry.connectionState} />
         </div>
         <div className="flex items-center gap-2">
           <label className="flex items-center gap-2 text-xs text-white/60">
@@ -298,12 +385,12 @@ export function GatewayTab() {
                             {metrics.activeRequests}
                           </div>
                         )}
-                        <div className={`absolute -bottom-1 -right-1 h-3 w-3 rounded-full ${healthColor} animate-pulse`} />
+                        <div className={`absolute -bottom-1 -right-1 h-3 w-3 rounded-full ${healthColor} transition-all duration-500`} />
                       </div>
                       
                       <div className="text-xs font-semibold capitalize">{stage}</div>
                       
-                      <div className={`flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] transition-colors ${healthClass}`}>
+                      <div className={`flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] transition-colors duration-300 ${healthClass}`}>
                         <div className={`h-1.5 w-1.5 rounded-full ${healthColor}`} />
                         <span>
                           {metrics.errorRate === 0 ? 'Healthy' : 
@@ -312,16 +399,16 @@ export function GatewayTab() {
                       </div>
                       
                       <div className="mt-1 space-y-0.5 text-center">
-                        <div className="flex items-center gap-1 text-[11px] text-white/60">
+                        <div className="flex items-center gap-1 text-[11px] text-white/60 transition-all duration-300">
                           <span className="font-mono">{metrics.latency.toFixed(0)}ms</span>
                           <span className="text-white/40">latency</span>
                         </div>
-                        <div className="flex items-center gap-1 text-[11px] text-white/60">
+                        <div className="flex items-center gap-1 text-[11px] text-white/60 transition-all duration-300">
                           <TrendingUp size={10} className="text-emerald-400" />
                           <span className="font-mono">{metrics.throughput.toFixed(2)}</span>
                           <span className="text-white/40">req/s</span>
                         </div>
-                        <div className="text-[11px] text-white/40">
+                        <div className="text-[11px] text-white/40 transition-all duration-300">
                           {(metrics.errorRate * 100).toFixed(1)}% err
                         </div>
                       </div>

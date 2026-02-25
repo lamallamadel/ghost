@@ -1,9 +1,29 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Package, CheckCircle, XCircle, Clock, ShieldCheck, AlertTriangle, TrendingUp, Activity, Zap, Skull, RotateCw, Timer, History, Cpu, MemoryStick, BarChart3, Network, FileText, GitBranch, Terminal, Gauge, HardDrive } from 'lucide-react'
+import { Package, CheckCircle, XCircle, Clock, ShieldCheck, AlertTriangle, TrendingUp, Activity, Zap, Skull, RotateCw, Timer, History, Cpu, MemoryStick, BarChart3, Network, FileText, GitBranch, Terminal, Gauge, HardDrive, Wifi, WifiOff } from 'lucide-react'
 import { ghost } from '@/ipc/ghost'
-import type { GatewayState, TrafficPolicerState, ManualOverrideRequest, RuntimeHealthState, ExtensionInfo } from '@/ipc/types'
+import type { GatewayState, TrafficPolicerState, ManualOverrideRequest, RuntimeHealthState, ExtensionInfo, ExtensionStats } from '@/ipc/types'
 import { useToastsStore } from '@/stores/useToastsStore'
 import { ExtensionMetricsChart } from '@/components/ExtensionMetricsChart'
+import { useTelemetryWebSocket, type MetricUpdateEvent, type TelemetryEvent } from '@/hooks/useTelemetryWebSocket'
+
+function ConnectionStatusIndicator({ status }: { status: 'connected' | 'connecting' | 'disconnected' | 'error' }) {
+  const config = {
+    connected: { color: 'bg-emerald-500', label: 'Live', icon: Wifi },
+    connecting: { color: 'bg-yellow-500 animate-pulse', label: 'Reconnecting', icon: Wifi },
+    disconnected: { color: 'bg-rose-500', label: 'Disconnected', icon: WifiOff },
+    error: { color: 'bg-rose-500', label: 'Error', icon: WifiOff },
+  }
+
+  const { color, label, icon: Icon } = config[status]
+
+  return (
+    <div className="flex items-center gap-2 rounded-md border border-white/10 bg-white/5 px-2 py-1">
+      <div className={`h-2 w-2 rounded-full ${color}`} />
+      <Icon size={12} className="text-white/60" />
+      <span className="text-xs text-white/60">{label}</span>
+    </div>
+  )
+}
 
 function HealthBadge({ health }: { health: RuntimeHealthState }) {
   const configs = {
@@ -224,19 +244,19 @@ function MetricsDashboard({ ext }: { ext: ExtensionInfo }) {
           <div className="grid grid-cols-3 gap-4">
             <div>
               <div className="mb-1 text-xs text-white/40">p50 (Median)</div>
-              <div className="font-mono text-lg font-semibold text-blue-400">
+              <div className="font-mono text-lg font-semibold text-blue-400 transition-all duration-500">
                 {metrics.latency.p50.toFixed(1)}<span className="text-xs text-white/40">ms</span>
               </div>
             </div>
             <div>
               <div className="mb-1 text-xs text-white/40">p95</div>
-              <div className="font-mono text-lg font-semibold text-yellow-400">
+              <div className="font-mono text-lg font-semibold text-yellow-400 transition-all duration-500">
                 {metrics.latency.p95.toFixed(1)}<span className="text-xs text-white/40">ms</span>
               </div>
             </div>
             <div>
               <div className="mb-1 text-xs text-white/40">p99</div>
-              <div className="font-mono text-lg font-semibold text-rose-400">
+              <div className="font-mono text-lg font-semibold text-rose-400 transition-all duration-500">
                 {metrics.latency.p99.toFixed(1)}<span className="text-xs text-white/40">ms</span>
               </div>
             </div>
@@ -262,7 +282,7 @@ function MetricsDashboard({ ext }: { ext: ExtensionInfo }) {
                 <FileText size={14} className="text-purple-400" />
                 <span className="text-xs text-white/60">Filesystem</span>
               </div>
-              <span className="font-mono text-sm font-semibold text-purple-400">
+              <span className="font-mono text-sm font-semibold text-purple-400 transition-all duration-500">
                 {metrics.intentBreakdown.filesystem}
               </span>
             </div>
@@ -271,7 +291,7 @@ function MetricsDashboard({ ext }: { ext: ExtensionInfo }) {
                 <Network size={14} className="text-blue-400" />
                 <span className="text-xs text-white/60">Network</span>
               </div>
-              <span className="font-mono text-sm font-semibold text-blue-400">
+              <span className="font-mono text-sm font-semibold text-blue-400 transition-all duration-500">
                 {metrics.intentBreakdown.network}
               </span>
             </div>
@@ -280,7 +300,7 @@ function MetricsDashboard({ ext }: { ext: ExtensionInfo }) {
                 <GitBranch size={14} className="text-orange-400" />
                 <span className="text-xs text-white/60">Git</span>
               </div>
-              <span className="font-mono text-sm font-semibold text-orange-400">
+              <span className="font-mono text-sm font-semibold text-orange-400 transition-all duration-500">
                 {metrics.intentBreakdown.git}
               </span>
             </div>
@@ -289,7 +309,7 @@ function MetricsDashboard({ ext }: { ext: ExtensionInfo }) {
                 <Terminal size={14} className="text-cyan-400" />
                 <span className="text-xs text-white/60">Process</span>
               </div>
-              <span className="font-mono text-sm font-semibold text-cyan-400">
+              <span className="font-mono text-sm font-semibold text-cyan-400 transition-all duration-500">
                 {metrics.intentBreakdown.process}
               </span>
             </div>
@@ -365,14 +385,14 @@ function MetricsDashboard({ ext }: { ext: ExtensionInfo }) {
           <div className="grid grid-cols-2 gap-4">
             <div>
               <div className="mb-1 text-xs text-white/40">Avg Request Size</div>
-              <div className="font-mono text-lg font-semibold text-purple-400">
+              <div className="font-mono text-lg font-semibold text-purple-400 transition-all duration-500">
                 {(metrics.requestSizeStats.avgRequestBytes / 1024).toFixed(2)}
                 <span className="text-xs text-white/40"> KB</span>
               </div>
             </div>
             <div>
               <div className="mb-1 text-xs text-white/40">Avg Response Size</div>
-              <div className="font-mono text-lg font-semibold text-cyan-400">
+              <div className="font-mono text-lg font-semibold text-cyan-400 transition-all duration-500">
                 {(metrics.requestSizeStats.avgResponseBytes / 1024).toFixed(2)}
                 <span className="text-xs text-white/40"> KB</span>
               </div>
@@ -774,12 +794,100 @@ export function ExtensionsTab() {
   const [loading, setLoading] = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
   const [overrideExtId, setOverrideExtId] = useState<string | null>(null)
+  const [extensionStats, setExtensionStats] = useState<Map<string, ExtensionStats>>(new Map())
+
+  const handleTelemetryEvent = useCallback((event: TelemetryEvent) => {
+    if (event.type === 'metric_update') {
+      const metricData = event.data as MetricUpdateEvent
+      
+      setExtensionStats(prev => {
+        const updated = new Map(prev)
+        
+        if (metricData.extensionId) {
+          const existingStats = updated.get(metricData.extensionId) || {
+            requestsApproved: 0,
+            requestsRejected: 0,
+            requestsRateLimited: 0,
+            metrics: {}
+          }
+
+          const newMetrics = { ...existingStats.metrics }
+
+          if (metricData.latencies && metricData.latencies[metricData.extensionId]) {
+            const latencyData = metricData.latencies[metricData.extensionId]
+            const firstKey = Object.keys(latencyData)[0]
+            if (firstKey) {
+              newMetrics.latency = latencyData[firstKey]
+            }
+          }
+
+          if (metricData.intentSizes && metricData.intentSizes[metricData.extensionId]) {
+            const sizes = metricData.intentSizes[metricData.extensionId]
+            newMetrics.requestSizeStats = {
+              avgRequestBytes: sizes.avgRequestSize,
+              avgResponseBytes: sizes.avgResponseSize,
+            }
+          }
+
+          updated.set(metricData.extensionId, {
+            ...existingStats,
+            metrics: newMetrics
+          })
+        }
+
+        return updated
+      })
+
+      setState(prev => {
+        if (!prev) return prev
+        
+        return {
+          ...prev,
+          extensions: prev.extensions.map(ext => {
+            const wsStats = extensionStats.get(ext.manifest.id)
+            if (wsStats) {
+              return {
+                ...ext,
+                stats: {
+                  ...ext.stats,
+                  ...wsStats,
+                  metrics: {
+                    ...ext.stats.metrics,
+                    ...wsStats.metrics
+                  }
+                }
+              }
+            }
+            return ext
+          })
+        }
+      })
+    }
+  }, [extensionStats])
+
+  const telemetry = useTelemetryWebSocket({
+    autoReconnect: true,
+    onEvent: handleTelemetryEvent,
+  })
+
+  useEffect(() => {
+    telemetry.subscribe(['metric_update'])
+    return () => {
+      telemetry.unsubscribe(['metric_update'])
+    }
+  }, [telemetry])
 
   const load = useCallback(async () => {
     setLoading(true)
     try {
       const res = await ghost.gatewayState()
       setState(res)
+      
+      const statsMap = new Map<string, ExtensionStats>()
+      res.extensions.forEach(ext => {
+        statsMap.set(ext.manifest.id, ext.stats)
+      })
+      setExtensionStats(statsMap)
     } catch (e) {
       pushToast({ title: 'État indisponible', message: String(e), tone: 'danger' })
     } finally {
@@ -789,9 +897,13 @@ export function ExtensionsTab() {
 
   useEffect(() => {
     load()
+  }, [load])
+
+  useEffect(() => {
+    if (telemetry.connectionState === 'connected') return
     const interval = setInterval(load, 3000)
     return () => clearInterval(interval)
-  }, [load])
+  }, [load, telemetry.connectionState])
 
   async function handleManualOverride(req: ManualOverrideRequest) {
     try {
@@ -813,9 +925,12 @@ export function ExtensionsTab() {
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-white/5 px-4 py-3 backdrop-blur">
-        <div>
-          <div className="text-sm font-semibold">Extensions chargées</div>
-          <div className="text-xs text-white/60">Manifestes, stats I/O, et gouvernance QoS</div>
+        <div className="flex items-center gap-3">
+          <div>
+            <div className="text-sm font-semibold">Extensions chargées</div>
+            <div className="text-xs text-white/60">Manifestes, stats I/O, et gouvernance QoS</div>
+          </div>
+          <ConnectionStatusIndicator status={telemetry.connectionState} />
         </div>
         <div className="flex items-center gap-2">
           <div className="rounded-md border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/60">
@@ -862,17 +977,17 @@ export function ExtensionsTab() {
                         <div className="flex items-center gap-2">
                           <CheckCircle size={14} className="text-emerald-400" />
                           <span className="text-xs text-white/60">Approuvées:</span>
-                          <span className="font-mono text-sm font-semibold text-emerald-400">{ext.stats.requestsApproved}</span>
+                          <span className="font-mono text-sm font-semibold text-emerald-400 transition-all duration-500">{ext.stats.requestsApproved}</span>
                         </div>
                         <div className="flex items-center gap-2">
                           <XCircle size={14} className="text-rose-400" />
                           <span className="text-xs text-white/60">Rejetées:</span>
-                          <span className="font-mono text-sm font-semibold text-rose-400">{ext.stats.requestsRejected}</span>
+                          <span className="font-mono text-sm font-semibold text-rose-400 transition-all duration-500">{ext.stats.requestsRejected}</span>
                         </div>
                         <div className="flex items-center gap-2">
                           <Clock size={14} className="text-yellow-400" />
                           <span className="text-xs text-white/60">Rate-limited:</span>
-                          <span className="font-mono text-sm font-semibold text-yellow-400">{ext.stats.requestsRateLimited}</span>
+                          <span className="font-mono text-sm font-semibold text-yellow-400 transition-all duration-500">{ext.stats.requestsRateLimited}</span>
                         </div>
                       </div>
                     </div>
