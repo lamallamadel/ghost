@@ -1,4 +1,5 @@
 const { URL } = require('url');
+const dns = require('dns').promises;
 
 class NetworkValidator {
     constructor(options = {}) {
@@ -58,6 +59,72 @@ class NetworkValidator {
         }
     }
 
+    decodeURLEncodedString(str) {
+        try {
+            let decoded = str;
+            let previous = '';
+            while (decoded !== previous) {
+                previous = decoded;
+                decoded = decodeURIComponent(decoded);
+            }
+            return decoded;
+        } catch (error) {
+            return str;
+        }
+    }
+
+    normalizeIPNotation(hostname) {
+        if (!hostname || typeof hostname !== 'string') {
+            return hostname;
+        }
+
+        if (/^0x[0-9a-fA-F]+$/i.test(hostname)) {
+            const num = parseInt(hostname, 16);
+            if (num <= 0xFFFFFFFF) {
+                return this.decimalToIPv4(num);
+            }
+        }
+
+        if (/^0[0-7]+$/.test(hostname)) {
+            const num = parseInt(hostname, 8);
+            if (num <= 0xFFFFFFFF) {
+                return this.decimalToIPv4(num);
+            }
+        }
+
+        if (/^\d+$/.test(hostname)) {
+            const num = parseInt(hostname, 10);
+            if (num <= 0xFFFFFFFF) {
+                return this.decimalToIPv4(num);
+            }
+        }
+
+        const dottedMixedPattern = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/;
+        const match = hostname.match(dottedMixedPattern);
+        if (match) {
+            const octets = [
+                parseInt(match[1], 10),
+                parseInt(match[2], 10),
+                parseInt(match[3], 10),
+                parseInt(match[4], 10)
+            ];
+            if (octets.every(octet => octet >= 0 && octet <= 255)) {
+                return hostname;
+            }
+        }
+
+        return hostname;
+    }
+
+    decimalToIPv4(num) {
+        return [
+            (num >>> 24) & 0xFF,
+            (num >>> 16) & 0xFF,
+            (num >>> 8) & 0xFF,
+            num & 0xFF
+        ].join('.');
+    }
+
     isPrivateIP(hostname) {
         const ipv4Patterns = [
             /^10\./,
@@ -96,6 +163,19 @@ class NetworkValidator {
         return ipv4Pattern.test(hostname) || ipv6Pattern.test(hostname);
     }
 
+    isCloudMetadataEndpoint(hostname) {
+        const metadataEndpoints = [
+            '169.254.169.254',
+            '169.254.170.2',
+            'metadata.google.internal',
+            'metadata.azure.com'
+        ];
+
+        return metadataEndpoints.some(endpoint => 
+            hostname === endpoint || hostname.endsWith('.' + endpoint)
+        );
+    }
+
     matchesDomain(hostname, pattern) {
         const normalizedHostname = this.normalizeDomain(hostname);
         const normalizedPattern = this.normalizeDomain(pattern);
@@ -132,13 +212,7 @@ class NetworkValidator {
             };
         }
 
-        const metadataServices = [
-            '169.254.169.254',
-            'metadata.google.internal',
-            'instance-data'
-        ];
-
-        if (metadataServices.some(service => hostname.includes(service))) {
+        if (this.isCloudMetadataEndpoint(hostname)) {
             return {
                 isSSRF: true,
                 reason: 'Cloud metadata service access blocked (SSRF prevention)'
@@ -149,6 +223,117 @@ class NetworkValidator {
             isSSRF: false,
             reason: null
         };
+    }
+
+    async resolveAndValidate(urlString) {
+        const decodedURL = this.decodeURLEncodedString(urlString);
+        
+        if (decodedURL !== urlString) {
+            const urlEncodingCheck = this.detectURLEncodingObfuscation(urlString);
+            if (urlEncodingCheck.detected) {
+                return {
+                    valid: false,
+                    reason: `URL-encoding obfuscation detected: ${urlEncodingCheck.reason}`
+                };
+            }
+        }
+
+        const parsedURL = this.parseURL(urlString);
+        
+        if (!parsedURL) {
+            return {
+                valid: false,
+                reason: 'Invalid URL format'
+            };
+        }
+
+        let hostname = parsedURL.hostname.toLowerCase();
+
+        const normalizedHostname = this.normalizeIPNotation(hostname);
+        if (normalizedHostname !== hostname) {
+            hostname = normalizedHostname;
+            const ssrfCheck = this.isSSRFAttempt(hostname);
+            if (ssrfCheck.isSSRF) {
+                return {
+                    valid: false,
+                    reason: `IP notation obfuscation detected: ${ssrfCheck.reason}`
+                };
+            }
+        }
+
+        const initialValidation = this.validateURL(urlString);
+        if (!initialValidation.valid) {
+            return initialValidation;
+        }
+
+        if (!this.isIPAddress(hostname)) {
+            try {
+                const lookupResult = await dns.lookup(hostname);
+                const resolvedIP = lookupResult.address;
+
+                if (this.isLocalhostIP(resolvedIP) && !this.allowLocalhostIPs) {
+                    return {
+                        valid: false,
+                        reason: `DNS resolves to localhost (${resolvedIP}) - potential DNS rebinding SSRF`
+                    };
+                }
+
+                if (this.isPrivateIP(resolvedIP) && !this.allowPrivateIPs) {
+                    return {
+                        valid: false,
+                        reason: `DNS resolves to private IP (${resolvedIP}) - potential DNS rebinding SSRF`
+                    };
+                }
+
+                if (this.isCloudMetadataEndpoint(resolvedIP)) {
+                    return {
+                        valid: false,
+                        reason: `DNS resolves to cloud metadata endpoint (${resolvedIP}) - DNS rebinding SSRF blocked`
+                    };
+                }
+
+                return {
+                    valid: true,
+                    reason: 'URL validation passed with DNS resolution',
+                    parsed: parsedURL,
+                    resolvedIP: resolvedIP
+                };
+            } catch (error) {
+                return {
+                    valid: false,
+                    reason: `DNS lookup failed: ${error.message}`
+                };
+            }
+        }
+
+        return {
+            valid: true,
+            reason: 'URL validation passed',
+            parsed: parsedURL
+        };
+    }
+
+    detectURLEncodingObfuscation(urlString) {
+        const suspiciousPatterns = [
+            { pattern: /%31%32%37/i, target: '127', description: '127 (localhost)' },
+            { pattern: /%31%30\./i, target: '10.', description: '10. (private IP)' },
+            { pattern: /%31%37%32\./i, target: '172.', description: '172. (private IP)' },
+            { pattern: /%31%39%32\.%31%36%38/i, target: '192.168', description: '192.168 (private IP)' },
+            { pattern: /%31%36%39\.%32%35%34/i, target: '169.254', description: '169.254 (link-local/metadata)' },
+            { pattern: /%6c%6f%63%61%6c%68%6f%73%74/i, target: 'localhost', description: 'localhost' },
+            { pattern: /%6d%65%74%61%64%61%74%61/i, target: 'metadata', description: 'metadata' }
+        ];
+
+        for (const { pattern, target, description } of suspiciousPatterns) {
+            if (pattern.test(urlString)) {
+                return {
+                    detected: true,
+                    reason: `URL-encoded ${description} detected (obfuscation attempt)`
+                };
+            }
+        }
+
+        return { detected: false };
     }
 
     validateURL(urlString) {
@@ -275,6 +460,26 @@ class NetworkValidator {
             allowPrivateIPs: false,
             allowLocalhostIPs: false
         });
+    }
+
+    static validateFromManifest(urlString, manifestAllowlist) {
+        if (!manifestAllowlist || typeof manifestAllowlist !== 'object') {
+            throw new Error('Invalid manifest allowlist');
+        }
+
+        const options = {
+            allowedSchemes: manifestAllowlist.schemes || ['https'],
+            allowedDomains: manifestAllowlist.domains || [],
+            allowedPorts: manifestAllowlist.ports || [],
+            deniedDomains: manifestAllowlist.deniedDomains || [],
+            deniedIPs: manifestAllowlist.deniedIPs || [],
+            requireTLS: manifestAllowlist.requireTLS !== false,
+            allowPrivateIPs: manifestAllowlist.allowPrivateIPs || false,
+            allowLocalhostIPs: manifestAllowlist.allowLocalhostIPs || false
+        };
+
+        const validator = new NetworkValidator(options);
+        return validator.validateURL(urlString);
     }
 }
 
