@@ -457,7 +457,9 @@ class GatewayLauncher {
         if (!subcommand || subcommand === 'help') {
             console.log(`${Colors.BOLD}Gateway Commands:${Colors.ENDC}
   ghost gateway status                    Show gateway status and statistics
+  ghost gateway extensions                Show loaded extensions with runtime state
   ghost gateway health                    Show extension health status
+  ghost gateway logs [options]            View audit logs (alias for audit-log view)
   ghost gateway metrics [extension-id]    Show telemetry metrics
   ghost gateway spans [limit]             Show recent spans
 `);
@@ -468,6 +470,12 @@ class GatewayLauncher {
             // Pure orchestration: query metadata from components
             const extensions = this.gateway.listExtensions();
             const runtimeHealth = this.runtime.getHealthStatus();
+            const trafficPolicerStates = this.pipeline.getAllTrafficPolicerStates();
+            
+            const pipelineStats = {
+                totalIntentsProcessed: this.telemetry.requests.length,
+                trafficPolicerStates: trafficPolicerStates
+            };
             
             const status = {
                 gateway: {
@@ -477,6 +485,7 @@ class GatewayLauncher {
                     telemetryServer: this.telemetryServer ? `http://localhost:${this.telemetryServer.port}` : 'Not running'
                 },
                 runtime: runtimeHealth,
+                pipeline: pipelineStats,
                 telemetry: {
                     totalRequests: this.telemetry.requests.length,
                     recentRequests: this.telemetry.requests.slice(-10)
@@ -494,7 +503,84 @@ class GatewayLauncher {
                 console.log(`Total Requests:    ${status.telemetry.totalRequests}`);
                 console.log(`Telemetry Server:  ${status.gateway.telemetryServer}`);
                 console.log('');
+                
+                console.log(`${Colors.BOLD}Pipeline Statistics:${Colors.ENDC}`);
+                console.log(`Total Intents:     ${pipelineStats.totalIntentsProcessed}`);
+                
+                if (Object.keys(pipelineStats.trafficPolicerStates).length > 0) {
+                    console.log('');
+                    console.log(`${Colors.BOLD}Rate Limit States:${Colors.ENDC}`);
+                    for (const [extId, state] of Object.entries(pipelineStats.trafficPolicerStates)) {
+                        if (state) {
+                            const color = state.committedTokens > 0 ? Colors.GREEN : 
+                                        state.excessTokens > 0 ? Colors.WARNING : Colors.FAIL;
+                            console.log(`  ${color}${extId}${Colors.ENDC}`);
+                            console.log(`    Committed tokens: ${state.committedTokens.toFixed(2)} / ${state.committedCapacity}`);
+                            console.log(`    Excess tokens:    ${state.excessTokens.toFixed(2)} / ${state.excessCapacity}`);
+                            console.log(`    Rate (CIR):       ${state.cir} tokens/min`);
+                            console.log(`    Last refill:      ${new Date(state.lastRefill).toISOString()}`);
+                        }
+                    }
+                }
+                console.log('');
             }
+        } else if (subcommand === 'extensions') {
+            // Pure orchestration: query Gateway and Runtime metadata
+            const extensions = this.gateway.listExtensions();
+            const extensionsData = [];
+            
+            for (const ext of extensions) {
+                const fullExt = this.gateway.getExtension(ext.id);
+                const runtimeState = this.runtime.getExtensionState(ext.id);
+                
+                extensionsData.push({
+                    id: ext.id,
+                    name: ext.name,
+                    version: ext.version,
+                    runtimeState: runtimeState ? runtimeState.state : 'NOT_STARTED',
+                    manifest: fullExt ? fullExt.manifest : null
+                });
+            }
+
+            if (parsedArgs.flags.json) {
+                console.log(JSON.stringify(extensionsData, null, 2));
+            } else {
+                console.log(`\n${Colors.BOLD}${Colors.CYAN}Loaded Extensions${Colors.ENDC}`);
+                console.log(`${Colors.DIM}${'─'.repeat(80)}${Colors.ENDC}\n`);
+                
+                if (extensionsData.length === 0) {
+                    console.log(`${Colors.DIM}No extensions loaded.${Colors.ENDC}\n`);
+                } else {
+                    for (const ext of extensionsData) {
+                        const stateColor = this._getStateColor(ext.runtimeState);
+                        console.log(`${Colors.BOLD}${ext.name}${Colors.ENDC} ${Colors.DIM}(${ext.id})${Colors.ENDC}`);
+                        console.log(`  Version:        ${ext.version}`);
+                        console.log(`  Runtime State:  ${stateColor}${ext.runtimeState}${Colors.ENDC}`);
+                        
+                        if (ext.manifest) {
+                            console.log(`  Main:           ${ext.manifest.main}`);
+                            
+                            if (ext.manifest.capabilities) {
+                                const caps = [];
+                                if (ext.manifest.capabilities.filesystem) caps.push('filesystem');
+                                if (ext.manifest.capabilities.network) caps.push('network');
+                                if (ext.manifest.capabilities.git) caps.push('git');
+                                if (ext.manifest.capabilities.hooks) caps.push('hooks');
+                                console.log(`  Capabilities:   ${caps.join(', ') || 'none'}`);
+                            }
+                        }
+                        console.log('');
+                    }
+                }
+            }
+        } else if (subcommand === 'logs') {
+            // Alias to audit-log view
+            const modifiedArgs = {
+                ...parsedArgs,
+                command: 'audit-log',
+                subcommand: 'view'
+            };
+            await this.handleAuditLogCommand(modifiedArgs);
         } else if (subcommand === 'metrics') {
             // Pure orchestration: query telemetry metrics and format output
             const extensionId = parsedArgs.args[0] || null;
@@ -843,6 +929,26 @@ class GatewayLauncher {
         
         const color = stateColors[state] || '';
         return `${color}${state}${Colors.ENDC}`;
+    }
+
+    /**
+     * Get color for runtime state.
+     * 
+     * ORCHESTRATION ROLE: Correct implementation
+     * - Pure formatting logic, no I/O
+     */
+    _getStateColor(state) {
+        const stateColors = {
+            'RUNNING': Colors.GREEN,
+            'STOPPED': Colors.DIM,
+            'FAILED': Colors.FAIL,
+            'STARTING': Colors.WARNING,
+            'STOPPING': Colors.WARNING,
+            'DEGRADED': Colors.WARNING,
+            'NOT_STARTED': Colors.DIM
+        };
+        
+        return stateColors[state] || '';
     }
 
     /**
@@ -1270,8 +1376,10 @@ ${Colors.BOLD}GATEWAY COMMANDS:${Colors.ENDC}
   extension info <id>           Show extension details
   extension init <name>         Scaffold new extension project
   extension validate [path]     Validate extension manifest
-  gateway status                Show gateway status
+  gateway status                Show gateway status and pipeline statistics
+  gateway extensions            Show loaded extensions with runtime state
   gateway health                Show extension health
+  gateway logs [options]        View audit logs (alias for audit-log view)
   gateway metrics [ext-id]      Show telemetry metrics
   gateway spans [limit]         Show recent spans
   audit-log view                View audit logs
@@ -1294,7 +1402,9 @@ ${Colors.BOLD}EXAMPLES:${Colors.ENDC}
   ghost extension list
   ghost extension init my-extension
   ghost extension validate
-  ghost gateway status --verbose
+  ghost gateway status --verbose --json
+  ghost gateway extensions --json
+  ghost gateway logs --limit 100 --extension ghost-git-extension
   ghost gateway metrics ghost-git-extension
   ghost gateway spans 100
   ghost commit --dry-run
