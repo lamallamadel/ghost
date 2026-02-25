@@ -144,3 +144,6 @@ vite.config.ts.timestamp-*
 .ghost/telemetry/
 *.ghost*
 .ghost_*
+
+# Test temporary directories
+test/temp_ghostignore_test/

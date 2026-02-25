@@ -9,27 +9,35 @@ class EntropyValidator {
         this.maxLength = options.maxLength || 256;
         this.ignoredPatterns = options.ignoredPatterns || [];
         this.ghostIgnorePatterns = [];
+        this.ghostIgnoreLoaded = false;
         this.secretRegexes = options.secretRegexes || this.getDefaultSecretRegexes();
         this.knownNonSecrets = options.knownNonSecrets || this.getDefaultNonSecrets();
     }
 
     getDefaultSecretRegexes() {
         return [
-            { name: 'Groq API Key', regex: /gsk_[a-zA-Z0-9]{48,}/g },
-            { name: 'GitHub Token', regex: /gh[pous]_[a-zA-Z0-9]{36,}/g },
-            { name: 'GitHub Classic Token', regex: /ghp_[a-zA-Z0-9]{36,}/g },
-            { name: 'Slack Token', regex: /xox[baprs]-[0-9a-zA-Z]{10,48}/g },
-            { name: 'AWS Access Key', regex: /AKIA[0-9A-Z]{16}/g },
-            { name: 'AWS Secret Key', regex: /[A-Za-z0-9/+=]{40}/g },
-            { name: 'Private Key Header', regex: /-----BEGIN (RSA|EC|PGP|OPENSSH|DSA) PRIVATE KEY-----/g },
-            { name: 'Generic API Key', regex: /(?:key|api|token|secret|auth)[_-]?(?:key|api|token|secret|auth)?\s*[:=]\s*['"]([a-zA-Z0-9_\-]{16,})['"]?/gi },
-            { name: 'Bearer Token', regex: /bearer\s+[a-zA-Z0-9_\-\.]{20,}/gi },
-            { name: 'Basic Auth', regex: /basic\s+[a-zA-Z0-9+/=]{20,}/gi },
-            { name: 'OpenAI API Key', regex: /sk-[a-zA-Z0-9]{48,}/g },
-            { name: 'Anthropic API Key', regex: /sk-ant-[a-zA-Z0-9\-]{95,}/g },
-            { name: 'JWT Token', regex: /eyJ[a-zA-Z0-9_-]*\.eyJ[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*/g },
-            { name: 'Database Connection String', regex: /(mongodb|mysql|postgresql|postgres):\/\/[^:]+:[^@]+@[^\/]+/gi },
-            { name: 'Generic Secret Pattern', regex: /(?:secret|password|passwd|pwd)[_-]?\s*[:=]\s*['"]?([a-zA-Z0-9!@#$%^&*()_+\-=]{8,})['"]?/gi }
+            { name: 'Groq API Key', regex: /gsk_[a-zA-Z0-9]{48,}/g, severity: 'critical' },
+            { name: 'GitHub Token', regex: /gh[pous]_[a-zA-Z0-9]{36,}/g, severity: 'critical' },
+            { name: 'GitHub Classic Token', regex: /ghp_[a-zA-Z0-9]{36,}/g, severity: 'critical' },
+            { name: 'Slack Token', regex: /xox[baprs]-[0-9a-zA-Z]{10,48}/g, severity: 'high' },
+            { name: 'AWS Access Key', regex: /AKIA[0-9A-Z]{16}/g, severity: 'critical' },
+            { name: 'AWS Secret Key', regex: /[A-Za-z0-9/+=]{40}/g, severity: 'high' },
+            { name: 'Private Key Header', regex: /-----BEGIN (RSA|EC|PGP|OPENSSH|DSA) PRIVATE KEY-----/g, severity: 'critical' },
+            { name: 'Generic API Key', regex: /(?:key|api|token|secret|auth)[_-]?(?:key|api|token|secret|auth)?\s*[:=]\s*['"]([a-zA-Z0-9_\-]{16,})['"]?/gi, severity: 'medium' },
+            { name: 'Bearer Token', regex: /bearer\s+[a-zA-Z0-9_\-\.]{20,}/gi, severity: 'high' },
+            { name: 'Basic Auth', regex: /basic\s+[a-zA-Z0-9+/=]{20,}/gi, severity: 'high' },
+            { name: 'OpenAI API Key', regex: /sk-[a-zA-Z0-9]{48,}/g, severity: 'critical' },
+            { name: 'Anthropic API Key', regex: /sk-ant-[a-zA-Z0-9\-]{95,}/g, severity: 'critical' },
+            { name: 'JWT Token', regex: /eyJ[a-zA-Z0-9_-]*\.eyJ[a-zA-Z0-9_-]*\.[a-zA-Z0-9_-]*/g, severity: 'medium' },
+            { name: 'Database Connection String', regex: /(mongodb|mysql|postgresql|postgres):\/\/[^:]+:[^@]+@[^\/]+/gi, severity: 'critical' },
+            { name: 'Generic Secret Pattern', regex: /(?:secret|password|passwd|pwd)[_-]?\s*[:=]\s*['"]?([a-zA-Z0-9!@#$%^&*()_+\-=]{8,})['"]?/gi, severity: 'medium' },
+            { name: 'Google Cloud Service Account Key', regex: /\{"type"\s*:\s*"service_account"[^}]*"private_key"\s*:\s*"[^"]+"/gi, severity: 'critical' },
+            { name: 'Google Cloud Private Key ID', regex: /"private_key_id"\s*:\s*"[a-f0-9]{40}"/gi, severity: 'critical' },
+            { name: 'Stripe Live Secret Key', regex: /sk_live_[a-zA-Z0-9]{24,}/g, severity: 'critical' },
+            { name: 'Stripe Live Restricted Key', regex: /rk_live_[a-zA-Z0-9]{24,}/g, severity: 'critical' },
+            { name: 'Twilio API Key', regex: /SK[a-f0-9]{32}/g, severity: 'critical' },
+            { name: 'Azure Storage Connection String', regex: /DefaultEndpointsProtocol=https?;.*AccountName=[^;]+;.*AccountKey=[a-zA-Z0-9+/=]{88}/gi, severity: 'critical' },
+            { name: 'Azure Shared Access Signature', regex: /\?sv=\d{4}-\d{2}-\d{2}&[^\s"']+/g, severity: 'high' }
         ];
     }
 
@@ -59,8 +67,14 @@ class EntropyValidator {
             'sample',
             'placeholder',
             'dummy',
+            'fixture',
+            'mock',
             'AKIAIOSFODNN7EXAMPLE',
-            'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'
+            'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY',
+            'base64',
+            'encoding',
+            'iVBORw0KGgo',
+            'data:image'
         ];
     }
 
@@ -70,9 +84,9 @@ class EntropyValidator {
         }
     }
 
-    addSecretRegex(name, regex) {
+    addSecretRegex(name, regex, severity = 'high') {
         if (name && regex) {
-            this.secretRegexes.push({ name, regex });
+            this.secretRegexes.push({ name, regex, severity });
         }
     }
 
@@ -81,6 +95,7 @@ class EntropyValidator {
         
         if (!fs.existsSync(ghostIgnorePath)) {
             this.ghostIgnorePatterns = [];
+            this.ghostIgnoreLoaded = true;
             return;
         }
 
@@ -90,8 +105,10 @@ class EntropyValidator {
                 .split('\n')
                 .map(line => line.trim())
                 .filter(line => line && !line.startsWith('#'));
+            this.ghostIgnoreLoaded = true;
         } catch (error) {
             this.ghostIgnorePatterns = [];
+            this.ghostIgnoreLoaded = true;
         }
     }
 
@@ -128,8 +145,20 @@ class EntropyValidator {
             }
         }
 
-        if (/example|test|sample|placeholder|dummy/i.test(content)) {
+        if (/example|test|sample|placeholder|dummy|fixture|mock/i.test(content)) {
             return true;
+        }
+
+        if (/data:image\/[a-z]+;base64,/i.test(content)) {
+            return true;
+        }
+
+        if (/^[A-Za-z0-9+/]{40,}={0,2}$/.test(content) && content.length % 4 === 0) {
+            const alphaCount = (content.match(/[a-zA-Z]/g) || []).length;
+            const digitCount = (content.match(/[0-9]/g) || []).length;
+            if (alphaCount === 0 || digitCount === 0) {
+                return true;
+            }
         }
 
         return false;
@@ -165,7 +194,7 @@ class EntropyValidator {
             return false;
         }
 
-        if (this.isIgnored(content) || this.isKnownNonSecret(content)) {
+        if (this.isKnownNonSecret(content) || this.isIgnored(content)) {
             return false;
         }
 
@@ -207,12 +236,12 @@ class EntropyValidator {
 
         const detected = [];
 
-        for (const { name, regex } of this.secretRegexes) {
+        for (const { name, regex, severity } of this.secretRegexes) {
             const matches = content.match(regex);
             
             if (matches) {
                 for (const match of matches) {
-                    if (this.isIgnored(match) || this.isKnownNonSecret(match)) {
+                    if (this.isKnownNonSecret(match) || this.isIgnored(match)) {
                         continue;
                     }
 
@@ -225,7 +254,7 @@ class EntropyValidator {
                         value: match,
                         display: display,
                         method: 'regex',
-                        severity: 'high'
+                        severity: severity || 'high'
                     });
                 }
             }
@@ -317,6 +346,37 @@ class EntropyValidator {
             hasSecrets: uniqueSecrets.length > 0,
             secrets: uniqueSecrets,
             summary: summary
+        };
+    }
+
+    scanContentForIntent(content, ghostIgnorePath = null) {
+        if (!this.ghostIgnoreLoaded && ghostIgnorePath) {
+            const repoRoot = ghostIgnorePath ? path.dirname(ghostIgnorePath) : null;
+            this.loadGhostIgnore(repoRoot);
+        } else if (!this.ghostIgnoreLoaded) {
+            this.loadGhostIgnore(process.cwd());
+        }
+
+        const scanResult = this.scanContent(content, { useRegex: true, useEntropy: true });
+
+        if (!scanResult.hasSecrets) {
+            return {
+                valid: true,
+                violations: []
+            };
+        }
+
+        const violations = scanResult.secrets.map(secret => ({
+            rule: 'SI-10-SECRET-DETECTION',
+            message: `Potential secret detected: ${secret.type}`,
+            severity: secret.severity,
+            detail: secret.display,
+            method: secret.method
+        }));
+
+        return {
+            valid: false,
+            violations: violations
         };
     }
 
