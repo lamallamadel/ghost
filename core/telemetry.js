@@ -11,6 +11,8 @@ const SEVERITY_LEVELS = {
     SECURITY_ALERT: 'SECURITY_ALERT'
 };
 
+const SECRET_FIELDS = ['api_key', 'apiKey', 'token', 'password', 'secret', 'auth', 'authorization', 'credentials'];
+
 class Span {
     constructor(name, parentSpan = null) {
         this.spanId = this._generateSpanId();
@@ -111,17 +113,77 @@ class StructuredLogger {
         }
     }
 
-    _getLogPath() {
-        const date = new Date().toISOString().split('T')[0];
-        return path.join(this.baseDir, `telemetry-${date}.log`);
+    _getLogPath(date = null) {
+        const dateStr = date || new Date().toISOString().split('T')[0];
+        return path.join(this.baseDir, `telemetry-${dateStr}.log`);
+    }
+
+    _sanitizeValue(value) {
+        if (value === null || value === undefined) {
+            return value;
+        }
+
+        if (typeof value === 'string') {
+            return value;
+        }
+
+        if (Array.isArray(value)) {
+            return value.map(item => this._sanitizeValue(item));
+        }
+
+        if (typeof value === 'object') {
+            const sanitized = {};
+            for (const [key, val] of Object.entries(value)) {
+                const lowerKey = key.toLowerCase();
+                const isSecret = SECRET_FIELDS.some(field => lowerKey.includes(field.toLowerCase()));
+                
+                if (isSecret) {
+                    sanitized[key] = '[REDACTED]';
+                } else {
+                    sanitized[key] = this._sanitizeValue(val);
+                }
+            }
+            return sanitized;
+        }
+
+        return value;
+    }
+
+    _sanitizeMetadata(metadata) {
+        if (!metadata || typeof metadata !== 'object') {
+            return metadata;
+        }
+
+        const sanitized = {};
+        for (const [key, value] of Object.entries(metadata)) {
+            const lowerKey = key.toLowerCase();
+            const isSecret = SECRET_FIELDS.some(field => lowerKey.includes(field.toLowerCase()));
+            
+            if (isSecret) {
+                sanitized[key] = '[REDACTED]';
+            } else if (key === 'params' && typeof value === 'object') {
+                sanitized[key] = this._sanitizeValue(value);
+            } else if (typeof value === 'object' && !Array.isArray(value)) {
+                sanitized[key] = this._sanitizeValue(value);
+            } else {
+                sanitized[key] = value;
+            }
+        }
+        return sanitized;
     }
 
     log(severity, message, metadata = {}) {
+        const sanitized = this._sanitizeMetadata(metadata);
+        
         const entry = {
             timestamp: new Date().toISOString(),
             severity,
             message,
-            ...metadata
+            extensionId: sanitized.extensionId || null,
+            requestId: sanitized.requestId || null,
+            layer: sanitized.layer || null,
+            errorCode: sanitized.errorCode || sanitized.code || null,
+            ...sanitized
         };
 
         const logLine = JSON.stringify(entry) + '\n';
@@ -139,7 +201,7 @@ class StructuredLogger {
     }
 
     warn(message, metadata = {}) {
-        return this.log(SEVERITY_LEVELS.WARN, message, metadata);
+        return this.log(SEVERITY_LEVELS.WARN, metadata);
     }
 
     error(message, metadata = {}) {
@@ -151,9 +213,9 @@ class StructuredLogger {
     }
 
     readLogs(options = {}) {
-        const { date, severity, limit = 1000 } = options;
+        const { date, severity, limit = 1000, extensionId, requestId, layer, errorCode } = options;
         const targetDate = date || new Date().toISOString().split('T')[0];
-        const logPath = path.join(this.baseDir, `telemetry-${targetDate}.log`);
+        const logPath = this._getLogPath(targetDate);
 
         if (!fs.existsSync(logPath)) {
             return [];
@@ -174,6 +236,22 @@ class StructuredLogger {
 
             if (severity) {
                 logs = logs.filter(log => log.severity === severity);
+            }
+
+            if (extensionId) {
+                logs = logs.filter(log => log.extensionId === extensionId);
+            }
+
+            if (requestId) {
+                logs = logs.filter(log => log.requestId === requestId);
+            }
+
+            if (layer) {
+                logs = logs.filter(log => log.layer === layer);
+            }
+
+            if (errorCode) {
+                logs = logs.filter(log => log.errorCode === errorCode);
             }
 
             return logs.slice(-limit);
@@ -420,8 +498,21 @@ class TelemetryServer {
         if (req.url.startsWith('/logs')) {
             const url = new URL(req.url, `http://localhost:${this.port}`);
             const severity = url.searchParams.get('severity');
+            const date = url.searchParams.get('date');
+            const extensionId = url.searchParams.get('extensionId');
+            const requestId = url.searchParams.get('requestId');
+            const layer = url.searchParams.get('layer');
+            const errorCode = url.searchParams.get('errorCode');
             const limit = parseInt(url.searchParams.get('limit') || '100');
-            const logs = this.telemetry.logger.readLogs({ severity, limit });
+            const logs = this.telemetry.logger.readLogs({ 
+                severity, 
+                date, 
+                extensionId, 
+                requestId, 
+                layer, 
+                errorCode, 
+                limit 
+            });
             res.writeHead(200);
             res.end(JSON.stringify(logs, null, 2));
             return;
@@ -559,18 +650,35 @@ class Telemetry {
             this.metrics.recordRequest(extensionId, stage, latency);
         }
 
+        const layerName = this._extractLayerFromSpanName(span.name);
+
         this.logger.info('Span completed', {
             spanId: span.spanId,
             traceId: span.traceId,
             name: span.name,
             duration: span.duration,
             attributes: span.attributes,
-            status: span.status
+            status: span.status,
+            extensionId: extensionId,
+            requestId: span.attributes.requestId,
+            layer: layerName,
+            errorCode: span.attributes['error.code']
         });
 
         if (this.server) {
             this.server.broadcast('span', span.toJSON());
         }
+    }
+
+    _extractLayerFromSpanName(spanName) {
+        if (!spanName) return null;
+        
+        if (spanName.includes('intercept')) return 'Intercept';
+        if (spanName.includes('auth')) return 'Auth';
+        if (spanName.includes('audit')) return 'Audit';
+        if (spanName.includes('execute')) return 'Execute';
+        
+        return null;
     }
 
     getRecentSpans(limit = 100) {
@@ -634,7 +742,11 @@ class InstrumentedPipeline {
             interceptSpan.setAttribute('error.code', error.code || 'UNKNOWN');
             interceptSpan.end();
             this.telemetry.recordSpan(interceptSpan);
-            this.telemetry.logger.error('Intercept failed', { error: error.message });
+            this.telemetry.logger.error('Intercept failed', { 
+                error: error.message,
+                layer: 'Intercept',
+                errorCode: error.code || 'PIPELINE_INTERCEPT_ERROR'
+            });
             
             rootSpan.setStatus('ERROR', 'Intercept failed');
             rootSpan.end();
@@ -685,14 +797,18 @@ class InstrumentedPipeline {
                 });
                 this.telemetry.logger.warn('Rate limit exceeded', {
                     extensionId,
-                    requestId: intent.requestId
+                    requestId: intent.requestId,
+                    layer: 'Auth',
+                    errorCode: authResult.code
                 });
             } else {
                 this.telemetry.logger.securityAlert('Authorization denied', {
                     extensionId,
                     requestId: intent.requestId,
                     reason: authResult.reason,
-                    code: authResult.code
+                    code: authResult.code,
+                    layer: 'Auth',
+                    errorCode: authResult.code
                 });
             }
 
@@ -790,7 +906,9 @@ class InstrumentedPipeline {
                 extensionId,
                 requestId: intent.requestId,
                 reason: auditResult.reason,
-                violations: auditResult.violations
+                violations: auditResult.violations,
+                layer: 'Audit',
+                errorCode: auditResult.code
             });
 
             rootSpan.setStatus('ERROR', 'Audit failed');
@@ -822,7 +940,8 @@ class InstrumentedPipeline {
             this.telemetry.logger.warn('Audit warnings', {
                 extensionId,
                 requestId: intent.requestId,
-                warnings: auditResult.warnings
+                warnings: auditResult.warnings,
+                layer: 'Audit'
             });
         }
 
@@ -884,7 +1003,8 @@ class InstrumentedPipeline {
             this.telemetry.logger.info('Execution completed', {
                 extensionId,
                 requestId: intent.requestId,
-                resultSize
+                resultSize,
+                layer: 'Execute'
             });
 
             rootSpan.setStatus('OK');
@@ -932,7 +1052,9 @@ class InstrumentedPipeline {
                 extensionId,
                 requestId: intent.requestId,
                 error: error.message,
-                code: error.code
+                code: error.code,
+                layer: 'Execute',
+                errorCode: error.code || 'PIPELINE_EXECUTION_ERROR'
             });
 
             rootSpan.setStatus('ERROR', 'Execution failed');
