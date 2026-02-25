@@ -110,10 +110,32 @@ export type ExtensionStats = {
   lastActivity?: string
 }
 
+export type RuntimeHealthState = 'healthy' | 'degraded' | 'crashed' | 'restarting'
+
+export type RestartHistoryEntry = {
+  timestamp: string
+  reason: string
+  exitCode?: number
+}
+
+export type RuntimeState = {
+  health: RuntimeHealthState
+  uptime: number
+  lastRestartTimestamp?: string
+  crashCount: number
+  restartHistory: RestartHistoryEntry[]
+  processIsolation: {
+    pid?: number
+    memoryUsageMB?: number
+  }
+  healthTrend: number[]
+}
+
 export type ExtensionInfo = {
   manifest: ExtensionManifest
   stats: ExtensionStats
   trafficPolicerState?: TrafficPolicerState
+  runtimeState?: RuntimeState
 }
 
 export type TrafficPolicerState = {

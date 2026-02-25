@@ -1,8 +1,206 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Package, CheckCircle, XCircle, Clock, ShieldCheck, AlertTriangle, TrendingUp } from 'lucide-react'
+import { Package, CheckCircle, XCircle, Clock, ShieldCheck, AlertTriangle, TrendingUp, Activity, Zap, Skull, RotateCw, Timer, History, Cpu, MemoryStick } from 'lucide-react'
 import { ghost } from '@/ipc/ghost'
-import type { GatewayState, TrafficPolicerState, ManualOverrideRequest } from '@/ipc/types'
+import type { GatewayState, TrafficPolicerState, ManualOverrideRequest, RuntimeHealthState, ExtensionInfo } from '@/ipc/types'
 import { useToastsStore } from '@/stores/useToastsStore'
+
+function HealthBadge({ health }: { health: RuntimeHealthState }) {
+  const configs = {
+    healthy: {
+      icon: Zap,
+      containerClass: 'border-emerald-500/30 bg-emerald-500/10',
+      iconClass: 'text-emerald-400',
+      textClass: 'text-emerald-300',
+      label: 'Healthy',
+    },
+    degraded: {
+      icon: AlertTriangle,
+      containerClass: 'border-yellow-500/30 bg-yellow-500/10',
+      iconClass: 'text-yellow-400',
+      textClass: 'text-yellow-300',
+      label: 'Degraded',
+    },
+    crashed: {
+      icon: Skull,
+      containerClass: 'border-rose-500/30 bg-rose-500/10',
+      iconClass: 'text-rose-400',
+      textClass: 'text-rose-300',
+      label: 'Crashed',
+    },
+    restarting: {
+      icon: RotateCw,
+      containerClass: 'border-blue-500/30 bg-blue-500/10',
+      iconClass: 'text-blue-400 animate-spin',
+      textClass: 'text-blue-300',
+      label: 'Restarting',
+    },
+  }
+
+  const config = configs[health]
+  const Icon = config.icon
+
+  return (
+    <div className={`flex items-center gap-1.5 rounded-md border px-2 py-1 ${config.containerClass}`}>
+      <Icon size={12} className={config.iconClass} />
+      <span className={`text-xs font-semibold ${config.textClass}`}>{config.label}</span>
+    </div>
+  )
+}
+
+function HealthTrendSparkline({ trend }: { trend: number[] }) {
+  if (trend.length === 0) return null
+
+  const max = Math.max(...trend, 1)
+  const points = trend.map((val, idx) => {
+    const x = (idx / (trend.length - 1 || 1)) * 100
+    const y = 100 - (val / max) * 100
+    return `${x},${y}`
+  }).join(' ')
+
+  const avgSuccessRate = trend.reduce((a, b) => a + b, 0) / trend.length
+  
+  const colorConfig = avgSuccessRate >= 95 
+    ? { stroke: '#34d399', textClass: 'text-emerald-400' }
+    : avgSuccessRate >= 80 
+    ? { stroke: '#fbbf24', textClass: 'text-yellow-400' }
+    : { stroke: '#fb7185', textClass: 'text-rose-400' }
+
+  return (
+    <div className="flex items-center gap-3">
+      <svg width="80" height="24" viewBox="0 0 100 100" preserveAspectRatio="none" className="opacity-80">
+        <polyline
+          points={points}
+          fill="none"
+          stroke={colorConfig.stroke}
+          strokeWidth="4"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+      <span className={`font-mono text-xs ${colorConfig.textClass}`}>{avgSuccessRate.toFixed(1)}%</span>
+    </div>
+  )
+}
+
+function formatUptime(uptimeMs: number): string {
+  const seconds = Math.floor(uptimeMs / 1000)
+  const minutes = Math.floor(seconds / 60)
+  const hours = Math.floor(minutes / 60)
+  const days = Math.floor(hours / 24)
+
+  if (days > 0) return `${days}d ${hours % 24}h`
+  if (hours > 0) return `${hours}h ${minutes % 60}m`
+  if (minutes > 0) return `${minutes}m ${seconds % 60}s`
+  return `${seconds}s`
+}
+
+function RuntimeHealthSection({ ext }: { ext: ExtensionInfo }) {
+  const runtime = ext.runtimeState
+  if (!runtime) return null
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <div className="mb-2 text-xs font-semibold text-white/60">Runtime Health</div>
+        <div className="space-y-3 rounded-lg border border-white/10 bg-black/30 p-4">
+          <div className="flex items-center justify-between">
+            <span className="text-xs text-white/60">Status</span>
+            <HealthBadge health={runtime.health} />
+          </div>
+
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-xs text-white/60">
+              <Timer size={14} />
+              <span>Uptime</span>
+            </div>
+            <span className="font-mono text-sm text-emerald-400">{formatUptime(runtime.uptime)}</span>
+          </div>
+
+          {runtime.lastRestartTimestamp && (
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 text-xs text-white/60">
+                <History size={14} />
+                <span>Last Restart</span>
+              </div>
+              <span className="text-xs text-white/60">
+                {new Date(runtime.lastRestartTimestamp).toLocaleString('fr-FR')}
+              </span>
+            </div>
+          )}
+
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-xs text-white/60">
+              <Skull size={14} />
+              <span>Crash Count</span>
+            </div>
+            <span className={`font-mono text-sm font-semibold ${runtime.crashCount > 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+              {runtime.crashCount}
+            </span>
+          </div>
+
+          <div className="border-t border-white/10 pt-3">
+            <div className="mb-2 text-xs font-semibold text-white/60">Process Isolation</div>
+            <div className="space-y-2">
+              {runtime.processIsolation.pid && (
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-xs text-white/60">
+                    <Cpu size={14} />
+                    <span>PID</span>
+                  </div>
+                  <span className="font-mono text-xs text-blue-400">{runtime.processIsolation.pid}</span>
+                </div>
+              )}
+              {runtime.processIsolation.memoryUsageMB !== undefined && (
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-xs text-white/60">
+                    <MemoryStick size={14} />
+                    <span>Memory</span>
+                  </div>
+                  <span className="font-mono text-xs text-purple-400">
+                    {runtime.processIsolation.memoryUsageMB.toFixed(1)} MB
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {runtime.healthTrend.length > 0 && (
+            <div className="border-t border-white/10 pt-3">
+              <div className="mb-2 flex items-center gap-2 text-xs font-semibold text-white/60">
+                <Activity size={14} />
+                <span>Success Rate Trend</span>
+              </div>
+              <HealthTrendSparkline trend={runtime.healthTrend} />
+            </div>
+          )}
+
+          {runtime.restartHistory.length > 0 && (
+            <div className="border-t border-white/10 pt-3">
+              <div className="mb-2 text-xs font-semibold text-white/60">Restart History</div>
+              <div className="space-y-2">
+                {runtime.restartHistory.slice(0, 5).map((restart, idx) => (
+                  <div key={idx} className="rounded border border-white/10 bg-white/5 p-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs text-white/60">
+                        {new Date(restart.timestamp).toLocaleString('fr-FR')}
+                      </span>
+                      {restart.exitCode !== undefined && (
+                        <span className="font-mono text-xs text-rose-400">
+                          Exit: {restart.exitCode}
+                        </span>
+                      )}
+                    </div>
+                    <div className="mt-1 text-xs text-white/80">{restart.reason}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
 
 function TokenBucketVisualization({ state }: { state: TrafficPolicerState }) {
   const committedPercent = (state.committedTokens / state.committedCapacity) * 100
@@ -252,6 +450,7 @@ export function ExtensionsTab() {
                         <span className="rounded-md border border-white/10 bg-white/5 px-2 py-0.5 font-mono text-xs text-white/60">
                           v{ext.manifest.version}
                         </span>
+                        {ext.runtimeState && <HealthBadge health={ext.runtimeState.health} />}
                       </div>
                       <div className="mt-1 font-mono text-xs text-white/60">{ext.manifest.id}</div>
 
@@ -295,6 +494,8 @@ export function ExtensionsTab() {
 
                 {isExpanded ? (
                   <div className="mt-4 space-y-4 border-t border-white/10 pt-4">
+                    <RuntimeHealthSection ext={ext} />
+
                     <div>
                       <div className="mb-2 text-xs font-semibold text-white/60">Capabilities</div>
                       <div className="space-y-2">
