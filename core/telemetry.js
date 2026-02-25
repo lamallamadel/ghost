@@ -477,6 +477,17 @@ class TelemetryServer {
         this.port = port;
         this.server = null;
         this.wsClients = new Set();
+        this.startTime = Date.now();
+        this.gateway = null;
+        this.spanBuffer = [];
+        this.spanDebounceTimer = null;
+        this.spanDebounceDelay = 100;
+        this.heartbeatInterval = null;
+        this.heartbeatDelay = 30000;
+    }
+
+    setGateway(gateway) {
+        this.gateway = gateway;
     }
 
     start() {
@@ -492,11 +503,20 @@ class TelemetryServer {
             console.log(`[TelemetryServer] HTTP/WebSocket server listening on port ${this.port}`);
         });
 
+        this._startHeartbeat();
+
         return this.server;
     }
 
     stop() {
         if (this.server) {
+            this._stopHeartbeat();
+            
+            if (this.spanDebounceTimer) {
+                clearTimeout(this.spanDebounceTimer);
+                this.spanDebounceTimer = null;
+            }
+            
             for (const client of this.wsClients) {
                 client.close();
             }
@@ -523,6 +543,20 @@ class TelemetryServer {
         if (req.url === '/health') {
             res.writeHead(200);
             res.end(JSON.stringify({ status: 'ok', timestamp: new Date().toISOString() }));
+            return;
+        }
+
+        if (req.url === '/extensions') {
+            const extensions = this._getExtensionsWithState();
+            res.writeHead(200);
+            res.end(JSON.stringify(extensions, null, 2));
+            return;
+        }
+
+        if (req.url === '/gateway/status') {
+            const status = this._getGatewayStatus();
+            res.writeHead(200);
+            res.end(JSON.stringify(status, null, 2));
             return;
         }
 
@@ -589,10 +623,17 @@ class TelemetryServer {
         
         const client = {
             socket,
+            subscriptions: new Set(),
+            lastPing: Date.now(),
+            alive: true,
             close: () => socket.end()
         };
         
         this.wsClients.add(client);
+
+        socket.on('data', (data) => {
+            this._handleWebSocketMessage(client, data);
+        });
 
         socket.on('close', () => {
             this.wsClients.delete(client);
@@ -615,37 +656,83 @@ class TelemetryServer {
     broadcast(event, data) {
         if (this.wsClients.size === 0) return;
 
+        if (event === 'span') {
+            this._bufferSpan(data);
+            return;
+        }
+
         const message = JSON.stringify({ event, data, timestamp: Date.now() });
         const frame = this._encodeWebSocketFrame(message);
 
         for (const client of this.wsClients) {
-            try {
-                client.socket.write(frame);
-            } catch (error) {
-                this.wsClients.delete(client);
+            if (client.subscriptions.size === 0 || client.subscriptions.has(event)) {
+                try {
+                    client.socket.write(frame);
+                } catch (error) {
+                    this.wsClients.delete(client);
+                }
             }
         }
     }
 
-    _encodeWebSocketFrame(message) {
+    _bufferSpan(spanData) {
+        this.spanBuffer.push(spanData);
+
+        if (this.spanDebounceTimer) {
+            clearTimeout(this.spanDebounceTimer);
+        }
+
+        this.spanDebounceTimer = setTimeout(() => {
+            this._flushSpanBuffer();
+        }, this.spanDebounceDelay);
+    }
+
+    _flushSpanBuffer() {
+        if (this.spanBuffer.length === 0) return;
+
+        const spans = [...this.spanBuffer];
+        this.spanBuffer = [];
+        this.spanDebounceTimer = null;
+
+        const message = JSON.stringify({ 
+            event: 'span', 
+            data: spans.length === 1 ? spans[0] : spans, 
+            batch: spans.length > 1,
+            count: spans.length,
+            timestamp: Date.now() 
+        });
+        const frame = this._encodeWebSocketFrame(message);
+
+        for (const client of this.wsClients) {
+            if (client.subscriptions.size === 0 || client.subscriptions.has('span')) {
+                try {
+                    client.socket.write(frame);
+                } catch (error) {
+                    this.wsClients.delete(client);
+                }
+            }
+        }
+    }
+
+    _encodeWebSocketFrame(message, opcode = 0x81) {
         const buffer = Buffer.from(message);
         const length = buffer.length;
         let frame;
 
         if (length < 126) {
             frame = Buffer.allocUnsafe(2 + length);
-            frame[0] = 0x81;
+            frame[0] = opcode;
             frame[1] = length;
             buffer.copy(frame, 2);
         } else if (length < 65536) {
             frame = Buffer.allocUnsafe(4 + length);
-            frame[0] = 0x81;
+            frame[0] = opcode;
             frame[1] = 126;
             frame.writeUInt16BE(length, 2);
             buffer.copy(frame, 4);
         } else {
             frame = Buffer.allocUnsafe(10 + length);
-            frame[0] = 0x81;
+            frame[0] = opcode;
             frame[1] = 127;
             frame.writeUInt32BE(0, 2);
             frame.writeUInt32BE(length, 6);
@@ -653,6 +740,195 @@ class TelemetryServer {
         }
 
         return frame;
+    }
+
+    _handleWebSocketMessage(client, data) {
+        try {
+            const firstByte = data[0];
+            const opcode = firstByte & 0x0F;
+
+            if (opcode === 0x09) {
+                this._handlePing(client, data);
+                return;
+            }
+
+            if (opcode === 0x0A) {
+                this._handlePong(client);
+                return;
+            }
+
+            if (opcode === 0x01 || opcode === 0x02) {
+                const isMasked = (data[1] & 0x80) !== 0;
+                if (!isMasked) return;
+
+                let payloadLength = data[1] & 0x7F;
+                let maskStart = 2;
+
+                if (payloadLength === 126) {
+                    payloadLength = data.readUInt16BE(2);
+                    maskStart = 4;
+                } else if (payloadLength === 127) {
+                    payloadLength = data.readUInt32BE(6);
+                    maskStart = 10;
+                }
+
+                const mask = data.slice(maskStart, maskStart + 4);
+                const payload = data.slice(maskStart + 4, maskStart + 4 + payloadLength);
+
+                for (let i = 0; i < payload.length; i++) {
+                    payload[i] ^= mask[i % 4];
+                }
+
+                const message = JSON.parse(payload.toString('utf8'));
+                this._handleClientMessage(client, message);
+            }
+        } catch (error) {
+        }
+    }
+
+    _handleClientMessage(client, message) {
+        if (message.type === 'subscribe' && Array.isArray(message.events)) {
+            for (const event of message.events) {
+                client.subscriptions.add(event);
+            }
+        } else if (message.type === 'unsubscribe' && Array.isArray(message.events)) {
+            for (const event of message.events) {
+                client.subscriptions.delete(event);
+            }
+        } else if (message.type === 'clear_subscriptions') {
+            client.subscriptions.clear();
+        }
+    }
+
+    _handlePing(client, data) {
+        const pongFrame = Buffer.from(data);
+        pongFrame[0] = (pongFrame[0] & 0xF0) | 0x0A;
+        try {
+            client.socket.write(pongFrame);
+        } catch (error) {
+            this.wsClients.delete(client);
+        }
+    }
+
+    _handlePong(client) {
+        client.alive = true;
+        client.lastPing = Date.now();
+    }
+
+    _startHeartbeat() {
+        this.heartbeatInterval = setInterval(() => {
+            this._sendHeartbeats();
+        }, this.heartbeatDelay);
+    }
+
+    _stopHeartbeat() {
+        if (this.heartbeatInterval) {
+            clearInterval(this.heartbeatInterval);
+            this.heartbeatInterval = null;
+        }
+    }
+
+    _sendHeartbeats() {
+        const pingFrame = Buffer.allocUnsafe(2);
+        pingFrame[0] = 0x89;
+        pingFrame[1] = 0x00;
+
+        for (const client of this.wsClients) {
+            if (client.alive === false) {
+                client.close();
+                this.wsClients.delete(client);
+                continue;
+            }
+
+            client.alive = false;
+            try {
+                client.socket.write(pingFrame);
+            } catch (error) {
+                this.wsClients.delete(client);
+            }
+        }
+    }
+
+    _getExtensionsWithState() {
+        if (!this.gateway) {
+            return [];
+        }
+
+        const extensions = [];
+        for (const [id, ext] of this.gateway.extensions) {
+            const extensionData = {
+                id: ext.manifest.id,
+                name: ext.manifest.name,
+                version: ext.manifest.version,
+                capabilities: ext.manifest.capabilities,
+                runtime: {
+                    loaded: !!ext.instance,
+                    hasCleanup: ext.instance && typeof ext.instance.cleanup === 'function'
+                }
+            };
+            extensions.push(extensionData);
+        }
+
+        return extensions;
+    }
+
+    _getGatewayStatus() {
+        const uptime = Date.now() - this.startTime;
+        const extensionsLoaded = this.gateway ? this.gateway.extensions.size : 0;
+        
+        const metrics = this.telemetry.metrics.getMetrics();
+        
+        const totalRequests = Object.values(metrics.requests || {}).reduce((sum, extMetrics) => {
+            return sum + Object.values(extMetrics).reduce((s, count) => s + count, 0);
+        }, 0);
+        
+        const totalRateLimitViolations = Object.values(metrics.rateLimitViolations || {})
+            .reduce((sum, count) => sum + count, 0);
+        
+        const totalValidationFailures = Object.values(metrics.validationFailures || {}).reduce((sum, extMetrics) => {
+            return sum + Object.values(extMetrics).reduce((s, count) => s + count, 0);
+        }, 0);
+        
+        const totalAuthFailures = Object.values(metrics.authFailures || {}).reduce((sum, extMetrics) => {
+            return sum + Object.values(extMetrics).reduce((s, count) => s + count, 0);
+        }, 0);
+
+        const packageJson = require('../package.json');
+
+        return {
+            version: packageJson.version,
+            uptime: uptime,
+            uptimeFormatted: this._formatUptime(uptime),
+            extensionsLoaded: extensionsLoaded,
+            pipeline: {
+                totalRequests: totalRequests,
+                totalRateLimitViolations: totalRateLimitViolations,
+                totalValidationFailures: totalValidationFailures,
+                totalAuthFailures: totalAuthFailures
+            },
+            telemetry: {
+                spansCollected: this.telemetry.spans.length,
+                maxSpans: this.telemetry.maxSpans,
+                wsConnections: this.wsClients.size
+            }
+        };
+    }
+
+    _formatUptime(uptimeMs) {
+        const seconds = Math.floor(uptimeMs / 1000);
+        const minutes = Math.floor(seconds / 60);
+        const hours = Math.floor(minutes / 60);
+        const days = Math.floor(hours / 24);
+        
+        if (days > 0) {
+            return `${days}d ${hours % 24}h ${minutes % 60}m`;
+        } else if (hours > 0) {
+            return `${hours}h ${minutes % 60}m`;
+        } else if (minutes > 0) {
+            return `${minutes}m ${seconds % 60}s`;
+        } else {
+            return `${seconds}s`;
+        }
     }
 }
 
@@ -745,6 +1021,12 @@ class Telemetry {
         if (this.server) {
             this.server.stop();
             this.server = null;
+        }
+    }
+
+    setGateway(gateway) {
+        if (this.server) {
+            this.server.setGateway(gateway);
         }
     }
 }
