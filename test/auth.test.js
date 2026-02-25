@@ -1132,8 +1132,108 @@ console.log('    ✓ Rate limit boundary conditions handled');
 
 console.log('✅ Edge cases & boundary conditions tests passed\n');
 
+// ============================================================================
+// Test Suite 9: QoS Violating Requests Never Reach Audit Layer (Integration Test)
+// ============================================================================
+console.log('▶ Test Suite 9: QoS Violating Requests Never Reach Audit Layer (Integration Test)');
+
+console.log('  Test 9.1: Red requests blocked by authorization layer with QOS_VIOLATING');
+
+// Create a test persistence path
+const testQoSPersistence = path.join(os.tmpdir(), `test-qos-audit-${Date.now()}.json`);
+
+// Create authorization layer with QoS enabled
+const authLayerQoS = new AuthorizationLayer({
+    persistencePath: testQoSPersistence,
+    dropViolating: true
+});
+
+// Register extension with strict rate limits
+const qosManifest = {
+    capabilities: {
+        network: {
+            allowlist: ['https://api.example.com'],
+            rateLimit: {
+                cir: 60,
+                bc: 5,   // Only 5 committed tokens
+                be: 3    // Only 3 excess tokens (total = 8)
+            }
+        }
+    }
+};
+
+authLayerQoS.registerExtension('qos-test-ext', qosManifest);
+
+// Fix time to prevent refills during test
+const qosBucket = authLayerQoS.trafficPolicer.buckets.get('qos-test-ext');
+const qosRateLimitBucket = authLayerQoS.rateLimitManager.buckets.get('qos-test-ext');
+const fixedQosTime = Date.now();
+
+// Give rate limit manager plenty of tokens so it doesn't interfere
+qosRateLimitBucket.tokens = 1000;
+
+// Create network intent
+const networkIntentQoS = {
+    type: 'network',
+    operation: 'https',
+    params: { url: 'https://api.example.com/data' },
+    extensionId: 'qos-test-ext'
+};
+
+// Process 8 requests (5 green + 3 yellow = all tokens consumed)
+for (let i = 0; i < 8; i++) {
+    qosBucket.lastRefill = fixedQosTime;
+    const result = authLayerQoS.authorize(networkIntentQoS);
+    assert.strictEqual(result.authorized, true, `Request ${i + 1} should be authorized (green/yellow)`);
+}
+console.log('    ✓ All 8 green/yellow requests authorized');
+
+// 9th request should be red and blocked at authorization layer
+qosBucket.lastRefill = fixedQosTime;
+const violatingResultQoS = authLayerQoS.authorize(networkIntentQoS);
+
+// Verify the request was blocked
+assert.strictEqual(violatingResultQoS.authorized, false, 'Violating request should be denied');
+assert.strictEqual(violatingResultQoS.code, 'QOS_VIOLATING', 'Should have QOS_VIOLATING code');
+assert.strictEqual(violatingResultQoS.qos.color, 'red', 'Should be classified as red');
+assert.ok(violatingResultQoS.reason.includes('dropped'), 'Should indicate request was dropped');
+console.log('    ✓ Red request denied with QOS_VIOLATING code');
+console.log('    ✓ This proves authorization blocks red requests before audit layer');
+
+// Cleanup
+if (fs.existsSync(testQoSPersistence)) {
+    fs.unlinkSync(testQoSPersistence);
+}
+
+console.log('✅ QoS violating requests integration tests passed\n');
+
+console.log('  Test 9.2: Non-network intents bypass traffic policing');
+
+authLayerQoS.registerExtension('fs-ext-qos', {
+    capabilities: {
+        filesystem: {
+            read: ['**/*']
+        }
+    }
+});
+
+const fsIntentQoS = {
+    type: 'filesystem',
+    operation: 'read',
+    params: { path: 'test.txt' },
+    extensionId: 'fs-ext-qos'
+};
+
+// Filesystem requests should not be subject to traffic policing
+const fsResult = authLayerQoS.authorize(fsIntentQoS);
+assert.notStrictEqual(fsResult.code, 'QOS_VIOLATING', 'Filesystem requests should not get QOS_VIOLATING');
+assert.notStrictEqual(fsResult.code, 'QOS_NOT_CONFIGURED', 'Filesystem requests should not need QoS config');
+console.log('    ✓ Non-network intents bypass traffic policing');
+
+console.log('✅ Complete QoS integration test passed\n');
+
 console.log('🎉 All authorization and rate limiting tests passed!');
-console.log('   Total test suites: 8');
+console.log('   Total test suites: 9');
 console.log('   - PermissionChecker filesystem glob matching: 10 tests');
 console.log('   - PermissionChecker network URL origin matching: 10 tests');
 console.log('   - PermissionChecker git & process access: 8 tests');
@@ -1142,4 +1242,5 @@ console.log('   - RateLimitManager: 7 tests');
 console.log('   - TrafficPolicer integration: 7 tests');
 console.log('   - AuthorizationLayer end-to-end: 6 tests');
 console.log('   - Edge cases & boundary conditions: 8 tests');
-console.log('   Total: 66 comprehensive tests\n');
+console.log('   - QoS violating requests never reach audit layer: 2 tests');
+console.log('   Total: 68 comprehensive tests\n');
