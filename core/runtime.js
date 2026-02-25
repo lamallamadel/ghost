@@ -512,9 +512,22 @@ class ExtensionProcess extends EventEmitter {
                     
                     this.emit('exit', exitInfo);
                     
-                    if (this.state === 'RUNNING') {
+                    if (this.state === 'RUNNING' || this.state === 'DEGRADED') {
                         this._handleUnexpectedExit(code, signal);
                     }
+                });
+                
+                this.process.on('disconnect', () => {
+                    this._logStructuredError('process_disconnect', {
+                        pid: this.process ? this.process.pid : null,
+                        state: this.state
+                    });
+                    
+                    this.emit('disconnected', {
+                        extensionId: this.extensionId,
+                        timestamp: Date.now(),
+                        pid: this.process ? this.process.pid : null
+                    });
                 });
 
                 this._sendRequest('init', { config: this.manifest.config || {} }, this.startupTimeout)
@@ -1138,19 +1151,222 @@ class ExtensionProcess extends EventEmitter {
     }
 
     async _handleUnexpectedExit(code, signal) {
-        this.emit('crashed', {
+        const crashTimestamp = Date.now();
+        const uptime = this.lastHeartbeat ? crashTimestamp - this.lastHeartbeat : 0;
+        const pid = this.process ? this.process.pid : null;
+        
+        const isCrash = code !== 0 || signal !== null;
+        
+        const crashDetails = {
             extensionId: this.extensionId,
-            code,
-            signal
-        });
-
-        try {
-            await this.restart('unexpected_exit');
-        } catch (error) {
-            this.emit('error', {
+            timestamp: crashTimestamp,
+            timestampISO: new Date(crashTimestamp).toISOString(),
+            pid,
+            exitCode: code,
+            signal,
+            uptime,
+            uptimeFormatted: this._formatUptime(uptime),
+            crashType: this._determineCrashType(code, signal),
+            pendingRequestCount: this.pendingRequests.size,
+            restartCount: this.restartCount,
+            consecutiveRestarts: this.consecutiveRestarts,
+            state: this.state
+        };
+        
+        this._logCrashTelemetry(crashDetails);
+        
+        const pendingRequestsSnapshot = Array.from(this.pendingRequests.entries());
+        this._rejectAllPendingRequests(code, signal, crashDetails);
+        
+        this.emit('crashed', crashDetails);
+        
+        if (isCrash) {
+            const backoffDelay = this._calculateBackoffDelay();
+            
+            this.emit('crash-restart-scheduled', {
                 extensionId: this.extensionId,
-                error: `Failed to restart after crash: ${error.message}`
+                timestamp: Date.now(),
+                crashDetails,
+                backoffDelay,
+                restartAttempt: this.restartCount + 1,
+                consecutiveRestarts: this.consecutiveRestarts + 1
             });
+            
+            try {
+                await this.restart('unexpected_exit');
+                
+                this.emit('crash-recovery-success', {
+                    extensionId: this.extensionId,
+                    timestamp: Date.now(),
+                    originalCrash: crashDetails,
+                    recoveryDuration: Date.now() - crashTimestamp,
+                    restartCount: this.restartCount
+                });
+            } catch (error) {
+                const restartFailureDetails = {
+                    extensionId: this.extensionId,
+                    timestamp: Date.now(),
+                    timestampISO: new Date().toISOString(),
+                    error: error.message,
+                    errorStack: error.stack,
+                    originalCrash: crashDetails,
+                    restartAttempt: this.restartCount,
+                    backoffDelay
+                };
+                
+                this._logCrashTelemetry({
+                    ...restartFailureDetails,
+                    crashType: 'restart_failure'
+                });
+                
+                this.emit('error', {
+                    extensionId: this.extensionId,
+                    error: `Failed to restart after crash: ${error.message}`,
+                    details: restartFailureDetails
+                });
+            }
+        }
+    }
+    
+    _determineCrashType(code, signal) {
+        if (signal) {
+            const signalTypes = {
+                'SIGTERM': 'terminated',
+                'SIGKILL': 'force_killed',
+                'SIGINT': 'interrupted',
+                'SIGSEGV': 'segmentation_fault',
+                'SIGABRT': 'aborted',
+                'SIGBUS': 'bus_error',
+                'SIGFPE': 'floating_point_exception',
+                'SIGILL': 'illegal_instruction'
+            };
+            return signalTypes[signal] || `signal_${signal}`;
+        }
+        
+        if (code !== null && code !== undefined) {
+            if (code === 0) {
+                return 'clean_exit';
+            } else if (code === 1) {
+                return 'general_error';
+            } else if (code === 2) {
+                return 'misuse_of_shell';
+            } else if (code > 128) {
+                return `signal_exit_${code - 128}`;
+            } else {
+                return `exit_code_${code}`;
+            }
+        }
+        
+        return 'unknown';
+    }
+    
+    _formatUptime(uptimeMs) {
+        if (uptimeMs === 0) {
+            return '0s';
+        }
+        
+        const seconds = Math.floor(uptimeMs / 1000);
+        const minutes = Math.floor(seconds / 60);
+        const hours = Math.floor(minutes / 60);
+        const days = Math.floor(hours / 24);
+        
+        if (days > 0) {
+            return `${days}d ${hours % 24}h ${minutes % 60}m ${seconds % 60}s`;
+        } else if (hours > 0) {
+            return `${hours}h ${minutes % 60}m ${seconds % 60}s`;
+        } else if (minutes > 0) {
+            return `${minutes}m ${seconds % 60}s`;
+        } else {
+            return `${seconds}s`;
+        }
+    }
+    
+    _rejectAllPendingRequests(exitCode, signal, crashDetails) {
+        if (this.pendingRequests.size === 0) {
+            return;
+        }
+        
+        const rejectedRequests = [];
+        
+        for (const [requestId, request] of this.pendingRequests) {
+            clearTimeout(request.timeoutId);
+            
+            const errorMessage = signal 
+                ? `Extension process terminated by signal ${signal} (PID: ${crashDetails.pid})`
+                : `Extension process exited with code ${exitCode} (PID: ${crashDetails.pid})`;
+            
+            const error = new Error(errorMessage);
+            error.code = -32603;
+            error.data = {
+                reason: 'Extension process crashed',
+                extensionId: this.extensionId,
+                exitCode,
+                signal,
+                pid: crashDetails.pid,
+                uptime: crashDetails.uptime,
+                crashType: crashDetails.crashType,
+                timestamp: crashDetails.timestamp,
+                requestId,
+                requestMethod: request.method,
+                requestAge: Date.now() - request.timestamp
+            };
+            
+            request.reject(error);
+            
+            rejectedRequests.push({
+                requestId,
+                method: request.method,
+                requestAge: error.data.requestAge
+            });
+        }
+        
+        this.pendingRequests.clear();
+        
+        this.emit('pending-requests-rejected', {
+            extensionId: this.extensionId,
+            timestamp: Date.now(),
+            rejectedCount: rejectedRequests.length,
+            requests: rejectedRequests,
+            crashDetails
+        });
+    }
+    
+    _logCrashTelemetry(crashDetails) {
+        const telemetryEntry = {
+            eventType: 'extension_crash',
+            timestamp: crashDetails.timestamp,
+            timestampISO: crashDetails.timestampISO,
+            extensionId: crashDetails.extensionId,
+            crash: {
+                pid: crashDetails.pid,
+                exitCode: crashDetails.exitCode,
+                signal: crashDetails.signal,
+                uptime: crashDetails.uptime,
+                uptimeFormatted: crashDetails.uptimeFormatted,
+                crashType: crashDetails.crashType
+            },
+            state: {
+                previousState: crashDetails.state,
+                pendingRequestCount: crashDetails.pendingRequestCount,
+                restartCount: crashDetails.restartCount,
+                consecutiveRestarts: crashDetails.consecutiveRestarts
+            },
+            metrics: {
+                heartbeat: {
+                    consecutiveFailures: this.consecutiveHeartbeatFailures,
+                    totalPings: this.heartbeatMetrics.totalPings,
+                    totalPongs: this.heartbeatMetrics.totalPongs,
+                    totalFailures: this.heartbeatMetrics.totalFailures,
+                    successRate: this.heartbeatMetrics.successRate
+                },
+                healthState: this.healthState
+            }
+        };
+        
+        this.emit('crash-telemetry', telemetryEntry);
+        
+        if (this.options.enableCrashLogging !== false) {
+            console.error(`[Ghost Crash Telemetry] ${JSON.stringify(telemetryEntry, null, 2)}`);
         }
     }
 }
@@ -1223,6 +1439,26 @@ class ExtensionRuntime extends EventEmitter {
 
         extensionProcess.on('notification', (info) => {
             this.emit('extension-notification', info);
+        });
+        
+        extensionProcess.on('crash-telemetry', (info) => {
+            this.emit('extension-crash-telemetry', info);
+        });
+        
+        extensionProcess.on('pending-requests-rejected', (info) => {
+            this.emit('extension-pending-requests-rejected', info);
+        });
+        
+        extensionProcess.on('disconnected', (info) => {
+            this.emit('extension-disconnected', info);
+        });
+        
+        extensionProcess.on('crash-restart-scheduled', (info) => {
+            this.emit('extension-crash-restart-scheduled', info);
+        });
+        
+        extensionProcess.on('crash-recovery-success', (info) => {
+            this.emit('extension-crash-recovery-success', info);
         });
 
         this.extensions.set(extensionId, extensionProcess);
