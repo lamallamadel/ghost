@@ -23,16 +23,25 @@
    - Secret scanning (AWS keys, entropy)
    - Lines: ~290
 
+### Execution Layer Tests (1 file, 29 tests)
+
+4. **`test/circuit-breaker.test.js`** - 29 tests
+   - Circuit breaker state transitions
+   - TimeoutManager 30s default enforcement
+   - Executor I/O shim isolation
+   - Deterministic error code mapping
+   - Lines: ~550
+
 ### Extension Isolation Tests (2 files, 20 tests)
 
-4. **`test/extensions/isolation.test.js`** - 10 tests
+5. **`test/extensions/isolation.test.js`** - 10 tests
    - Extension crash isolation
    - Process-level isolation (separate PIDs)
    - Auto-restart mechanisms
    - Gateway resilience under failures
    - Lines: ~380
 
-5. **`test/extensions/git-extension.test.js`** - 20 tests
+6. **`test/extensions/git-extension.test.js`** - 20 tests
    - Git extension end-to-end functionality
    - RPC communication layer
    - Security scanning integration
@@ -41,45 +50,45 @@
 
 ### Documentation Files (6 files)
 
-6. **`test/gateway/README.md`**
+7. **`test/gateway/README.md`**
    - Gateway test documentation
    - Test descriptions and coverage
    - Security guarantees proven
 
-7. **`test/extensions/README.md`**
+8. **`test/extensions/README.md`**
    - Extension test documentation
    - Isolation guarantees proven
    - Functionality guarantees proven
 
-8. **`test/TEST_SUITE.md`**
+9. **`test/TEST_SUITE.md`**
    - Complete test suite documentation
-   - All 67 tests detailed
+   - All 96 tests detailed
    - Mathematical proofs
    - Security properties verified
 
-9. **`test/QUICK_START.md`**
-   - Quick reference guide
-   - How to run tests
-   - Expected output
-   - Troubleshooting
+10. **`test/QUICK_START.md`**
+    - Quick reference guide
+    - How to run tests
+    - Expected output
+    - Troubleshooting
 
-10. **`test/IMPLEMENTATION_SUMMARY.md`**
+11. **`test/IMPLEMENTATION_SUMMARY.md`**
     - What was implemented
     - Why it was implemented
     - Production readiness statement
 
-11. **`test/README.md`**
+12. **`test/README.md`**
     - Main test directory overview
     - Complete structure
     - Quick links
 
-12. **`test/INDEX.md`** (this file)
+13. **`test/INDEX.md`** (this file)
     - Complete file inventory
     - Quick navigation
 
 ### Modified Files (1 file)
 
-13. **`test.js`** (updated)
+14. **`test.js`** (updated)
     - Modified to discover tests recursively
     - Now runs tests in subdirectories
     - Improved error handling
@@ -87,20 +96,21 @@
 ## 📊 Statistics
 
 ### Files
-- **New test files:** 5
+- **New test files:** 6
 - **New documentation files:** 6
 - **Modified files:** 1
-- **Total files created/modified:** 12
+- **Total files created/modified:** 13
 
 ### Tests
 - **Gateway tests:** 47
+- **Execution layer tests:** 29
 - **Extension tests:** 20
-- **Total tests:** 67
+- **Total tests:** 96
 
 ### Lines of Code
-- **Test code:** ~1,530 lines
+- **Test code:** ~2,080 lines
 - **Documentation:** ~2,800 lines
-- **Total:** ~4,330 lines
+- **Total:** ~4,880 lines
 
 ### Coverage
 - **Gateway components:** 100%
@@ -125,6 +135,7 @@ test/
 │   ├── git-extension.test.js            (New - 20 tests)
 │   └── README.md                         (New)
 │
+├── circuit-breaker.test.js               (New - 29 tests)
 ├── TEST_SUITE.md                         (New)
 ├── QUICK_START.md                        (New)
 ├── IMPLEMENTATION_SUMMARY.md             (New)
@@ -146,8 +157,18 @@ test/
 - ✅ MessageInterceptor - `pipeline.integration.test.js` (tests 1-2)
 - ✅ AuthorizationLayer - `pipeline.integration.test.js` (tests 3, 5)
 - ✅ AuditLayer - `pipeline.integration.test.js` (tests 4, 6-7)
-- ✅ ExecutionLayer - `pipeline.integration.test.js` (test 1)
+- ✅ ExecutionLayer - `pipeline.integration.test.js` (test 1), `circuit-breaker.test.js` (tests 21-24)
 - ✅ Full pipeline - `pipeline.integration.test.js` (all tests)
+
+### Execution Layer & Circuit Breakers
+- ✅ CircuitBreaker - `circuit-breaker.test.js` (tests 1-9, 27)
+- ✅ TimeoutManager - `circuit-breaker.test.js` (tests 10-12)
+- ✅ ExecutionError - `circuit-breaker.test.js` (test 13)
+- ✅ FilesystemExecutor - `circuit-breaker.test.js` (tests 14-15, 25, 28)
+- ✅ NetworkExecutor - `circuit-breaker.test.js` (tests 16-17)
+- ✅ GitExecutor - `circuit-breaker.test.js` (test 18)
+- ✅ ProcessExecutor - `circuit-breaker.test.js` (tests 19, 26)
+- ✅ Executor isolation - `circuit-breaker.test.js` (tests 20, 29)
 
 ### Rate Limiting & QoS
 - ✅ TokenBucket - `rate-limiter.test.js` (tests 1-5)
@@ -270,6 +291,7 @@ node --inspect-brk test/gateway/pipeline.integration.test.js
 - [x] Gateway pipeline integration tests (10 tests)
 - [x] Rate limiter tests (17 tests)
 - [x] NIST SI-10 security tests (20 tests)
+- [x] Circuit breaker & execution layer tests (29 tests)
 - [x] Extension isolation tests (10 tests)
 - [x] Git extension E2E tests (20 tests)
 - [x] Test documentation (6 files)
@@ -303,12 +325,13 @@ For someone new to the test suite:
 
 This test suite provides **comprehensive validation** of:
 - Gateway security (47 tests)
+- Execution layer & circuit breakers (29 tests)
 - Extension isolation (20 tests)
 - Mathematical correctness (token buckets, entropy)
 - NIST SI-10 compliance (20 tests)
 - Git extension functionality (20 tests)
 
-**Total: 67 tests proving production-ready security and reliability.**
+**Total: 96 tests proving production-ready security and reliability.**
 
 ---
 
