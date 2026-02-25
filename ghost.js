@@ -24,8 +24,44 @@ const Colors = {
     DIM: '\x1b[2m'
 };
 
+/**
+ * GatewayLauncher - Pure Orchestration Layer
+ * 
+ * ARCHITECTURE PRINCIPLE: Zero Business Logic
+ * This class serves as a pure orchestration layer that:
+ * 1. Initializes infrastructure components (Gateway, Runtime, Pipeline, Audit)
+ * 2. Routes commands to appropriate handlers or extensions
+ * 3. Manages lifecycle and coordination between components
+ * 4. Provides CLI interface and output formatting
+ * 
+ * VIOLATIONS AUDIT:
+ * The following methods contain direct business logic operations that violate
+ * the zero-business-logic principle and should be refactored to route through
+ * extension instances:
+ * 
+ * - initialize(): Lines 44-54 - Direct fs operations for directory setup
+ * - handleExtensionCommand(): Lines 220-240, 264-267, 698-856 - Direct fs operations
+ *   for extension install/remove/scaffold/validate
+ * - _copyDirectory(): Lines 663-677 - Direct fs.copyFileSync operations
+ * - _removeDirectory(): Lines 680-692 - Direct fs.unlinkSync/rmdirSync operations
+ * - _scaffoldExtension(): Lines 694-856 - Direct fs.writeFileSync for scaffolding
+ * - _validateExtension(): Lines 858-1020 - Direct fs.readFileSync for validation
+ * 
+ * CORRECT PATTERN:
+ * All domain operations (file I/O, git commands, API calls) should route through
+ * forwardToExtension() to extension instances, allowing the pipeline to apply
+ * intercept→auth→audit→execute layers consistently.
+ * 
+ * The ONLY acceptable operations in this class are:
+ * - Component initialization and wiring
+ * - Command parsing and routing decisions
+ * - Metadata queries (listExtensions, getExtension, getHealthStatus, etc.)
+ * - Output formatting and console presentation
+ * - Lifecycle management (startup, shutdown, cleanup)
+ */
 class GatewayLauncher {
     constructor() {
+        // Pure state: component references for orchestration
         this.gateway = null;
         this.runtime = null;
         this.pipeline = null;
@@ -38,8 +74,21 @@ class GatewayLauncher {
         };
     }
 
+    /**
+     * Initialize infrastructure components.
+     * 
+     * VIOLATION: Contains direct fs operations (lines 44-54) for directory setup.
+     * These should be delegated to a system extension or abstracted into Gateway.
+     * 
+     * ORCHESTRATION ROLE:
+     * - Instantiate Gateway, Runtime, Pipeline, and AuditLogger
+     * - Wire up event handlers between components
+     * - Delegate to _initializeExtensions() for extension loading
+     */
     async initialize() {
         try {
+            // VIOLATION: Direct file system operations
+            // Should delegate to a system extension or Gateway method
             const ghostDir = path.dirname(USER_EXTENSIONS_DIR);
             if (!fs.existsSync(ghostDir)) {
                 fs.mkdirSync(ghostDir, { recursive: true });
@@ -55,6 +104,7 @@ class GatewayLauncher {
         } catch (error) {
         }
 
+        // Pure orchestration: component initialization
         this.gateway = new Gateway({ 
             extensionsDir: USER_EXTENSIONS_DIR,
             bundledExtensionsDir: BUNDLED_EXTENSIONS_DIR 
@@ -77,14 +127,26 @@ class GatewayLauncher {
         this.telemetryInstance = instrumented.telemetry;
         this.auditLogger = new AuditLogger(AUDIT_LOG_PATH);
 
+        // Pure orchestration: wire up event handlers
         this._setupRuntimeEventHandlers();
 
+        // Pure orchestration: delegate extension loading to Gateway
         await this._initializeExtensions();
     }
 
+    /**
+     * Register extensions with pipeline.
+     * 
+     * ORCHESTRATION ROLE:
+     * - Call Gateway.initialize() to load extensions
+     * - Register each extension's manifest with the pipeline
+     * - No direct business logic, only metadata operations
+     */
     async _initializeExtensions() {
+        // Pure orchestration: delegate to Gateway
         const result = await this.gateway.initialize();
         
+        // Pure orchestration: register metadata with pipeline
         for (const ext of this.gateway.listExtensions()) {
             const fullExt = this.gateway.getExtension(ext.id);
             
@@ -96,6 +158,14 @@ class GatewayLauncher {
         return result;
     }
 
+    /**
+     * Set up event handlers for runtime state changes.
+     * 
+     * ORCHESTRATION ROLE:
+     * - Wire up runtime event listeners for observability
+     * - Format and output state change information
+     * - No business logic, only logging/monitoring
+     */
     _setupRuntimeEventHandlers() {
         this.runtime.on('extension-state-change', (info) => {
             if (this.verbose) {
@@ -114,6 +184,13 @@ class GatewayLauncher {
         });
     }
 
+    /**
+     * Parse command-line arguments into structured format.
+     * 
+     * ORCHESTRATION ROLE:
+     * - Pure argument parsing, no I/O or external calls
+     * - Returns structured data for routing decisions
+     */
     parseArgs() {
         const args = process.argv.slice(2);
         const parsed = {
@@ -153,6 +230,14 @@ class GatewayLauncher {
         return parsed;
     }
 
+    /**
+     * Route parsed command to appropriate handler.
+     * 
+     * ORCHESTRATION ROLE:
+     * - Pure routing logic based on command type
+     * - Delegates to specialized handlers or forwardToExtension()
+     * - No business logic, only control flow
+     */
     async route(parsedArgs) {
         this.verbose = parsedArgs.flags.verbose;
 
@@ -161,6 +246,7 @@ class GatewayLauncher {
             return;
         }
 
+        // Pure routing: delegate to appropriate handler
         if (parsedArgs.command === 'extension') {
             await this.handleExtensionCommand(parsedArgs);
         } else if (parsedArgs.command === 'gateway') {
@@ -170,10 +256,27 @@ class GatewayLauncher {
         } else if (parsedArgs.command === 'console') {
             await this.handleConsoleCommand(parsedArgs);
         } else {
+            // Pure routing: delegate domain commands to extensions
             await this.forwardToExtension(parsedArgs);
         }
     }
 
+    /**
+     * Handle extension management commands.
+     * 
+     * VIOLATIONS: Contains extensive direct file system operations
+     * - Lines 220-240: Direct fs.readFileSync, fs.existsSync, fs.mkdirSync for install
+     * - Lines 264-267: Direct fs.existsSync, _removeDirectory() for remove
+     * - Lines 698-856: Direct fs operations in _scaffoldExtension()
+     * - Lines 858-1020: Direct fs.readFileSync in _validateExtension()
+     * 
+     * ORCHESTRATION ROLE (correct behavior):
+     * - Parse subcommands and route to appropriate operations
+     * - Query Gateway for metadata (listExtensions, getExtension)
+     * - Format and display results
+     * - For operations like install/remove/init/validate, should delegate to
+     *   a system extension via forwardToExtension()
+     */
     async handleExtensionCommand(parsedArgs) {
         const subcommand = parsedArgs.subcommand;
 
@@ -190,6 +293,7 @@ class GatewayLauncher {
         }
 
         if (subcommand === 'list') {
+            // Pure orchestration: query Gateway metadata and format output
             const extensions = this.gateway.listExtensions();
             
             if (parsedArgs.flags.json) {
@@ -209,6 +313,8 @@ class GatewayLauncher {
                 }
             }
         } else if (subcommand === 'install') {
+            // VIOLATION: Direct file system operations below
+            // Should delegate to system extension or Gateway method
             const extPath = parsedArgs.args[0];
             
             if (!extPath) {
@@ -220,25 +326,30 @@ class GatewayLauncher {
             const absolutePath = path.resolve(extPath);
             const manifestPath = path.join(absolutePath, 'manifest.json');
             
+            // VIOLATION: Direct fs.existsSync
             if (!fs.existsSync(manifestPath)) {
                 console.error(`${Colors.FAIL}Error: No manifest.json found at ${absolutePath}${Colors.ENDC}`);
                 process.exit(1);
             }
 
+            // VIOLATION: Direct fs.readFileSync
             const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
             const targetPath = path.join(USER_EXTENSIONS_DIR, manifest.id);
 
+            // VIOLATION: Direct fs.existsSync
             if (fs.existsSync(targetPath)) {
                 console.error(`${Colors.FAIL}Error: Extension ${manifest.id} already installed${Colors.ENDC}`);
                 process.exit(1);
             }
 
+            // VIOLATION: Direct fs.mkdirSync and _copyDirectory (which uses fs.copyFileSync)
             fs.mkdirSync(USER_EXTENSIONS_DIR, { recursive: true });
             this._copyDirectory(absolutePath, targetPath);
 
             console.log(`${Colors.GREEN}✓${Colors.ENDC} Extension ${Colors.BOLD}${manifest.name}${Colors.ENDC} installed successfully`);
             console.log(`${Colors.DIM}  Location: ${targetPath}${Colors.ENDC}`);
         } else if (subcommand === 'remove') {
+            // Mixed: metadata queries are correct, but fs operations are violations
             const extId = parsedArgs.args[0];
             
             if (!extId) {
@@ -247,6 +358,7 @@ class GatewayLauncher {
                 process.exit(1);
             }
 
+            // Pure orchestration: query Gateway metadata
             const ext = this.gateway.getExtension(extId);
             
             if (!ext) {
@@ -254,13 +366,16 @@ class GatewayLauncher {
                 process.exit(1);
             }
 
+            // Pure orchestration: call runtime management methods
             try {
                 await this.runtime.stopExtension(extId);
             } catch (error) {
             }
 
+            // Pure orchestration: call gateway management methods
             this.gateway.unloadExtension(extId);
             
+            // VIOLATION: Direct fs operations
             const extPath = path.join(USER_EXTENSIONS_DIR, extId);
             if (fs.existsSync(extPath)) {
                 this._removeDirectory(extPath);
@@ -268,6 +383,7 @@ class GatewayLauncher {
 
             console.log(`${Colors.GREEN}✓${Colors.ENDC} Extension ${Colors.BOLD}${extId}${Colors.ENDC} removed successfully`);
         } else if (subcommand === 'info') {
+            // Pure orchestration: query metadata and format output
             const extId = parsedArgs.args[0];
             
             if (!extId) {
@@ -276,6 +392,7 @@ class GatewayLauncher {
                 process.exit(1);
             }
 
+            // Pure orchestration: query Gateway and Runtime metadata
             const ext = this.gateway.getExtension(extId);
             
             if (!ext) {
@@ -305,6 +422,7 @@ class GatewayLauncher {
                 console.log('');
             }
         } else if (subcommand === 'init') {
+            // VIOLATION: Delegates to _scaffoldExtension which has direct fs operations
             const extName = parsedArgs.args[0];
             
             if (!extName) {
@@ -315,6 +433,7 @@ class GatewayLauncher {
 
             await this._scaffoldExtension(extName, parsedArgs.flags);
         } else if (subcommand === 'validate') {
+            // VIOLATION: Delegates to _validateExtension which has direct fs operations
             const extPath = parsedArgs.args[0] || '.';
             await this._validateExtension(extPath);
         } else {
@@ -323,6 +442,15 @@ class GatewayLauncher {
         }
     }
 
+    /**
+     * Handle gateway status and monitoring commands.
+     * 
+     * ORCHESTRATION ROLE: Correct implementation
+     * - Query metadata from Gateway, Runtime, Telemetry
+     * - No direct business logic operations
+     * - Format and display monitoring information
+     * - All operations are pure metadata queries
+     */
     async handleGatewayCommand(parsedArgs) {
         const subcommand = parsedArgs.subcommand;
 
@@ -337,6 +465,7 @@ class GatewayLauncher {
         }
 
         if (subcommand === 'status') {
+            // Pure orchestration: query metadata from components
             const extensions = this.gateway.listExtensions();
             const runtimeHealth = this.runtime.getHealthStatus();
             
@@ -367,6 +496,7 @@ class GatewayLauncher {
                 console.log('');
             }
         } else if (subcommand === 'metrics') {
+            // Pure orchestration: query telemetry metrics and format output
             const extensionId = parsedArgs.args[0] || null;
             const metrics = this.telemetryInstance.metrics.getMetrics(extensionId);
 
@@ -409,6 +539,7 @@ class GatewayLauncher {
                 }
             }
         } else if (subcommand === 'spans') {
+            // Pure orchestration: query telemetry spans and format output
             const limit = parseInt(parsedArgs.args[0]) || 50;
             const spans = this.telemetryInstance.getRecentSpans(limit);
 
@@ -440,6 +571,7 @@ class GatewayLauncher {
                 }
             }
         } else if (subcommand === 'health') {
+            // Pure orchestration: query runtime health and format output
             const health = this.runtime.getHealthStatus();
 
             if (parsedArgs.flags.json) {
@@ -468,6 +600,13 @@ class GatewayLauncher {
         }
     }
 
+    /**
+     * Handle telemetry console server commands.
+     * 
+     * ORCHESTRATION ROLE: Correct implementation
+     * - Start/stop telemetry HTTP server through telemetryInstance
+     * - No direct business logic, delegates to telemetryInstance methods
+     */
     async handleConsoleCommand(parsedArgs) {
         const subcommand = parsedArgs.subcommand || 'start';
 
@@ -487,6 +626,14 @@ class GatewayLauncher {
         }
     }
 
+    /**
+     * Handle audit log viewing commands.
+     * 
+     * ORCHESTRATION ROLE: Correct implementation
+     * - Query audit logs through auditLogger.readLogs()
+     * - Format and display results
+     * - No direct file I/O, delegates to AuditLogger
+     */
     async handleAuditLogCommand(parsedArgs) {
         const subcommand = parsedArgs.subcommand || 'view';
 
@@ -506,6 +653,7 @@ class GatewayLauncher {
                 filter.since = parsedArgs.flags.since;
             }
 
+            // Pure orchestration: query audit logger and format output
             const logs = this.auditLogger.readLogs({ limit, filter });
 
             if (parsedArgs.flags.json) {
@@ -544,8 +692,23 @@ class GatewayLauncher {
         }
     }
 
+    /**
+     * Forward domain commands to appropriate extensions.
+     * 
+     * ORCHESTRATION ROLE: Correct implementation - THE GOLDEN EXAMPLE
+     * This is how ALL domain operations should be handled:
+     * 1. Find the extension that handles the command
+     * 2. Validate extension instance exists and has the method
+     * 3. Call extension method with parameters
+     * 4. Format and display results
+     * 
+     * NO direct business logic - everything routes through extension instances,
+     * which allows the pipeline to apply security, audit, and monitoring layers.
+     */
     async forwardToExtension(parsedArgs) {
         const command = parsedArgs.command;
+        
+        // Pure orchestration: find appropriate extension
         const targetExtension = this._findExtensionForCommand(command);
 
         if (!targetExtension) {
@@ -565,6 +728,7 @@ class GatewayLauncher {
         try {
             const ext = targetExtension;
             
+            // Validation: ensure extension is properly loaded
             if (!ext.instance) {
                 console.error(`${Colors.FAIL}Error: Extension ${ext.manifest.id} has no instance${Colors.ENDC}`);
                 process.exit(1);
@@ -575,18 +739,22 @@ class GatewayLauncher {
                 process.exit(1);
             }
 
+            // Pure orchestration: prepare parameters and call extension method
             const params = {
                 subcommand: parsedArgs.subcommand,
                 args: parsedArgs.args,
                 flags: parsedArgs.flags
             };
 
+            // THE KEY OPERATION: Delegate to extension instance
+            // This allows the pipeline to intercept, authenticate, audit, and execute
             const result = await ext.instance[command](params);
 
             if (this.verbose) {
                 this._logTelemetry('SUCCESS', { command, extension: targetExtension.id });
             }
 
+            // Pure orchestration: format and display results
             if (parsedArgs.flags.json) {
                 console.log(JSON.stringify(result, null, 2));
             } else if (result && result.output) {
@@ -604,7 +772,15 @@ class GatewayLauncher {
         }
     }
 
+    /**
+     * Find extension that can handle a command.
+     * 
+     * ORCHESTRATION ROLE: Correct implementation
+     * - Pure lookup logic using static command map and capability queries
+     * - No business logic, only routing decisions
+     */
     _findExtensionForCommand(command) {
+        // Static command-to-extension mapping
         const commandMap = {
             'commit': 'ghost-git-extension',
             'audit': 'ghost-git-extension',
@@ -619,6 +795,7 @@ class GatewayLauncher {
             return this.gateway.getExtension(extensionId);
         }
 
+        // Dynamic capability-based routing
         const extensions = this.gateway.listExtensions();
         for (const ext of extensions) {
             if (ext.capabilities && ext.capabilities[command]) {
@@ -629,6 +806,13 @@ class GatewayLauncher {
         return null;
     }
 
+    /**
+     * Log telemetry event for monitoring.
+     * 
+     * ORCHESTRATION ROLE: Correct implementation
+     * - Pure in-memory telemetry logging
+     * - No external I/O, just state updates
+     */
     _logTelemetry(event, data) {
         const entry = {
             timestamp: Date.now(),
@@ -647,6 +831,12 @@ class GatewayLauncher {
         }
     }
 
+    /**
+     * Format state with appropriate color.
+     * 
+     * ORCHESTRATION ROLE: Correct implementation
+     * - Pure formatting logic, no I/O
+     */
     _colorizeState(state) {
         const stateColors = {
             'RUNNING': Colors.GREEN,
@@ -660,6 +850,14 @@ class GatewayLauncher {
         return `${color}${state}${Colors.ENDC}`;
     }
 
+    /**
+     * Copy directory recursively.
+     * 
+     * VIOLATION: Direct file system operations
+     * - fs.mkdirSync, fs.readdirSync, fs.copyFileSync
+     * - Should delegate to extension instance or Gateway method
+     * - Used by handleExtensionCommand for 'install' operation
+     */
     _copyDirectory(src, dest) {
         fs.mkdirSync(dest, { recursive: true });
         
@@ -677,6 +875,14 @@ class GatewayLauncher {
         }
     }
 
+    /**
+     * Remove directory recursively.
+     * 
+     * VIOLATION: Direct file system operations
+     * - fs.existsSync, fs.readdirSync, fs.lstatSync, fs.unlinkSync, fs.rmdirSync
+     * - Should delegate to extension instance or Gateway method
+     * - Used by handleExtensionCommand for 'remove' operation
+     */
     _removeDirectory(dir) {
         if (fs.existsSync(dir)) {
             fs.readdirSync(dir).forEach(file => {
@@ -691,10 +897,20 @@ class GatewayLauncher {
         }
     }
 
+    /**
+     * Scaffold new extension project.
+     * 
+     * VIOLATION: Direct file system operations throughout
+     * - fs.existsSync, fs.mkdirSync, fs.writeFileSync (lines 698-856)
+     * - Creates manifest.json, index.js, package.json, README.md, .gitignore
+     * - Should delegate to extension instance or Gateway method
+     * - Used by handleExtensionCommand for 'init' operation
+     */
     async _scaffoldExtension(name, flags) {
         const extId = name.toLowerCase().replace(/[^a-z0-9-]/g, '-');
         const targetDir = path.resolve(extId);
 
+        // VIOLATION: Direct fs.existsSync
         if (fs.existsSync(targetDir)) {
             console.error(`${Colors.FAIL}Error: Directory ${extId} already exists${Colors.ENDC}`);
             process.exit(1);
@@ -703,6 +919,7 @@ class GatewayLauncher {
         console.log(`${Colors.CYAN}Creating extension: ${Colors.BOLD}${name}${Colors.ENDC}`);
         console.log(`${Colors.DIM}Directory: ${targetDir}${Colors.ENDC}\n`);
 
+        // VIOLATION: Direct fs.mkdirSync
         fs.mkdirSync(targetDir, { recursive: true });
 
         const manifest = {
@@ -735,6 +952,7 @@ class GatewayLauncher {
             ]
         };
 
+        // VIOLATION: Direct fs.writeFileSync
         fs.writeFileSync(
             path.join(targetDir, 'manifest.json'),
             JSON.stringify(manifest, null, 2)
@@ -779,6 +997,7 @@ class ${name.replace(/[^a-zA-Z0-9]/g, '')}Extension {
 module.exports = ${name.replace(/[^a-zA-Z0-9]/g, '')}Extension;
 `;
 
+        // VIOLATION: Direct fs.writeFileSync
         fs.writeFileSync(path.join(targetDir, 'index.js'), indexTemplate);
 
         const packageJson = {
@@ -797,6 +1016,7 @@ module.exports = ${name.replace(/[^a-zA-Z0-9]/g, '')}Extension;
             license: 'MIT'
         };
 
+        // VIOLATION: Direct fs.writeFileSync
         fs.writeFileSync(
             path.join(targetDir, 'package.json'),
             JSON.stringify(packageJson, null, 2)
@@ -837,8 +1057,10 @@ This extension requests the following capabilities:
 See [Extension API Documentation](https://github.com/lamallamadel/ghost/blob/main/docs/extension-api.md) for details.
 `;
 
+        // VIOLATION: Direct fs.writeFileSync
         fs.writeFileSync(path.join(targetDir, 'README.md'), readme);
 
+        // VIOLATION: Direct fs.writeFileSync
         fs.writeFileSync(path.join(targetDir, '.gitignore'), `node_modules/
 *.log
 .DS_Store
@@ -855,12 +1077,22 @@ See [Extension API Documentation](https://github.com/lamallamadel/ghost/blob/mai
         console.log('');
     }
 
+    /**
+     * Validate extension manifest and structure.
+     * 
+     * VIOLATION: Direct file system operations throughout
+     * - fs.existsSync, fs.readFileSync (lines 858-1020)
+     * - Reads manifest.json, validates schema, checks main file exists
+     * - Should delegate to extension instance or Gateway method
+     * - Used by handleExtensionCommand for 'validate' operation
+     */
     async _validateExtension(extPath) {
         const absolutePath = path.resolve(extPath);
         const manifestPath = path.join(absolutePath, 'manifest.json');
         
         console.log(`${Colors.CYAN}Validating extension at: ${Colors.DIM}${absolutePath}${Colors.ENDC}\n`);
 
+        // VIOLATION: Direct fs.existsSync
         if (!fs.existsSync(manifestPath)) {
             console.error(`${Colors.FAIL}✗ No manifest.json found${Colors.ENDC}`);
             process.exit(1);
@@ -868,6 +1100,7 @@ See [Extension API Documentation](https://github.com/lamallamadel/ghost/blob/mai
 
         let manifest;
         try {
+            // VIOLATION: Direct fs.readFileSync
             const content = fs.readFileSync(manifestPath, 'utf8');
             manifest = JSON.parse(content);
             console.log(`${Colors.GREEN}✓${Colors.ENDC} Valid JSON syntax`);
@@ -876,6 +1109,7 @@ See [Extension API Documentation](https://github.com/lamallamadel/ghost/blob/mai
             process.exit(1);
         }
 
+        // VIOLATION: Direct fs.readFileSync
         const schemaPath = path.join(__dirname, 'core', 'manifest-schema.json');
         const schema = JSON.parse(fs.readFileSync(schemaPath, 'utf8'));
 
@@ -907,6 +1141,7 @@ See [Extension API Documentation](https://github.com/lamallamadel/ghost/blob/mai
         if (!manifest.main) {
             errors.push('Missing required field: main');
         } else {
+            // VIOLATION: Direct fs.existsSync
             const mainPath = path.join(absolutePath, manifest.main);
             if (!fs.existsSync(mainPath)) {
                 errors.push(`Main file not found: ${manifest.main}`);
@@ -1019,6 +1254,12 @@ See [Extension API Documentation](https://github.com/lamallamadel/ghost/blob/mai
         }
     }
 
+    /**
+     * Display help message.
+     * 
+     * ORCHESTRATION ROLE: Correct implementation
+     * - Pure output formatting, no business logic
+     */
     showHelp() {
         console.log(`
 ${Colors.BOLD}${Colors.CYAN}GHOST CLI v0.4.0${Colors.ENDC} - Gateway Launcher
@@ -1086,6 +1327,13 @@ ${Colors.BOLD}TELEMETRY:${Colors.ENDC}
 `);
     }
 
+    /**
+     * Start telemetry HTTP/WebSocket server.
+     * 
+     * ORCHESTRATION ROLE: Correct implementation
+     * - Delegates to telemetryInstance.startServer()
+     * - No direct server implementation, just coordination
+     */
     async startTelemetryServer(port = 9876) {
         if (this.telemetryServer) {
             console.log(`${Colors.WARNING}Telemetry server already running${Colors.ENDC}`);
@@ -1107,6 +1355,13 @@ ${Colors.BOLD}TELEMETRY:${Colors.ENDC}
         }
     }
 
+    /**
+     * Stop telemetry HTTP/WebSocket server.
+     * 
+     * ORCHESTRATION ROLE: Correct implementation
+     * - Delegates to telemetryInstance.stopServer()
+     * - No direct server implementation, just coordination
+     */
     async stopTelemetryServer() {
         if (this.telemetryServer) {
             this.telemetryInstance.stopServer();
@@ -1115,6 +1370,14 @@ ${Colors.BOLD}TELEMETRY:${Colors.ENDC}
         }
     }
 
+    /**
+     * Clean up resources on shutdown.
+     * 
+     * ORCHESTRATION ROLE: Correct implementation
+     * - Coordinates shutdown of all components
+     * - Calls lifecycle methods on runtime, gateway, telemetry
+     * - No direct business logic, only cleanup coordination
+     */
     async cleanup() {
         if (this.telemetryServer) {
             await this.stopTelemetryServer();
@@ -1130,6 +1393,15 @@ ${Colors.BOLD}TELEMETRY:${Colors.ENDC}
     }
 }
 
+/**
+ * Main entry point.
+ * 
+ * ORCHESTRATION ROLE: Correct implementation
+ * - Initialize launcher
+ * - Set up signal handlers for graceful shutdown
+ * - Parse arguments and route to handlers
+ * - Error handling and cleanup
+ */
 async function main() {
     const launcher = new GatewayLauncher();
 
