@@ -251,6 +251,114 @@ class ExtensionSDK {
         return await this.requestGitExec({ operation: 'diff', args });
     }
 
+    async requestFileExists(path) {
+        if (!path || typeof path !== 'string') {
+            throw new ValidationError('File path is required', 'MISSING_FILE_PATH', 'validation');
+        }
+
+        try {
+            await this.requestFileStat({ path });
+            return true;
+        } catch (error) {
+            if (error.code === 'ENOENT' || (error.message && error.message.includes('ENOENT'))) {
+                return false;
+            }
+            throw error;
+        }
+    }
+
+    async requestFileReadJSON(path) {
+        if (!path || typeof path !== 'string') {
+            throw new ValidationError('File path is required', 'MISSING_FILE_PATH', 'validation');
+        }
+
+        const content = await this.requestFileRead({ path, encoding: 'utf8' });
+        
+        try {
+            return JSON.parse(content);
+        } catch (error) {
+            throw new ValidationError(`Failed to parse JSON from ${path}: ${error.message}`, 'JSON_PARSE_ERROR', 'validation');
+        }
+    }
+
+    async requestFileWriteJSON(path, object) {
+        if (!path || typeof path !== 'string') {
+            throw new ValidationError('File path is required', 'MISSING_FILE_PATH', 'validation');
+        }
+
+        if (object === undefined || object === null) {
+            throw new ValidationError('Object is required', 'MISSING_OBJECT', 'validation');
+        }
+
+        let content;
+        try {
+            content = JSON.stringify(object, null, 2);
+        } catch (error) {
+            throw new ValidationError(`Failed to stringify object: ${error.message}`, 'JSON_STRINGIFY_ERROR', 'validation');
+        }
+
+        return await this.requestFileWrite({ path, content, encoding: 'utf8' });
+    }
+
+    async requestGitCurrentBranch() {
+        const result = await this.requestGitExec({ 
+            operation: 'symbolic-ref', 
+            args: ['--short', 'HEAD'] 
+        });
+        
+        if (result && result.stdout) {
+            return result.stdout.trim();
+        }
+        
+        throw new IntentError('Failed to get current branch', 'GIT_BRANCH_ERROR', 'execution');
+    }
+
+    async requestGitStagedFiles() {
+        const result = await this.requestGitExec({ 
+            operation: 'diff', 
+            args: ['--cached', '--name-only'] 
+        });
+        
+        if (result && result.stdout) {
+            const files = result.stdout.trim();
+            return files ? files.split('\n').map(f => f.trim()).filter(f => f.length > 0) : [];
+        }
+        
+        return [];
+    }
+
+    async requestGitCommit(message, options = {}) {
+        if (!message || typeof message !== 'string') {
+            throw new ValidationError('Commit message is required', 'MISSING_COMMIT_MESSAGE', 'validation');
+        }
+
+        const args = [];
+        
+        if (options.all) {
+            args.push('-a');
+        }
+        
+        if (options.amend) {
+            args.push('--amend');
+        }
+        
+        if (options.noVerify) {
+            args.push('--no-verify');
+        }
+        
+        if (options.allowEmpty) {
+            args.push('--allow-empty');
+        }
+        
+        args.push('-m', message);
+        
+        if (options.author) {
+            args.push('--author', options.author);
+        }
+
+        return await this.requestGitExec({ operation: 'commit', args });
+    }
+
     buildIntent() {
         return this.intentBuilder;
     }

@@ -35,8 +35,16 @@ export interface NetworkCallParams {
 }
 
 export interface GitExecParams {
-    operation: 'status' | 'log' | 'diff' | 'show' | 'ls-files' | 'commit' | 'branch' | 'tag' | 'push' | 'reset';
+    operation: 'status' | 'log' | 'diff' | 'show' | 'ls-files' | 'commit' | 'branch' | 'tag' | 'push' | 'reset' | 'symbolic-ref';
     args?: string[];
+}
+
+export interface GitCommitOptions {
+    all?: boolean;
+    amend?: boolean;
+    noVerify?: boolean;
+    allowEmpty?: boolean;
+    author?: string;
 }
 
 export interface SDKOptions {
@@ -90,6 +98,9 @@ export class ExtensionSDK {
     requestFileWrite(params: FileWriteParams): Promise<void>;
     requestFileReadDir(params: { path: string }): Promise<string[]>;
     requestFileStat(params: { path: string }): Promise<any>;
+    requestFileExists(path: string): Promise<boolean>;
+    requestFileReadJSON(path: string): Promise<any>;
+    requestFileWriteJSON(path: string, object: any): Promise<void>;
     
     requestNetworkCall(params: NetworkCallParams): Promise<any>;
     
@@ -97,6 +108,9 @@ export class ExtensionSDK {
     requestGitStatus(args?: string[]): Promise<string>;
     requestGitLog(args?: string[]): Promise<string>;
     requestGitDiff(args?: string[]): Promise<string>;
+    requestGitCurrentBranch(): Promise<string>;
+    requestGitStagedFiles(): Promise<string[]>;
+    requestGitCommit(message: string, options?: GitCommitOptions): Promise<string>;
     
     buildIntent(): IntentBuilder;
 }
