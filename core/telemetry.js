@@ -603,7 +603,10 @@ class InstrumentedPipeline {
 
     async process(rawMessage) {
         const rootSpan = this.telemetry.startSpan('pipeline.process');
-        rootSpan.setAttribute('rawMessage', typeof rawMessage === 'string' ? rawMessage.substring(0, 200) : JSON.stringify(rawMessage).substring(0, 200));
+        const rawMessagePreview = typeof rawMessage === 'string' 
+            ? rawMessage.substring(0, 200) 
+            : JSON.stringify(rawMessage).substring(0, 200);
+        rootSpan.setAttribute('rawMessage', rawMessagePreview);
 
         let intent;
         let extensionId;
@@ -619,11 +622,16 @@ class InstrumentedPipeline {
                 type: intent.type,
                 operation: intent.operation
             });
+
+            this._addIntentSpecificMetadata(interceptSpan, intent);
+
             interceptSpan.setStatus('OK');
             interceptSpan.end();
             this.telemetry.recordSpan(interceptSpan);
         } catch (error) {
             interceptSpan.setStatus('ERROR', error.message);
+            interceptSpan.setAttribute('error.type', error.name || 'Error');
+            interceptSpan.setAttribute('error.code', error.code || 'UNKNOWN');
             interceptSpan.end();
             this.telemetry.recordSpan(interceptSpan);
             this.telemetry.logger.error('Intercept failed', { error: error.message });
@@ -655,12 +663,15 @@ class InstrumentedPipeline {
             operation: intent.operation
         });
 
+        this._addIntentSpecificMetadata(authSpan, intent);
+
         const authResult = this.pipeline.authLayer.authorize(intent);
         authSpan.setAttribute('authorized', authResult.authorized);
 
         if (!authResult.authorized) {
             authSpan.setStatus('ERROR', authResult.reason);
-            authSpan.setAttribute('code', authResult.code);
+            authSpan.setAttribute('error.code', authResult.code);
+            authSpan.setAttribute('denial.reason', authResult.reason);
             authSpan.end();
             this.telemetry.recordSpan(authSpan);
 
@@ -668,6 +679,10 @@ class InstrumentedPipeline {
             
             if (authResult.code === 'AUTH_RATE_LIMIT') {
                 this.telemetry.metrics.recordRateLimitViolation(extensionId);
+                authSpan.addEvent('rate_limit_exceeded', {
+                    extensionId,
+                    requestId: intent.requestId
+                });
                 this.telemetry.logger.warn('Rate limit exceeded', {
                     extensionId,
                     requestId: intent.requestId
@@ -679,6 +694,20 @@ class InstrumentedPipeline {
                     reason: authResult.reason,
                     code: authResult.code
                 });
+            }
+
+            const rateLimitState = this.pipeline.getRateLimitState(extensionId);
+            if (rateLimitState) {
+                authSpan.setAttribute('rateLimit.available', rateLimitState.available);
+                authSpan.setAttribute('rateLimit.capacity', rateLimitState.capacity);
+                
+                if (rateLimitState.available < rateLimitState.capacity * 0.1) {
+                    authSpan.addEvent('rate_limit_warning', {
+                        message: 'Rate limit tokens below 10% of capacity',
+                        available: rateLimitState.available,
+                        capacity: rateLimitState.capacity
+                    });
+                }
             }
 
             this.pipeline.auditLayer.logSecurityEvent(
@@ -700,6 +729,20 @@ class InstrumentedPipeline {
             };
         }
 
+        const rateLimitState = this.pipeline.getRateLimitState(extensionId);
+        if (rateLimitState) {
+            authSpan.setAttribute('rateLimit.available', rateLimitState.available);
+            authSpan.setAttribute('rateLimit.capacity', rateLimitState.capacity);
+            
+            if (rateLimitState.available < rateLimitState.capacity * 0.1) {
+                authSpan.addEvent('rate_limit_warning', {
+                    message: 'Rate limit tokens below 10% of capacity',
+                    available: rateLimitState.available,
+                    capacity: rateLimitState.capacity
+                });
+            }
+        }
+
         authSpan.setStatus('OK');
         authSpan.end();
         this.telemetry.recordSpan(authSpan);
@@ -707,15 +750,38 @@ class InstrumentedPipeline {
         const auditSpan = this.telemetry.startSpan('pipeline.audit', rootSpan);
         auditSpan.setAttributes({
             extensionId,
-            requestId: intent.requestId
+            requestId: intent.requestId,
+            type: intent.type,
+            operation: intent.operation
         });
 
-        const auditResult = this.pipeline.auditLayer.audit(intent, authResult);
+        this._addIntentSpecificMetadata(auditSpan, intent);
+
+        const manifest = this.pipeline.extensionManifests.get(intent.extensionId);
+        const manifestCapabilities = manifest ? manifest.capabilities : null;
+        
+        const auditLayerWithCapabilities = new (require('./pipeline/audit').AuditLayer)(
+            this.pipeline.auditLayer.logger.logPath, 
+            manifestCapabilities
+        );
+        const auditResult = auditLayerWithCapabilities.audit(intent, authResult);
         auditSpan.setAttribute('passed', auditResult.passed);
 
         if (!auditResult.passed) {
             auditSpan.setStatus('ERROR', auditResult.reason);
+            auditSpan.setAttribute('error.code', auditResult.code);
             auditSpan.setAttribute('violations', JSON.stringify(auditResult.violations));
+            auditSpan.setAttribute('violation.count', auditResult.violations ? auditResult.violations.length : 0);
+            
+            if (auditResult.violations && auditResult.violations.length > 0) {
+                for (let i = 0; i < Math.min(auditResult.violations.length, 5); i++) {
+                    const violation = auditResult.violations[i];
+                    auditSpan.setAttribute(`violation.${i}.rule`, violation.rule || 'unknown');
+                    auditSpan.setAttribute(`violation.${i}.severity`, violation.severity || 'unknown');
+                    auditSpan.setAttribute(`violation.${i}.message`, violation.message || 'unknown');
+                }
+            }
+
             auditSpan.end();
             this.telemetry.recordSpan(auditSpan);
 
@@ -742,7 +808,17 @@ class InstrumentedPipeline {
         }
 
         if (auditResult.warnings && auditResult.warnings.length > 0) {
-            auditSpan.addEvent('warnings', { warnings: JSON.stringify(auditResult.warnings) });
+            auditSpan.addEvent('validation_warnings', { 
+                warnings: JSON.stringify(auditResult.warnings),
+                count: auditResult.warnings.length
+            });
+            auditSpan.setAttribute('warnings.count', auditResult.warnings.length);
+            
+            for (let i = 0; i < Math.min(auditResult.warnings.length, 3); i++) {
+                const warning = auditResult.warnings[i];
+                auditSpan.setAttribute(`warning.${i}`, typeof warning === 'string' ? warning : JSON.stringify(warning));
+            }
+
             this.telemetry.logger.warn('Audit warnings', {
                 extensionId,
                 requestId: intent.requestId,
@@ -762,22 +838,57 @@ class InstrumentedPipeline {
             operation: intent.operation
         });
 
+        this._addIntentSpecificMetadata(executeSpan, intent);
+
+        const circuitBreakerState = this.pipeline.getCircuitBreakerState(intent.type);
+        if (circuitBreakerState) {
+            executeSpan.setAttribute('circuitBreaker.state', circuitBreakerState.state);
+            executeSpan.setAttribute('circuitBreaker.failures', circuitBreakerState.failures);
+            
+            if (circuitBreakerState.state === 'OPEN') {
+                executeSpan.addEvent('circuit_breaker_open', {
+                    message: 'Circuit breaker is in OPEN state',
+                    state: circuitBreakerState.state,
+                    failures: circuitBreakerState.failures,
+                    nextAttempt: circuitBreakerState.nextAttempt
+                });
+            } else if (circuitBreakerState.state === 'HALF_OPEN') {
+                executeSpan.addEvent('circuit_breaker_half_open', {
+                    message: 'Circuit breaker is in HALF_OPEN state',
+                    state: circuitBreakerState.state
+                });
+            }
+        }
+
         try {
             const result = await this.pipeline.executionLayer.execute(intent);
             
+            const resultSize = JSON.stringify(result).length;
             executeSpan.setStatus('OK');
-            executeSpan.setAttribute('resultSize', JSON.stringify(result).length);
+            executeSpan.setAttribute('resultSize', resultSize);
+            executeSpan.setAttribute('success', true);
+            
+            const circuitBreakerAfter = this.pipeline.getCircuitBreakerState(intent.type);
+            if (circuitBreakerAfter && circuitBreakerAfter.state === 'CLOSED' && 
+                circuitBreakerState && circuitBreakerState.state !== 'CLOSED') {
+                executeSpan.addEvent('circuit_breaker_closed', {
+                    message: 'Circuit breaker transitioned to CLOSED state',
+                    state: 'CLOSED'
+                });
+            }
+
             executeSpan.end();
             this.telemetry.recordSpan(executeSpan);
 
-            this.pipeline.auditLayer.logExecution(intent, result);
+            auditLayerWithCapabilities.logExecution(intent, result);
             this.telemetry.logger.info('Execution completed', {
                 extensionId,
                 requestId: intent.requestId,
-                resultSize: JSON.stringify(result).length
+                resultSize
             });
 
             rootSpan.setStatus('OK');
+            rootSpan.setAttribute('resultSize', resultSize);
             rootSpan.end();
             this.telemetry.recordSpan(rootSpan);
 
@@ -789,11 +900,34 @@ class InstrumentedPipeline {
             };
         } catch (error) {
             executeSpan.setStatus('ERROR', error.message);
-            executeSpan.setAttribute('errorCode', error.code || 'UNKNOWN');
+            executeSpan.setAttribute('error.type', error.name || 'Error');
+            executeSpan.setAttribute('error.code', error.code || 'UNKNOWN');
+            executeSpan.setAttribute('success', false);
+            
+            if (error.details) {
+                executeSpan.setAttribute('error.details', JSON.stringify(error.details));
+            }
+
+            const circuitBreakerAfter = this.pipeline.getCircuitBreakerState(intent.type);
+            if (circuitBreakerAfter) {
+                executeSpan.setAttribute('circuitBreaker.state.after', circuitBreakerAfter.state);
+                executeSpan.setAttribute('circuitBreaker.failures.after', circuitBreakerAfter.failures);
+                
+                if (circuitBreakerAfter.state === 'OPEN' && 
+                    (!circuitBreakerState || circuitBreakerState.state !== 'OPEN')) {
+                    executeSpan.addEvent('circuit_breaker_opened', {
+                        message: 'Circuit breaker transitioned to OPEN state due to failures',
+                        state: 'OPEN',
+                        failures: circuitBreakerAfter.failures,
+                        nextAttempt: circuitBreakerAfter.nextAttempt
+                    });
+                }
+            }
+
             executeSpan.end();
             this.telemetry.recordSpan(executeSpan);
 
-            this.pipeline.auditLayer.logExecution(intent, null, error);
+            auditLayerWithCapabilities.logExecution(intent, null, error);
             this.telemetry.logger.error('Execution failed', {
                 extensionId,
                 requestId: intent.requestId,
@@ -813,6 +947,51 @@ class InstrumentedPipeline {
                 details: error.details,
                 requestId: intent.requestId
             };
+        }
+    }
+
+    _addIntentSpecificMetadata(span, intent) {
+        if (!intent || !intent.params) return;
+
+        if (intent.type === 'filesystem' && intent.params.path) {
+            span.setAttribute('intent.target.path', intent.params.path);
+            
+            if (intent.params.content) {
+                const contentSize = typeof intent.params.content === 'string' 
+                    ? intent.params.content.length 
+                    : JSON.stringify(intent.params.content).length;
+                span.setAttribute('intent.request.size', contentSize);
+            }
+        }
+
+        if (intent.type === 'network' && intent.params.url) {
+            span.setAttribute('intent.target.url', intent.params.url);
+            
+            if (intent.params.data) {
+                const dataSize = typeof intent.params.data === 'string'
+                    ? intent.params.data.length
+                    : JSON.stringify(intent.params.data).length;
+                span.setAttribute('intent.request.size', dataSize);
+            }
+            
+            if (intent.params.method) {
+                span.setAttribute('intent.http.method', intent.params.method);
+            }
+        }
+
+        if (intent.type === 'process' && intent.params.command) {
+            span.setAttribute('intent.target.command', intent.params.command);
+            
+            if (intent.params.args) {
+                const argsSize = Array.isArray(intent.params.args)
+                    ? intent.params.args.join(' ').length
+                    : String(intent.params.args).length;
+                span.setAttribute('intent.request.size', argsSize);
+            }
+        }
+
+        if (intent.type === 'git' && intent.params.command) {
+            span.setAttribute('intent.target.command', intent.params.command);
         }
     }
 
