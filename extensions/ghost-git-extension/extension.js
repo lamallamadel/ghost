@@ -978,45 +978,103 @@ class GitExtension {
     }
 
     async getConflictedFiles() {
+        await this.rpc.log('debug', 'MERGE_RESOLUTION: Detecting conflicted files');
+        
         const raw = await this.rpc.gitExec(['diff', '--name-only', '--diff-filter=U'], true);
-        if (!raw) return [];
-        return raw.split('\n').map(s => s.trim()).filter(Boolean);
+        if (!raw) {
+            await this.rpc.log('info', 'MERGE_RESOLUTION: No conflicts detected');
+            return [];
+        }
+        
+        const conflicts = raw.split('\n').map(s => s.trim()).filter(Boolean);
+        
+        await this.rpc.log('info', 'MERGE_RESOLUTION: Conflicts detected', {
+            conflictCount: conflicts.length,
+            files: conflicts
+        });
+        
+        return conflicts;
     }
 
     async handleMergeResolve(strategy, flags = {}) {
+        await this.rpc.log('info', 'MERGE_RESOLUTION: Starting merge resolution', {
+            strategy,
+            flags
+        });
+        
         const conflicts = await this.getConflictedFiles();
         if (!conflicts.length) {
+            await this.rpc.log('info', 'MERGE_RESOLUTION: No conflicts to resolve');
             return { success: true, message: 'No conflicts detected' };
         }
+
+        await this.rpc.log('info', 'MERGE_RESOLUTION: Processing conflicts', {
+            totalConflicts: conflicts.length,
+            strategy
+        });
 
         const resolved = [];
         const manual = [];
 
         for (const file of conflicts) {
             if (strategy === 'manual') {
+                await this.rpc.log('debug', 'MERGE_RESOLUTION: Marking file for manual resolution', {
+                    file
+                });
                 manual.push(file);
                 continue;
             }
 
-            if (strategy === 'ours') {
-                await this.rpc.gitExec(['checkout', '--ours', '--', `"${file}"`], true);
-                await this.rpc.gitExec(['add', `"${file}"`], true);
-                resolved.push({ file, strategy: 'ours' });
-            } else if (strategy === 'theirs') {
-                await this.rpc.gitExec(['checkout', '--theirs', '--', `"${file}"`], true);
-                await this.rpc.gitExec(['add', `"${file}"`], true);
-                resolved.push({ file, strategy: 'theirs' });
+            try {
+                if (strategy === 'ours') {
+                    await this.rpc.log('debug', 'MERGE_RESOLUTION: Applying "ours" strategy', {
+                        file
+                    });
+                    await this.rpc.gitExec(['checkout', '--ours', '--', file], true);
+                    await this.rpc.gitExec(['add', file], true);
+                    resolved.push({ file, strategy: 'ours' });
+                    await this.rpc.log('info', 'MERGE_RESOLUTION: File resolved with "ours" strategy', {
+                        file
+                    });
+                } else if (strategy === 'theirs') {
+                    await this.rpc.log('debug', 'MERGE_RESOLUTION: Applying "theirs" strategy', {
+                        file
+                    });
+                    await this.rpc.gitExec(['checkout', '--theirs', '--', file], true);
+                    await this.rpc.gitExec(['add', file], true);
+                    resolved.push({ file, strategy: 'theirs' });
+                    await this.rpc.log('info', 'MERGE_RESOLUTION: File resolved with "theirs" strategy', {
+                        file
+                    });
+                }
+            } catch (error) {
+                await this.rpc.log('error', 'MERGE_RESOLUTION: Failed to resolve file', {
+                    file,
+                    strategy,
+                    error: error.message
+                });
+                manual.push(file);
             }
         }
 
         const remaining = await this.getConflictedFiles();
         
-        return { 
+        const result = { 
             success: remaining.length === 0, 
             resolved, 
             manual, 
             remaining 
         };
+
+        await this.rpc.log('info', 'MERGE_RESOLUTION: Merge resolution completed', {
+            totalProcessed: conflicts.length,
+            resolvedCount: resolved.length,
+            manualCount: manual.length,
+            remainingCount: remaining.length,
+            success: result.success
+        });
+        
+        return result;
     }
 
     async handleRPCRequest(request) {
