@@ -38,48 +38,101 @@ class ExtensionRPCClient {
         return response.result;
     }
 
+    async emitIntent(type, operation, params) {
+        const intent = {
+            type,
+            operation,
+            params
+        };
+        return await this.call('intent', intent);
+    }
+
+    async requestFileRead(path, encoding = 'utf8') {
+        return await this.emitIntent('filesystem', 'read', { path, encoding });
+    }
+
+    async requestFileWrite(path, content, encoding = 'utf8') {
+        return await this.emitIntent('filesystem', 'write', { path, content, encoding });
+    }
+
+    async requestFileAppend(path, content, encoding = 'utf8') {
+        return await this.emitIntent('filesystem', 'append', { path, content, encoding });
+    }
+
+    async requestFileExists(path) {
+        return await this.emitIntent('filesystem', 'exists', { path });
+    }
+
+    async requestFileReadDir(path, options = {}) {
+        return await this.emitIntent('filesystem', 'readdir', { path, ...options });
+    }
+
+    async requestFileStat(path) {
+        return await this.emitIntent('filesystem', 'stat', { path });
+    }
+
+    async requestGitExec(args, suppressError = false) {
+        return await this.emitIntent('git', 'exec', { args, suppressError });
+    }
+
+    async requestNetworkCall(options, payload) {
+        return await this.emitIntent('network', 'request', { options, payload });
+    }
+
+    async requestExecSync(command, options = {}) {
+        return await this.emitIntent('process', 'exec', { command, options });
+    }
+
+    async requestPromptUser(question) {
+        return await this.emitIntent('ui', 'prompt', { question });
+    }
+
+    async requestLog(level, message, meta = {}) {
+        return await this.emitIntent('log', 'write', { level, message, meta });
+    }
+
     async readFile(filePath) {
-        return await this.call('fs.readFile', { path: filePath, encoding: 'utf8' });
+        return await this.requestFileRead(filePath);
     }
 
     async writeFile(filePath, content) {
-        return await this.call('fs.writeFile', { path: filePath, content, encoding: 'utf8' });
+        return await this.requestFileWrite(filePath, content);
     }
 
     async appendFile(filePath, content) {
-        return await this.call('fs.appendFile', { path: filePath, content, encoding: 'utf8' });
+        return await this.requestFileAppend(filePath, content);
     }
 
     async fileExists(filePath) {
-        return await this.call('fs.exists', { path: filePath });
+        return await this.requestFileExists(filePath);
     }
 
     async readDir(dirPath, options = {}) {
-        return await this.call('fs.readDir', { path: dirPath, ...options });
+        return await this.requestFileReadDir(dirPath, options);
     }
 
     async lstat(filePath) {
-        return await this.call('fs.lstat', { path: filePath });
+        return await this.requestFileStat(filePath);
     }
 
     async gitExec(args, suppressError = false) {
-        return await this.call('git.exec', { args, suppressError });
+        return await this.requestGitExec(args, suppressError);
     }
 
     async httpsRequest(options, payload) {
-        return await this.call('https.request', { options, payload });
+        return await this.requestNetworkCall(options, payload);
     }
 
     async execSync(command, options = {}) {
-        return await this.call('exec.sync', { command, options });
+        return await this.requestExecSync(command, options);
     }
 
     async promptUser(question) {
-        return await this.call('ui.prompt', { question });
+        return await this.requestPromptUser(question);
     }
 
     async log(level, message, meta = {}) {
-        return await this.call('log.write', { level, message, meta });
+        return await this.requestLog(level, message, meta);
     }
 }
 
