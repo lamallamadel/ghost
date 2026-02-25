@@ -168,7 +168,7 @@ class GatewayLauncher {
      */
     _setupRuntimeEventHandlers() {
         this.runtime.on('extension-state-change', (info) => {
-            if (this.verbose) {
+            if (this._isVerbose()) {
                 console.log(`${Colors.DIM}[Runtime] Extension ${info.extensionId}: ${info.state}${Colors.ENDC}`);
             }
         });
@@ -178,7 +178,7 @@ class GatewayLauncher {
         });
 
         this.runtime.on('extension-restarted', (info) => {
-            if (this.verbose) {
+            if (this._isVerbose()) {
                 console.log(`${Colors.WARNING}[Runtime] Extension ${info.extensionId} restarted (count: ${info.count})${Colors.ENDC}`);
             }
         });
@@ -209,6 +209,8 @@ class GatewayLauncher {
             
             if (arg === '--verbose' || arg === '-v') {
                 parsed.flags.verbose = true;
+            } else if (arg.startsWith('--verbose=')) {
+                parsed.flags.verbose = arg.substring('--verbose='.length);
             } else if (arg === '--help' || arg === '-h') {
                 parsed.flags.help = true;
             } else if (arg === '--json') {
@@ -241,6 +243,11 @@ class GatewayLauncher {
     async route(parsedArgs) {
         this.verbose = parsedArgs.flags.verbose;
 
+        // Setup verbose telemetry display if enabled
+        if (this._isVerbose()) {
+            this._setupVerboseTelemetry(parsedArgs.flags.verbose);
+        }
+
         if (parsedArgs.flags.help || !parsedArgs.command) {
             this.showHelp();
             return;
@@ -258,6 +265,182 @@ class GatewayLauncher {
         } else {
             // Pure routing: delegate domain commands to extensions
             await this.forwardToExtension(parsedArgs);
+        }
+    }
+
+    /**
+     * Check if verbose mode is enabled.
+     */
+    _isVerbose() {
+        return this.verbose === true || typeof this.verbose === 'string';
+    }
+
+    /**
+     * Setup verbose telemetry display with real-time span events.
+     * Registers listeners on telemetryInstance to display pipeline flow.
+     */
+    _setupVerboseTelemetry(verboseOption) {
+        // Parse filter option
+        let filter = null;
+        if (typeof verboseOption === 'string' && verboseOption !== 'true') {
+            filter = verboseOption;
+        }
+
+        // Store filter for use in display methods
+        this.verboseFilter = filter;
+
+        // Display verbose mode header
+        if (filter) {
+            console.log(`${Colors.DIM}[Verbose Mode] Filtering by: ${Colors.CYAN}${filter}${Colors.ENDC}`);
+        } else {
+            console.log(`${Colors.DIM}[Verbose Mode] Real-time telemetry enabled${Colors.ENDC}`);
+        }
+
+        // Track spans in progress for pipeline flow display
+        this.activeSpans = new Map();
+        this.completedSpans = new Map();
+
+        // Register listener for span completion events
+        const originalRecordSpan = this.telemetryInstance.recordSpan.bind(this.telemetryInstance);
+        this.telemetryInstance.recordSpan = (span) => {
+            // Call original method
+            originalRecordSpan(span);
+
+            // Display span if it passes filter
+            if (this._shouldDisplaySpan(span)) {
+                this._displaySpan(span);
+            }
+        };
+    }
+
+    /**
+     * Check if span should be displayed based on filter.
+     */
+    _shouldDisplaySpan(span) {
+        if (!this.verboseFilter) {
+            return true;
+        }
+
+        const extensionId = span.attributes.extensionId;
+        const intentType = span.attributes.type;
+
+        // Filter by extension ID or intent type
+        return extensionId === this.verboseFilter || intentType === this.verboseFilter;
+    }
+
+    /**
+     * Sanitize intent parameters to mask sensitive data.
+     */
+    _sanitizeParams(params) {
+        if (!params || typeof params !== 'object') {
+            return params;
+        }
+
+        const sensitiveFields = ['api_key', 'apiKey', 'token', 'password', 'secret', 'auth', 'authorization', 'credentials'];
+        const sanitized = {};
+
+        for (const [key, value] of Object.entries(params)) {
+            const lowerKey = key.toLowerCase();
+            const isSensitive = sensitiveFields.some(field => lowerKey.includes(field.toLowerCase()));
+
+            if (isSensitive) {
+                sanitized[key] = '[REDACTED]';
+            } else if (typeof value === 'object' && value !== null) {
+                sanitized[key] = this._sanitizeParams(value);
+            } else {
+                sanitized[key] = value;
+            }
+        }
+
+        return sanitized;
+    }
+
+    /**
+     * Display span with colored pipeline flow output.
+     */
+    _displaySpan(span) {
+        const spanName = span.name;
+        const extensionId = span.attributes.extensionId || 'unknown';
+        const duration = span.duration;
+        const status = span.status.code;
+
+        // Determine layer from span name
+        let layer = null;
+        if (spanName.includes('intercept')) {
+            layer = 'Intercept';
+        } else if (spanName.includes('auth')) {
+            layer = 'Auth';
+        } else if (spanName.includes('audit')) {
+            layer = 'Audit';
+        } else if (spanName.includes('execute')) {
+            layer = 'Execute';
+        }
+
+        if (!layer) {
+            return; // Only display pipeline layers
+        }
+
+        // Get status symbol and color
+        const statusSymbol = status === 'OK' ? '✓' : '✗';
+        const statusColor = status === 'OK' ? Colors.GREEN : Colors.FAIL;
+
+        // Build display line
+        let displayLine = `${Colors.DIM}[Telemetry]${Colors.ENDC} ${Colors.BOLD}${extensionId}${Colors.ENDC} → `;
+        displayLine += `${Colors.CYAN}${layer}${Colors.ENDC} `;
+        displayLine += `${statusColor}${statusSymbol}${Colors.ENDC} `;
+        displayLine += `${Colors.DIM}${duration}ms${Colors.ENDC}`;
+
+        // Add rate limit info if auth layer
+        if (layer === 'Auth' && span.attributes['rateLimit.available'] !== undefined) {
+            const available = span.attributes['rateLimit.available'];
+            const capacity = span.attributes['rateLimit.capacity'];
+            const percentage = (available / capacity * 100).toFixed(0);
+            
+            let rateLimitColor = Colors.GREEN;
+            if (percentage < 20) {
+                rateLimitColor = Colors.WARNING;
+            }
+            
+            displayLine += ` ${rateLimitColor}[${available}/${capacity}]${Colors.ENDC}`;
+        }
+
+        // Add rate limit violation warning
+        if (span.attributes['denial.reason'] && span.attributes['error.code'] === 'AUTH_RATE_LIMIT') {
+            displayLine += ` ${Colors.WARNING}⚠ RATE LIMIT${Colors.ENDC}`;
+        }
+
+        // Add dropped request info
+        if (status === 'ERROR' && span.attributes['denial.reason']) {
+            const reason = span.attributes['denial.reason'];
+            displayLine += ` ${Colors.FAIL}DROPPED: ${reason}${Colors.ENDC}`;
+        }
+
+        console.log(displayLine);
+
+        // Display intent parameters (sanitized) for intercept layer
+        if (layer === 'Intercept' && span.attributes.type && span.attributes.operation) {
+            const intentType = span.attributes.type;
+            const operation = span.attributes.operation;
+            console.log(`${Colors.DIM}  Intent: ${intentType}:${operation}${Colors.ENDC}`);
+        }
+
+        // Display error details
+        if (status === 'ERROR' && span.status.message) {
+            console.log(`${Colors.DIM}  Error: ${span.status.message}${Colors.ENDC}`);
+        }
+
+        // Display validation violations for audit layer
+        if (layer === 'Audit' && span.attributes['violation.count']) {
+            const violationCount = span.attributes['violation.count'];
+            console.log(`${Colors.WARNING}  Violations: ${violationCount}${Colors.ENDC}`);
+            
+            for (let i = 0; i < Math.min(violationCount, 3); i++) {
+                const rule = span.attributes[`violation.${i}.rule`];
+                const message = span.attributes[`violation.${i}.message`];
+                if (rule && message) {
+                    console.log(`${Colors.WARNING}    - ${rule}: ${message}${Colors.ENDC}`);
+                }
+            }
         }
     }
 
@@ -806,7 +989,7 @@ class GatewayLauncher {
             process.exit(1);
         }
 
-        if (this.verbose) {
+        if (this._isVerbose()) {
             console.log(`${Colors.DIM}[Gateway] Routing '${command}' to extension '${targetExtension.id}'${Colors.ENDC}`);
             this._logTelemetry('ROUTE', { command, extension: targetExtension.id });
         }
@@ -836,7 +1019,7 @@ class GatewayLauncher {
             // This allows the pipeline to intercept, authenticate, audit, and execute
             const result = await ext.instance[command](params);
 
-            if (this.verbose) {
+            if (this._isVerbose()) {
                 this._logTelemetry('SUCCESS', { command, extension: targetExtension.id });
             }
 
@@ -849,7 +1032,7 @@ class GatewayLauncher {
                 console.log(JSON.stringify(result, null, 2));
             }
         } catch (error) {
-            if (this.verbose) {
+            if (this._isVerbose()) {
                 this._logTelemetry('ERROR', { command, extension: targetExtension.id, error: error.message });
             }
 
@@ -907,7 +1090,7 @@ class GatewayLauncher {
             this.telemetry.requests.shift();
         }
 
-        if (this.verbose) {
+        if (this._isVerbose()) {
             console.log(`${Colors.DIM}[Telemetry] ${event}: ${JSON.stringify(data)}${Colors.ENDC}`);
         }
     }
@@ -1393,7 +1576,8 @@ ${Colors.BOLD}EXTENSION COMMANDS:${Colors.ENDC}
   history                       Commit history (via ghost-git-extension)
 
 ${Colors.BOLD}OPTIONS:${Colors.ENDC}
-  --verbose, -v                 Show detailed telemetry and pipeline logs
+  --verbose, -v                 Show detailed real-time telemetry with pipeline flow
+  --verbose=<filter>            Show telemetry filtered by extension-id or intent type
   --json                        Output in JSON format
   --port <port>                 Specify port for telemetry server (default: 9876)
   --help, -h                    Show this help message
@@ -1409,8 +1593,25 @@ ${Colors.BOLD}EXAMPLES:${Colors.ENDC}
   ghost gateway spans 100
   ghost commit --dry-run
   ghost audit --verbose
+  ghost commit --verbose=ghost-git-extension
+  ghost commit --verbose=filesystem
   ghost audit-log view --limit 100 --extension ghost-git-extension
   ghost console start --port 9876
+
+${Colors.BOLD}VERBOSE MODE:${Colors.ENDC}
+  Real-time telemetry display shows pipeline flow for each request:
+  - Extension → Intercept → Auth → Audit → Execute with latencies
+  - Status indicators: ✓ (green) for OK, ✗ (red) for ERROR
+  - Rate limit status: [tokens/capacity] with color-coded warnings
+  - Rate limit violations marked with ⚠ (yellow warning)
+  - Dropped requests show violation reason
+  - Intent parameters are sanitized (api_key, token, password masked)
+  - Use --verbose=<filter> to show only specific extension or intent type
+  
+  Examples:
+    ghost commit --verbose                      # Show all telemetry
+    ghost commit --verbose=ghost-git-extension  # Filter by extension
+    ghost commit --verbose=filesystem           # Filter by intent type
 
 ${Colors.BOLD}TELEMETRY:${Colors.ENDC}
   Integrated OpenTelemetry observability:
@@ -1528,7 +1729,7 @@ async function main() {
     } catch (error) {
         console.error(`${Colors.FAIL}Fatal error: ${error.message}${Colors.ENDC}`);
         
-        if (launcher.verbose) {
+        if (launcher._isVerbose()) {
             console.error(error.stack);
         }
         
