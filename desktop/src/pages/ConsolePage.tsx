@@ -13,6 +13,7 @@ import { GatewayTab } from '@/tabs/GatewayTab'
 import { ExtensionsTab } from '@/tabs/ExtensionsTab'
 import { ExtensionManagerTab } from '@/tabs/ExtensionManagerTab'
 import { useToastsStore } from '@/stores/useToastsStore'
+import { OnboardingWalkthrough } from '@/components/OnboardingWalkthrough'
 
 function TabButton({
   active,
@@ -46,6 +47,7 @@ export default function ConsolePage() {
   const pushToast = useToastsStore((s) => s.push)
   const repoPath = useSessionStore((s) => s.repoPath)
   const setRepoPath = useSessionStore((s) => s.setRepoPath)
+  const onboardingComplete = useSessionStore((s) => s.onboardingComplete)
   const tabs = useTabsStore((s) => s.tabs)
   const activeId = useTabsStore((s) => s.activeId)
   const setActive = useTabsStore((s) => s.setActive)
@@ -54,6 +56,7 @@ export default function ConsolePage() {
 
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null)
+  const [showWalkthrough, setShowWalkthrough] = useState(false)
 
   useEffect(() => {
     ghost
@@ -66,6 +69,12 @@ export default function ConsolePage() {
     if (!repoPath) nav('/')
   }, [repoPath, nav])
 
+  useEffect(() => {
+    if (repoPath && !onboardingComplete) {
+      setShowWalkthrough(true)
+    }
+  }, [repoPath, onboardingComplete])
+
   const activeTab = useMemo(() => tabs.find((t) => t.id === activeId) || tabs[0], [tabs, activeId])
 
   async function revalidate() {
@@ -76,6 +85,7 @@ export default function ConsolePage() {
 
   return (
     <div className="h-full">
+      {showWalkthrough && <OnboardingWalkthrough onClose={() => setShowWalkthrough(false)} />}
       <div className="flex h-full">
         <div
           className={`shrink-0 border-r border-white/10 bg-black/20 backdrop-blur ${sidebarOpen ? 'w-72' : 'w-14'} transition-[width] duration-200`}
