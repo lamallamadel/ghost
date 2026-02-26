@@ -169,3 +169,14 @@ profiling-output/
 
 # Temporary helper scripts
 create-exporters.js
+
+# Security (sensitive files - never commit)
+.ghost/config/.jwt-secret
+.ghost/config/telemetry-auth.json
+.ghost/secrets/
+.ghost/certificates/*.key
+.ghost/certificates/trusted.json
+.ghost/certificates/revoked.json
+.ghost/ids/baselines.json
+.ghost/ids/alerts-*.log
+.ghost/policies/custom.json

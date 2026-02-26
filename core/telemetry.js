@@ -1163,13 +1163,16 @@ class TelemetryServer {
             prometheus: null
         };
         
-        // Developer tools
         this.debuggerManager = options.debuggerManager || null;
         this.profilingManager = options.profilingManager || null;
         this.devMode = options.devMode || null;
         this.runtime = options.runtime || null;
         this.pipeline = options.pipeline || null;
         this.advancedRateLimiting = options.advancedRateLimiting || null;
+        
+        this.authManager = options.authManager || null;
+        this.requireAuth = options.requireAuth !== false;
+        this.publicEndpoints = new Set(['/health', '/metrics']);
         
         this._loadExporterConfig();
     }
@@ -1272,10 +1275,24 @@ class TelemetryServer {
 
         if (req.method === 'OPTIONS') {
             res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-            res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+            res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
             res.writeHead(204);
             res.end();
             return;
+        }
+
+        if (this.requireAuth && this.authManager && !this.publicEndpoints.has(req.url)) {
+            const authResult = this.authManager.authenticateRequest(req);
+            if (!authResult.authenticated) {
+                res.writeHead(401);
+                res.end(JSON.stringify({ 
+                    error: 'Unauthorized', 
+                    message: authResult.error 
+                }));
+                return;
+            }
+            req.authUser = authResult.user || authResult.name;
+            req.authType = authResult.type;
         }
 
         if (req.url === '/health') {

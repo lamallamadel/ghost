@@ -67,7 +67,7 @@ class MarketplaceService {
     }
 
     async installExtension(extensionId, options = {}) {
-        const { version, targetDir } = options;
+        const { version, targetDir, codeSigningManager, requireSigning = false } = options;
         
         const extension = await this.fetchExtensionById(extensionId);
         const versionData = version 
@@ -90,6 +90,18 @@ class MarketplaceService {
         const installPath = targetDir || path.join(os.homedir(), '.ghost', 'extensions', extensionId);
         await this._extractExtension(extensionData, installPath, versionData);
 
+        if (codeSigningManager) {
+            const signatureResult = codeSigningManager.verifyExtension(installPath);
+            if (!signatureResult.valid) {
+                if (requireSigning) {
+                    fs.rmSync(installPath, { recursive: true, force: true });
+                    throw new Error(`Extension signature verification failed: ${signatureResult.error}`);
+                } else {
+                    console.warn(`[Marketplace] Warning: Extension ${extensionId} is not properly signed`);
+                }
+            }
+        }
+
         const dependencies = await this._resolveDependencies(versionData.dependencies || {});
         
         return {
@@ -97,7 +109,8 @@ class MarketplaceService {
             extensionId,
             version: versionData.version,
             installPath,
-            dependencies
+            dependencies,
+            signed: versionData.signature ? true : false
         };
     }
 
