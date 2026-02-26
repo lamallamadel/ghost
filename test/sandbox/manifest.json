@@ -1,0 +1,35 @@
+{
+  "id": "sandbox-test-extension",
+  "name": "Sandbox Test Extension",
+  "version": "1.0.0",
+  "description": "Test extension for sandbox execution",
+  "author": "Ghost CLI",
+  "main": "test-extension.js",
+  "capabilities": {
+    "filesystem": {
+      "read": ["**/*.js", "**/*.json"],
+      "write": ["test-output/**"]
+    },
+    "network": {
+      "allowlist": ["https://api.example.com"],
+      "rateLimit": {
+        "cir": 60,
+        "bc": 100
+      }
+    },
+    "git": {
+      "read": true,
+      "write": false
+    }
+  },
+  "permissions": [
+    "filesystem:read",
+    "filesystem:write",
+    "network:https",
+    "git:read"
+  ],
+  "config": {
+    "testMode": true,
+    "logLevel": "debug"
+  }
+}

@@ -1,6 +1,7 @@
 const { spawn } = require('child_process');
 const { EventEmitter } = require('events');
 const readline = require('readline');
+const { PluginSandbox } = require('./sandbox');
 
 class ExtensionProcess extends EventEmitter {
     constructor(extensionId, extensionPath, manifest, options = {}) {
@@ -1371,6 +1372,362 @@ class ExtensionProcess extends EventEmitter {
     }
 }
 
+class SandboxedExtension extends EventEmitter {
+    constructor(extensionId, extensionPath, manifest, options = {}) {
+        super();
+        this.extensionId = extensionId;
+        this.extensionPath = extensionPath;
+        this.manifest = manifest;
+        this.options = options;
+        
+        this.sandbox = null;
+        this.state = 'STOPPED';
+        this.extensionModule = null;
+        this.extensionInstance = null;
+        
+        this.startTime = null;
+        this.metrics = {
+            callCount: 0,
+            errorCount: 0,
+            totalExecutionTime: 0
+        };
+    }
+
+    async start() {
+        if (this.state === 'RUNNING') {
+            throw new Error(`Sandboxed extension ${this.extensionId} is already running`);
+        }
+
+        this._transitionState('STARTING');
+
+        try {
+            const fs = require('fs');
+            const path = require('path');
+
+            const mainFile = path.join(this.extensionPath, this.manifest.main);
+            if (!fs.existsSync(mainFile)) {
+                throw new Error(`Main file does not exist: ${mainFile}`);
+            }
+
+            const extensionCode = fs.readFileSync(mainFile, 'utf8');
+
+            const hostAPI = this._createHostAPI();
+            
+            this.sandbox = new PluginSandbox(
+                this.extensionId,
+                this.manifest,
+                {
+                    timeout: this.options.timeout || 30000,
+                    maxOperations: this.options.maxOperations || 10000,
+                    memoryLimit: this.options.memoryLimit || 128 * 1024 * 1024,
+                    ...this.options
+                }
+            );
+
+            this.sandbox.on('log', (info) => {
+                this.emit('log', info);
+            });
+
+            this.sandbox.on('security-violation', (info) => {
+                this.emit('security-violation', info);
+                this.emit('error', {
+                    extensionId: this.extensionId,
+                    error: 'Security violation detected',
+                    details: info
+                });
+            });
+
+            this.sandbox.on('execution-complete', (info) => {
+                this.metrics.totalExecutionTime += info.executionTime;
+            });
+
+            this.sandbox.initialize(hostAPI);
+
+            const wrappedCode = `
+                ${extensionCode}
+                
+                if (typeof module !== 'undefined' && module.exports) {
+                    if (typeof module.exports === 'function') {
+                        extensionInstance = new module.exports();
+                    } else {
+                        extensionInstance = module.exports;
+                    }
+                } else if (typeof exports !== 'undefined') {
+                    if (typeof exports === 'function') {
+                        extensionInstance = new exports();
+                    } else {
+                        extensionInstance = exports;
+                    }
+                }
+                
+                extensionInstance;
+            `;
+
+            this.extensionInstance = await this.sandbox.executeCode(wrappedCode);
+
+            if (this.sandbox.context.extensionInstance && typeof this.sandbox.context.extensionInstance.init === 'function') {
+                const initCode = `
+                    (async () => {
+                        if (extensionInstance && typeof extensionInstance.init === 'function') {
+                            return await extensionInstance.init({ config: ${JSON.stringify(this.manifest.config || {})} });
+                        }
+                    })()
+                `;
+                await this.sandbox.executeCode(initCode);
+            }
+
+            this.startTime = Date.now();
+            this._transitionState('RUNNING');
+
+        } catch (error) {
+            this._transitionState('FAILED');
+            throw error;
+        }
+    }
+
+    async stop() {
+        if (this.state === 'STOPPED') {
+            return;
+        }
+
+        this._transitionState('STOPPING');
+
+        try {
+            if (this.sandbox && this.sandbox.context && this.sandbox.context.extensionInstance) {
+                const cleanupCode = `
+                    (async () => {
+                        if (extensionInstance && typeof extensionInstance.cleanup === 'function') {
+                            return await extensionInstance.cleanup();
+                        }
+                    })()
+                `;
+                await this.sandbox.executeCode(cleanupCode, 5000);
+            }
+        } catch (error) {
+            this.emit('error', {
+                extensionId: this.extensionId,
+                error: `Cleanup failed: ${error.message}`
+            });
+        }
+
+        if (this.sandbox) {
+            this.sandbox.terminate();
+            this.sandbox = null;
+        }
+
+        this.extensionInstance = null;
+
+        this._transitionState('STOPPED');
+    }
+
+    async call(method, params = {}) {
+        if (this.state !== 'RUNNING') {
+            throw new Error(`Extension ${this.extensionId} is not running (state: ${this.state})`);
+        }
+
+        try {
+            this.metrics.callCount++;
+            
+            const callCode = `
+                (async () => {
+                    if (!extensionInstance || typeof extensionInstance.${method} !== 'function') {
+                        throw new Error('Method ${method} not found');
+                    }
+                    return await extensionInstance.${method}(params);
+                })()
+            `;
+
+            this.sandbox.context.params = params;
+            const result = await this.sandbox.executeCode(callCode);
+            delete this.sandbox.context.params;
+
+            return result;
+        } catch (error) {
+            this.metrics.errorCount++;
+            this.emit('error', {
+                extensionId: this.extensionId,
+                method,
+                error: error.message
+            });
+            throw error;
+        }
+    }
+
+    _createHostAPI() {
+        const { ExecutionLayer } = require('./pipeline/execute');
+        const executionLayer = new ExecutionLayer();
+
+        const api = {};
+
+        if (this.manifest.capabilities.filesystem) {
+            api.filesystem = {
+                readFile: async (path, options) => {
+                    return await executionLayer.execute({
+                        type: 'filesystem',
+                        operation: 'read',
+                        params: { path, ...options }
+                    });
+                },
+                writeFile: async (path, content, options) => {
+                    return await executionLayer.execute({
+                        type: 'filesystem',
+                        operation: 'write',
+                        params: { path, content, ...options }
+                    });
+                },
+                readdir: async (path, options) => {
+                    return await executionLayer.execute({
+                        type: 'filesystem',
+                        operation: 'readdir',
+                        params: { path, ...options }
+                    });
+                },
+                stat: async (path) => {
+                    return await executionLayer.execute({
+                        type: 'filesystem',
+                        operation: 'stat',
+                        params: { path }
+                    });
+                },
+                mkdir: async (path, options) => {
+                    return await executionLayer.execute({
+                        type: 'filesystem',
+                        operation: 'mkdir',
+                        params: { path, ...options }
+                    });
+                },
+                unlink: async (path) => {
+                    return await executionLayer.execute({
+                        type: 'filesystem',
+                        operation: 'unlink',
+                        params: { path }
+                    });
+                },
+                rmdir: async (path, options) => {
+                    return await executionLayer.execute({
+                        type: 'filesystem',
+                        operation: 'rmdir',
+                        params: { path, ...options }
+                    });
+                }
+            };
+        }
+
+        if (this.manifest.capabilities.network) {
+            api.network = {
+                request: async (url, options) => {
+                    return await executionLayer.execute({
+                        type: 'network',
+                        operation: 'request',
+                        params: { url, ...options }
+                    });
+                },
+                get: async (url, options) => {
+                    return await executionLayer.execute({
+                        type: 'network',
+                        operation: 'request',
+                        params: { url, method: 'GET', ...options }
+                    });
+                },
+                post: async (url, data, options) => {
+                    return await executionLayer.execute({
+                        type: 'network',
+                        operation: 'request',
+                        params: { url, method: 'POST', body: data, ...options }
+                    });
+                }
+            };
+        }
+
+        if (this.manifest.capabilities.git) {
+            api.git = {
+                status: async (options) => {
+                    return await executionLayer.execute({
+                        type: 'git',
+                        operation: 'status',
+                        params: { ...options }
+                    });
+                },
+                log: async (options) => {
+                    return await executionLayer.execute({
+                        type: 'git',
+                        operation: 'log',
+                        params: { ...options }
+                    });
+                },
+                diff: async (options) => {
+                    return await executionLayer.execute({
+                        type: 'git',
+                        operation: 'diff',
+                        params: { ...options }
+                    });
+                },
+                show: async (ref, options) => {
+                    return await executionLayer.execute({
+                        type: 'git',
+                        operation: 'show',
+                        params: { args: [ref], ...options }
+                    });
+                },
+                commit: async (message, options) => {
+                    return await executionLayer.execute({
+                        type: 'git',
+                        operation: 'commit',
+                        params: { args: ['-m', message], ...options }
+                    });
+                },
+                add: async (paths, options) => {
+                    return await executionLayer.execute({
+                        type: 'git',
+                        operation: 'add',
+                        params: { args: Array.isArray(paths) ? paths : [paths], ...options }
+                    });
+                },
+                push: async (remote, branch, options) => {
+                    return await executionLayer.execute({
+                        type: 'git',
+                        operation: 'push',
+                        params: { args: [remote, branch], ...options }
+                    });
+                },
+                checkout: async (ref, options) => {
+                    return await executionLayer.execute({
+                        type: 'git',
+                        operation: 'checkout',
+                        params: { args: [ref], ...options }
+                    });
+                }
+            };
+        }
+
+        return api;
+    }
+
+    _transitionState(newState) {
+        const oldState = this.state;
+        this.state = newState;
+
+        this.emit('state-change', {
+            extensionId: this.extensionId,
+            previousState: oldState,
+            newState: newState,
+            timestamp: Date.now()
+        });
+    }
+
+    getState() {
+        return {
+            extensionId: this.extensionId,
+            state: this.state,
+            uptime: this.startTime ? Date.now() - this.startTime : 0,
+            metrics: {
+                ...this.metrics,
+                sandbox: this.sandbox ? this.sandbox.getMetrics() : null
+            }
+        };
+    }
+}
+
 class ExtensionRuntime extends EventEmitter {
     constructor(options = {}) {
         super();
@@ -1378,6 +1735,7 @@ class ExtensionRuntime extends EventEmitter {
         this.extensions = new Map();
         this.healthCheckInterval = null;
         this.healthCheckFrequency = options.healthCheckFrequency || 60000;
+        this.executionMode = options.executionMode || 'process';
     }
 
     async startExtension(extensionId, extensionPath, manifest, processOptions = {}) {
@@ -1385,88 +1743,110 @@ class ExtensionRuntime extends EventEmitter {
             throw new Error(`Extension ${extensionId} is already registered`);
         }
 
-        const extensionProcess = new ExtensionProcess(
-            extensionId,
-            extensionPath,
-            manifest,
-            { ...this.options, ...processOptions }
-        );
+        const mode = processOptions.executionMode || this.executionMode;
+        let extension;
 
-        extensionProcess.on('state-change', (info) => {
+        if (mode === 'sandbox') {
+            extension = new SandboxedExtension(
+                extensionId,
+                extensionPath,
+                manifest,
+                { ...this.options, ...processOptions }
+            );
+        } else {
+            extension = new ExtensionProcess(
+                extensionId,
+                extensionPath,
+                manifest,
+                { ...this.options, ...processOptions }
+            );
+        }
+
+        extension.on('state-change', (info) => {
             this.emit('extension-state-change', {
                 extensionId,
                 ...info
             });
         });
 
-        extensionProcess.on('error', (info) => {
+        extension.on('error', (info) => {
             this.emit('extension-error', {
                 extensionId,
                 ...info
             });
         });
 
-        extensionProcess.on('exit', (info) => {
-            this.emit('extension-exit', info);
-        });
-
-        extensionProcess.on('crashed', (info) => {
-            this.emit('extension-crashed', info);
-        });
-
-        extensionProcess.on('unresponsive', (info) => {
-            this.emit('extension-unresponsive', info);
-        });
-
-        extensionProcess.on('restarted', (info) => {
-            this.emit('extension-restarted', {
-                extensionId,
-                ...info
+        if (mode === 'sandbox') {
+            extension.on('log', (info) => {
+                this.emit('extension-log', info);
             });
-        });
 
-        extensionProcess.on('restart-initiated', (info) => {
-            this.emit('extension-restart-initiated', info);
-        });
+            extension.on('security-violation', (info) => {
+                this.emit('extension-security-violation', info);
+            });
+        } else {
+            extension.on('exit', (info) => {
+                this.emit('extension-exit', info);
+            });
 
-        extensionProcess.on('shutdown-complete', (info) => {
-            this.emit('extension-shutdown-complete', info);
-        });
+            extension.on('crashed', (info) => {
+                this.emit('extension-crashed', info);
+            });
 
-        extensionProcess.on('stderr', (info) => {
-            this.emit('extension-stderr', info);
-        });
+            extension.on('unresponsive', (info) => {
+                this.emit('extension-unresponsive', info);
+            });
 
-        extensionProcess.on('notification', (info) => {
-            this.emit('extension-notification', info);
-        });
-        
-        extensionProcess.on('crash-telemetry', (info) => {
-            this.emit('extension-crash-telemetry', info);
-        });
-        
-        extensionProcess.on('pending-requests-rejected', (info) => {
-            this.emit('extension-pending-requests-rejected', info);
-        });
-        
-        extensionProcess.on('disconnected', (info) => {
-            this.emit('extension-disconnected', info);
-        });
-        
-        extensionProcess.on('crash-restart-scheduled', (info) => {
-            this.emit('extension-crash-restart-scheduled', info);
-        });
-        
-        extensionProcess.on('crash-recovery-success', (info) => {
-            this.emit('extension-crash-recovery-success', info);
-        });
+            extension.on('restarted', (info) => {
+                this.emit('extension-restarted', {
+                    extensionId,
+                    ...info
+                });
+            });
 
-        this.extensions.set(extensionId, extensionProcess);
+            extension.on('restart-initiated', (info) => {
+                this.emit('extension-restart-initiated', info);
+            });
+
+            extension.on('shutdown-complete', (info) => {
+                this.emit('extension-shutdown-complete', info);
+            });
+
+            extension.on('stderr', (info) => {
+                this.emit('extension-stderr', info);
+            });
+
+            extension.on('notification', (info) => {
+                this.emit('extension-notification', info);
+            });
+            
+            extension.on('crash-telemetry', (info) => {
+                this.emit('extension-crash-telemetry', info);
+            });
+            
+            extension.on('pending-requests-rejected', (info) => {
+                this.emit('extension-pending-requests-rejected', info);
+            });
+            
+            extension.on('disconnected', (info) => {
+                this.emit('extension-disconnected', info);
+            });
+            
+            extension.on('crash-restart-scheduled', (info) => {
+                this.emit('extension-crash-restart-scheduled', info);
+            });
+            
+            extension.on('crash-recovery-success', (info) => {
+                this.emit('extension-crash-recovery-success', info);
+            });
+        }
+
+        this.extensions.set(extensionId, extension);
 
         try {
-            await extensionProcess.start();
+            await extension.start();
             this._ensureHealthMonitoring();
-            return extensionProcess;
+            return extension;
         } catch (error) {
             this.extensions.delete(extensionId);
             throw error;
@@ -1628,5 +2008,6 @@ class ExtensionRuntime extends EventEmitter {
 
 module.exports = {
     ExtensionRuntime,
-    ExtensionProcess
+    ExtensionProcess,
+    SandboxedExtension
 };
