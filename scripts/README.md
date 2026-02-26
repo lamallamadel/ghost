@@ -1,8 +1,52 @@
-# Scripts
+# Ghost CLI Scripts
 
-This directory contains utility scripts for profiling and benchmarking the Ghost CLI pipeline.
+This directory contains utility scripts for Ghost CLI installation, development, profiling, and benchmarking.
 
-## Available Scripts
+## Installation Scripts
+
+### install.sh (macOS/Linux)
+
+Cross-platform installation script for Unix-like systems.
+
+**Usage:**
+```bash
+# Quick install from URL
+curl -fsSL https://raw.githubusercontent.com/lamallamadel/ghost/main/scripts/install.sh | bash
+
+# Or download and run
+chmod +x install.sh
+./install.sh
+```
+
+**What it does:**
+1. Verifies Node.js >= 14
+2. Installs Ghost CLI globally via npm
+3. Creates `~/.ghost/` directory structure
+4. Bootstraps configuration
+5. Verifies installation with `ghost doctor`
+
+### install.ps1 (Windows)
+
+PowerShell installation script for Windows systems.
+
+**Usage:**
+```powershell
+# Quick install from URL
+irm https://raw.githubusercontent.com/lamallamadel/ghost/main/scripts/install.ps1 | iex
+
+# Or download and run
+Set-ExecutionPolicy Bypass -Scope Process -Force
+.\install.ps1
+```
+
+**What it does:**
+1. Verifies Node.js >= 14
+2. Installs Ghost CLI globally via npm
+3. Creates `%USERPROFILE%\.ghost\` directory structure
+4. Bootstraps configuration
+5. Verifies installation with `ghost doctor`
+
+## Profiling & Performance Scripts
 
 ### profile-load-test.js
 
@@ -66,6 +110,27 @@ node scripts/compare-benchmarks.js profiling-output/before.json profiling-output
 - Side-by-side comparison with improvement percentages
 - Target achievement status for each function
 - Overall summary with average improvement
+
+### Flamegraph Generation
+
+Generate CPU flamegraphs for performance analysis:
+
+**macOS/Linux:**
+```bash
+./scripts/generate-flamegraph.sh
+```
+
+**Windows:**
+```powershell
+.\scripts\generate-flamegraph.ps1
+```
+
+**Outputs:**
+- `profiling-output/flamegraph.html` - Interactive CPU flamegraph
+- `profiling-output/isolate-*.log` - V8 profiler logs
+
+**Requirements:**
+- **0x** (flamegraph tool): `npm install -g 0x`
 
 ## Profiling Workflow
 
@@ -140,5 +205,6 @@ Based on Sprint 9 profiling work:
 
 ## See Also
 
-- [core/SPRINT9_PERFORMANCE.md](../core/SPRINT9_PERFORMANCE.md) - Complete optimization documentation
+- [INSTALL.md](../INSTALL.md) - Complete installation guide
+- [core/SPRINT9_PERFORMANCE.md](../core/SPRINT9_PERFORMANCE.md) - Performance optimization documentation
 - [test/gateway/pipeline-load.test.js](../test/gateway/pipeline-load.test.js) - Load test suite

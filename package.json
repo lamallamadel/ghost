@@ -8,10 +8,13 @@
     "core/**/*.js",
     "core/**/*.json",
     "extensions/ghost-git-extension/**",
+    "scripts/install.sh",
+    "scripts/install.ps1",
     "docs/**/*.md",
     "LICENSE",
     "README.md",
-    "AGENTS.md"
+    "AGENTS.md",
+    "INSTALL.md"
   ],
   "bin": {
     "ghost": "ghost.js"

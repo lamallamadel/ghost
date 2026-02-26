@@ -263,6 +263,8 @@ class GatewayLauncher {
             await this.handleAuditLogCommand(parsedArgs);
         } else if (parsedArgs.command === 'console') {
             await this.handleConsoleCommand(parsedArgs);
+        } else if (parsedArgs.command === 'doctor') {
+            await this.handleDoctorCommand(parsedArgs);
         } else {
             // Pure routing: delegate domain commands to extensions
             await this.forwardToExtension(parsedArgs);
@@ -893,6 +895,191 @@ class GatewayLauncher {
         } else {
             console.error(`${Colors.FAIL}Unknown subcommand: ${subcommand}${Colors.ENDC}`);
             process.exit(1);
+        }
+    }
+
+    /**
+     * Handle doctor command for installation health check.
+     * 
+     * ORCHESTRATION ROLE: Correct implementation
+     * - Check directory structure exists
+     * - Verify permissions
+     * - Validate gateway loadable
+     * - No direct business logic modifications
+     */
+    async handleDoctorCommand(parsedArgs) {
+        const isQuiet = parsedArgs.flags.quiet;
+        const isJson = parsedArgs.flags.json;
+        
+        const checks = [];
+        let hasErrors = false;
+        let hasWarnings = false;
+
+        if (!isQuiet && !isJson) {
+            console.log(`\n${Colors.BOLD}${Colors.CYAN}Ghost CLI Health Check${Colors.ENDC}`);
+            console.log(`${Colors.DIM}${'─'.repeat(50)}${Colors.ENDC}\n`);
+        }
+
+        // Check 1: Node.js version
+        const nodeVersion = process.version;
+        const nodeMajor = parseInt(nodeVersion.slice(1).split('.')[0]);
+        const nodeCheck = {
+            name: 'Node.js Version',
+            status: nodeMajor >= 14 ? 'ok' : 'error',
+            message: `${nodeVersion} (requires >= 14.0.0)`,
+            details: { version: nodeVersion, required: '>=14.0.0' }
+        };
+        checks.push(nodeCheck);
+        if (nodeCheck.status === 'error') hasErrors = true;
+        
+        if (!isQuiet && !isJson) {
+            const symbol = nodeCheck.status === 'ok' ? `${Colors.GREEN}✓${Colors.ENDC}` : `${Colors.FAIL}✗${Colors.ENDC}`;
+            console.log(`${symbol} ${nodeCheck.name}: ${nodeCheck.message}`);
+        }
+
+        // Check 2: Ghost directory structure
+        const ghostHome = path.join(os.homedir(), '.ghost');
+        const requiredDirs = [
+            { path: ghostHome, name: 'Ghost home directory' },
+            { path: path.join(ghostHome, 'extensions'), name: 'Extensions directory' },
+            { path: path.join(ghostHome, 'telemetry'), name: 'Telemetry directory' },
+            { path: path.join(ghostHome, 'config'), name: 'Config directory' }
+        ];
+
+        for (const dir of requiredDirs) {
+            const exists = fs.existsSync(dir.path);
+            let readable = false;
+            let writable = false;
+            
+            if (exists) {
+                try {
+                    fs.accessSync(dir.path, fs.constants.R_OK);
+                    readable = true;
+                } catch (e) {}
+                
+                try {
+                    fs.accessSync(dir.path, fs.constants.W_OK);
+                    writable = true;
+                } catch (e) {}
+            }
+            
+            const dirCheck = {
+                name: dir.name,
+                status: exists && readable && writable ? 'ok' : exists ? 'warning' : 'error',
+                message: exists ? 
+                    (readable && writable ? dir.path : `${dir.path} (${!readable ? 'not readable' : 'not writable'})`) :
+                    `${dir.path} (missing)`,
+                details: { path: dir.path, exists, readable, writable }
+            };
+            checks.push(dirCheck);
+            
+            if (dirCheck.status === 'error') hasErrors = true;
+            if (dirCheck.status === 'warning') hasWarnings = true;
+            
+            if (!isQuiet && !isJson) {
+                const symbol = dirCheck.status === 'ok' ? `${Colors.GREEN}✓${Colors.ENDC}` :
+                              dirCheck.status === 'warning' ? `${Colors.WARNING}⚠${Colors.ENDC}` :
+                              `${Colors.FAIL}✗${Colors.ENDC}`;
+                console.log(`${symbol} ${dirCheck.name}: ${dirCheck.message}`);
+            }
+        }
+
+        // Check 3: Gateway loadable
+        let gatewayCheck = { name: 'Gateway', status: 'ok', message: 'Initialized successfully' };
+        try {
+            if (!this.gateway) {
+                throw new Error('Gateway not initialized');
+            }
+            gatewayCheck.details = {
+                extensionsLoaded: this.gateway.listExtensions().length
+            };
+        } catch (error) {
+            gatewayCheck = {
+                name: 'Gateway',
+                status: 'error',
+                message: `Failed to initialize: ${error.message}`,
+                details: { error: error.message }
+            };
+            hasErrors = true;
+        }
+        checks.push(gatewayCheck);
+        
+        if (!isQuiet && !isJson) {
+            const symbol = gatewayCheck.status === 'ok' ? `${Colors.GREEN}✓${Colors.ENDC}` : `${Colors.FAIL}✗${Colors.ENDC}`;
+            console.log(`${symbol} ${gatewayCheck.name}: ${gatewayCheck.message}`);
+        }
+
+        // Check 4: Bundled extensions directory
+        const bundledExtDir = path.join(__dirname, 'extensions');
+        const bundledCheck = {
+            name: 'Bundled extensions',
+            status: fs.existsSync(bundledExtDir) ? 'ok' : 'warning',
+            message: fs.existsSync(bundledExtDir) ? bundledExtDir : `${bundledExtDir} (missing)`,
+            details: { path: bundledExtDir, exists: fs.existsSync(bundledExtDir) }
+        };
+        checks.push(bundledCheck);
+        if (bundledCheck.status === 'warning') hasWarnings = true;
+        
+        if (!isQuiet && !isJson) {
+            const symbol = bundledCheck.status === 'ok' ? `${Colors.GREEN}✓${Colors.ENDC}` : `${Colors.WARNING}⚠${Colors.ENDC}`;
+            console.log(`${symbol} ${bundledCheck.name}: ${bundledCheck.message}`);
+        }
+
+        // Check 5: Config file
+        const configPath = path.join(ghostHome, 'config', 'config.json');
+        const configExists = fs.existsSync(configPath);
+        let configValid = false;
+        if (configExists) {
+            try {
+                const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+                configValid = typeof config === 'object';
+            } catch (e) {}
+        }
+        
+        const configCheck = {
+            name: 'Configuration',
+            status: configExists && configValid ? 'ok' : configExists ? 'warning' : 'warning',
+            message: configExists ? 
+                (configValid ? configPath : `${configPath} (invalid JSON)`) :
+                `${configPath} (not found, using defaults)`,
+            details: { path: configPath, exists: configExists, valid: configValid }
+        };
+        checks.push(configCheck);
+        if (configCheck.status === 'warning') hasWarnings = true;
+        
+        if (!isQuiet && !isJson) {
+            const symbol = configCheck.status === 'ok' ? `${Colors.GREEN}✓${Colors.ENDC}` : `${Colors.WARNING}⚠${Colors.ENDC}`;
+            console.log(`${symbol} ${configCheck.name}: ${configCheck.message}`);
+        }
+
+        // Summary
+        if (isJson) {
+            console.log(JSON.stringify({
+                status: hasErrors ? 'unhealthy' : hasWarnings ? 'degraded' : 'healthy',
+                checks: checks
+            }, null, 2));
+        } else if (!isQuiet) {
+            console.log('');
+            if (hasErrors) {
+                console.log(`${Colors.FAIL}${Colors.BOLD}✗ Ghost CLI has errors${Colors.ENDC}`);
+                console.log(`${Colors.DIM}Run with --verbose for more details${Colors.ENDC}`);
+                process.exit(1);
+            } else if (hasWarnings) {
+                console.log(`${Colors.WARNING}${Colors.BOLD}⚠ Ghost CLI is functional but has warnings${Colors.ENDC}`);
+            } else {
+                console.log(`${Colors.GREEN}${Colors.BOLD}✓ Ghost CLI is healthy${Colors.ENDC}`);
+            }
+            console.log('');
+        } else {
+            // Quiet mode
+            if (hasErrors) {
+                console.log('Ghost CLI has errors');
+                process.exit(1);
+            } else if (hasWarnings) {
+                console.log('Ghost CLI is functional but has warnings');
+            } else {
+                console.log('Ghost CLI is healthy');
+            }
         }
     }
 
@@ -1994,6 +2181,7 @@ ${Colors.BOLD}USAGE:${Colors.ENDC}
   ghost <command> [subcommand] [options]
 
 ${Colors.BOLD}GATEWAY COMMANDS:${Colors.ENDC}
+  doctor                        Check installation health (paths, permissions, gateway)
   extension list                List installed extensions
   extension install <path>      Install extension from path
   extension remove <id>         Remove extension
@@ -2024,6 +2212,7 @@ ${Colors.BOLD}OPTIONS:${Colors.ENDC}
   --help, -h                    Show this help message
 
 ${Colors.BOLD}EXAMPLES:${Colors.ENDC}
+  ghost doctor
   ghost extension list
   ghost extension init my-extension
   ghost extension validate
