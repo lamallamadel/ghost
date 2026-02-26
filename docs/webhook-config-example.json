@@ -1,0 +1,110 @@
+{
+  "server": {
+    "port": 3000,
+    "host": "0.0.0.0"
+  },
+  "routes": [
+    {
+      "id": "github-issue-labeled-bug",
+      "provider": "github",
+      "eventPattern": "issues.labeled",
+      "extensionId": "triage-extension",
+      "command": "processIssueLabel",
+      "conditions": [
+        {
+          "path": "label.name",
+          "operator": "equals",
+          "value": "bug"
+        }
+      ],
+      "transform": "github-issue-labeled",
+      "enabled": true
+    },
+    {
+      "id": "github-pr-opened-main",
+      "provider": "github",
+      "eventPattern": "pull_request.opened",
+      "extensionId": "review-extension",
+      "command": "assignReviewers",
+      "conditions": [
+        {
+          "path": "pull_request.base.ref",
+          "operator": "equals",
+          "value": "main"
+        }
+      ],
+      "transform": "github-pull-request",
+      "enabled": true
+    },
+    {
+      "id": "github-release-published",
+      "provider": "github",
+      "eventPattern": "release.published",
+      "extensionId": "deployment-extension",
+      "command": "deploy",
+      "args": ["production"],
+      "transform": {
+        "type": "javascript",
+        "options": {
+          "code": "result = { version: payload.release.tag_name, environment: 'production', changelog: payload.release.body };"
+        }
+      },
+      "conditions": [
+        {
+          "path": "release.prerelease",
+          "operator": "equals",
+          "value": false
+        }
+      ],
+      "enabled": true
+    },
+    {
+      "id": "gitlab-pipeline-failed",
+      "provider": "gitlab",
+      "eventPattern": "Pipeline Hook",
+      "extensionId": "notification-extension",
+      "command": "notifyTeam",
+      "conditions": [
+        {
+          "path": "object_attributes.status",
+          "operator": "equals",
+          "value": "failed"
+        }
+      ],
+      "transform": "gitlab-pipeline",
+      "enabled": true
+    },
+    {
+      "id": "bitbucket-push-main",
+      "provider": "bitbucket",
+      "eventPattern": "repo:push",
+      "extensionId": "ci-extension",
+      "command": "triggerBuild",
+      "conditions": [
+        {
+          "path": "push.changes.0.new.name",
+          "operator": "equals",
+          "value": "main"
+        }
+      ],
+      "transform": "bitbucket-push",
+      "enabled": true
+    },
+    {
+      "id": "multi-provider-wildcard",
+      "provider": ["github", "gitlab", "bitbucket"],
+      "eventPattern": "*",
+      "extensionId": "audit-extension",
+      "command": "logEvent",
+      "transform": "identity",
+      "enabled": false
+    }
+  ],
+  "deliveryQueue": {
+    "maxConcurrent": 5,
+    "maxRetryAttempts": 5,
+    "initialRetryDelay": 1000,
+    "maxRetryDelay": 60000,
+    "backoffFactor": 2
+  }
+}

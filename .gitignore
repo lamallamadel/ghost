@@ -146,6 +146,7 @@ vite.config.ts.timestamp-*
 .ghost/extensions/
 .ghost/telemetry/
 .ghost/marketplace-cache/
+.ghost/webhooks/
 *.ghost*
 .ghost_*
 

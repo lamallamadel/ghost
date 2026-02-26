@@ -83,6 +83,7 @@ class GatewayLauncher {
         this.auditLogger = null;
         this.telemetryInstance = null;
         this.telemetryServer = null;
+        this.webhookController = null;
         this.telemetry = {
             requests: [],
             startTime: Date.now()
@@ -323,6 +324,8 @@ class GatewayLauncher {
             await this.handleCompletionCommand(parsedArgs);
         } else if (parsedArgs.command === 'logs') {
             await this.handleLogsCommand(parsedArgs);
+        } else if (parsedArgs.command === 'webhook') {
+            await this.handleWebhookCommand(parsedArgs);
         } else {
             // Pure routing: delegate domain commands to extensions
             await this.forwardToExtension(parsedArgs);
@@ -1225,11 +1228,12 @@ class GatewayLauncher {
     async handleCompletionCommand(parsedArgs) {
         const shell = parsedArgs.subcommand || 'bash';
         const commands = [
-            'setup', 'doctor', 'completion', 'extension', 'gateway', 'audit-log', 'console', 'logs'
+            'setup', 'doctor', 'completion', 'extension', 'gateway', 'audit-log', 'console', 'logs', 'webhook'
         ];
         const extensionSubcommands = ['list', 'install', 'remove', 'info', 'init', 'validate'];
         const gatewaySubcommands = ['status', 'extensions', 'health', 'logs', 'metrics', 'spans'];
         const logsSubcommands = ['prune', 'info'];
+        const webhookSubcommands = ['start', 'stop', 'status', 'events', 'deliveries', 'replay', 'queue-stats', 'prune'];
         
         // Get extension commands dynamically
         const extensionCommands = this._getAllAvailableCommands();
@@ -1266,6 +1270,11 @@ _ghost_completion() {
                     COMPREPLY=( $(compgen -W "\${opts}" -- \${cur}) )
                     return 0
                     ;;
+                webhook)
+                    opts="${webhookSubcommands.join(' ')}"
+                    COMPREPLY=( $(compgen -W "\${opts}" -- \${cur}) )
+                    return 0
+                    ;;
                 completion)
                     opts="bash zsh fish"
                     COMPREPLY=( $(compgen -W "\${opts}" -- \${cur}) )
@@ -1282,7 +1291,7 @@ complete -F _ghost_completion ghost`);
 #compdef ghost
 
 _ghost() {
-    local -a commands extension_cmds gateway_cmds logs_cmds extension_commands
+    local -a commands extension_cmds gateway_cmds logs_cmds webhook_cmds extension_commands
     
     commands=(
         ${allCommands.map(cmd => `'${cmd}:Ghost command'`).join('\n        ')}
@@ -1300,6 +1309,10 @@ _ghost() {
         ${logsSubcommands.map(cmd => `'${cmd}:Log management'`).join('\n        ')}
     )
     
+    webhook_cmds=(
+        ${webhookSubcommands.map(cmd => `'${cmd}:Webhook automation'`).join('\n        ')}
+    )
+    
     case $words[2] in
         extension)
             _describe 'extension commands' extension_cmds
@@ -1309,6 +1322,9 @@ _ghost() {
             ;;
         logs)
             _describe 'logs commands' logs_cmds
+            ;;
+        webhook)
+            _describe 'webhook commands' webhook_cmds
             ;;
         completion)
             _values 'shell' bash zsh fish
@@ -1335,6 +1351,9 @@ ${gatewaySubcommands.map(cmd => `complete -c ghost -n "__fish_seen_subcommand_fr
 
 # Logs subcommands
 ${logsSubcommands.map(cmd => `complete -c ghost -n "__fish_seen_subcommand_from logs" -a "${cmd}"`).join('\n')}
+
+# Webhook subcommands
+${webhookSubcommands.map(cmd => `complete -c ghost -n "__fish_seen_subcommand_from webhook" -a "${cmd}"`).join('\n')}
 
 # Completion shell options
 complete -c ghost -n "__fish_seen_subcommand_from completion" -a "bash zsh fish"
@@ -1617,6 +1636,239 @@ complete -c ghost -l help -s h -d "Show help message"`);
      * - Format and display results
      * - Delegates to StructuredLogger.pruneLogs()
      */
+    async handleWebhookCommand(parsedArgs) {
+        const { WebhookController } = require('./core/webhooks');
+        const subcommand = parsedArgs.subcommand || 'help';
+
+        if (subcommand === 'help' || !subcommand) {
+            console.log(`${Colors.BOLD}Webhook Management Commands:${Colors.ENDC}
+  ghost webhook start                  Start webhook server
+  ghost webhook stop                   Stop webhook server
+  ghost webhook status                 Show webhook server status
+  ghost webhook events                 List recent webhook events
+  ghost webhook deliveries             List webhook deliveries
+  ghost webhook replay <event-id>      Replay a webhook event
+  ghost webhook queue-stats            Show delivery queue statistics
+  ghost webhook prune [days]           Prune old webhook events
+`);
+            return;
+        }
+
+        if (subcommand === 'start') {
+            const port = parseInt(parsedArgs.flags.port) || 3000;
+            const host = parsedArgs.flags.host || '0.0.0.0';
+
+            const configPath = path.join(os.homedir(), '.ghost', 'config', 'webhooks.json');
+            let webhookConfig = {};
+
+            if (fs.existsSync(configPath)) {
+                try {
+                    webhookConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+                } catch (error) {
+                    console.warn(`${Colors.WARNING}Warning: Could not load webhook config: ${error.message}${Colors.ENDC}`);
+                }
+            }
+
+            const controller = new WebhookController({
+                port: webhookConfig.server?.port || port,
+                host: webhookConfig.server?.host || host,
+                routerConfig: webhookConfig,
+                auditLogger: this.auditLogger
+            });
+
+            controller.getDeliveryQueue().setGateway(this.gateway);
+            controller.getDeliveryQueue().setRuntime(this.runtime);
+
+            try {
+                await controller.start();
+                console.log(`${Colors.GREEN}✓${Colors.ENDC} Webhook server started successfully`);
+                console.log(`${Colors.DIM}  Listening on ${host}:${port}${Colors.ENDC}`);
+                console.log(`${Colors.DIM}  Endpoints:${Colors.ENDC}`);
+                console.log(`${Colors.DIM}    POST /api/webhooks/github${Colors.ENDC}`);
+                console.log(`${Colors.DIM}    POST /api/webhooks/gitlab${Colors.ENDC}`);
+                console.log(`${Colors.DIM}    POST /api/webhooks/bitbucket${Colors.ENDC}`);
+                console.log(`\n${Colors.DIM}Press Ctrl+C to stop the server${Colors.ENDC}`);
+
+                this.webhookController = controller;
+
+                return new Promise(() => {});
+            } catch (error) {
+                console.error(`${Colors.FAIL}Failed to start webhook server: ${error.message}${Colors.ENDC}`);
+                process.exit(1);
+            }
+        } else if (subcommand === 'stop') {
+            if (this.webhookController) {
+                await this.webhookController.stop();
+                this.webhookController = null;
+            }
+            console.log(`${Colors.GREEN}✓${Colors.ENDC} Webhook server stopped`);
+        } else if (subcommand === 'status') {
+            console.log(`${Colors.BOLD}${Colors.CYAN}Webhook Server Status${Colors.ENDC}`);
+            console.log(`${Colors.DIM}${'─'.repeat(50)}${Colors.ENDC}`);
+
+            if (this.webhookController && this.webhookController.server) {
+                console.log(`Status:        ${Colors.GREEN}Running${Colors.ENDC}`);
+                console.log(`Host:          ${this.webhookController.host}`);
+                console.log(`Port:          ${this.webhookController.port}`);
+            } else {
+                console.log(`Status:        ${Colors.DIM}Stopped${Colors.ENDC}`);
+            }
+            console.log('');
+        } else if (subcommand === 'events') {
+            const controller = new WebhookController();
+            const eventStore = controller.getEventStore();
+
+            const filter = {
+                limit: parseInt(parsedArgs.flags.limit) || 50
+            };
+
+            if (parsedArgs.flags.provider) {
+                filter.provider = parsedArgs.flags.provider;
+            }
+
+            if (parsedArgs.flags['event-type']) {
+                filter.eventType = parsedArgs.flags['event-type'];
+            }
+
+            if (parsedArgs.flags.since) {
+                filter.since = parsedArgs.flags.since;
+            }
+
+            if (parsedArgs.flags.until) {
+                filter.until = parsedArgs.flags.until;
+            }
+
+            const events = await eventStore.queryEvents(filter);
+
+            if (parsedArgs.flags.json) {
+                console.log(JSON.stringify(events, null, 2));
+            } else {
+                console.log(`\n${Colors.BOLD}${Colors.CYAN}Webhook Events${Colors.ENDC} ${Colors.DIM}(${events.length})${Colors.ENDC}`);
+                console.log(`${Colors.DIM}${'─'.repeat(80)}${Colors.ENDC}\n`);
+
+                if (events.length === 0) {
+                    console.log(`${Colors.DIM}No webhook events found.${Colors.ENDC}\n`);
+                } else {
+                    events.forEach(event => {
+                        console.log(`${Colors.BOLD}${event.id}${Colors.ENDC}`);
+                        console.log(`  Provider:    ${event.provider}`);
+                        console.log(`  Event Type:  ${event.eventType}`);
+                        console.log(`  Received:    ${event.receivedAt}`);
+                        console.log('');
+                    });
+                }
+            }
+        } else if (subcommand === 'deliveries') {
+            const controller = new WebhookController();
+            const eventStore = controller.getEventStore();
+
+            const filter = {
+                limit: parseInt(parsedArgs.flags.limit) || 50
+            };
+
+            if (parsedArgs.flags.status) {
+                filter.status = parsedArgs.flags.status;
+            }
+
+            if (parsedArgs.flags.extension) {
+                filter.extensionId = parsedArgs.flags.extension;
+            }
+
+            const deliveries = await eventStore.queryDeliveries(filter);
+
+            if (parsedArgs.flags.json) {
+                console.log(JSON.stringify(deliveries, null, 2));
+            } else {
+                console.log(`\n${Colors.BOLD}${Colors.CYAN}Webhook Deliveries${Colors.ENDC} ${Colors.DIM}(${deliveries.length})${Colors.ENDC}`);
+                console.log(`${Colors.DIM}${'─'.repeat(80)}${Colors.ENDC}\n`);
+
+                if (deliveries.length === 0) {
+                    console.log(`${Colors.DIM}No webhook deliveries found.${Colors.ENDC}\n`);
+                } else {
+                    deliveries.forEach(delivery => {
+                        const statusColor = delivery.status === 'delivered' ? Colors.GREEN :
+                                          delivery.status === 'failed' ? Colors.FAIL :
+                                          delivery.status === 'retrying' ? Colors.WARNING : Colors.DIM;
+
+                        console.log(`${Colors.BOLD}${delivery.id}${Colors.ENDC}`);
+                        console.log(`  Extension:   ${delivery.extensionId}`);
+                        console.log(`  Command:     ${delivery.command}`);
+                        console.log(`  Status:      ${statusColor}${delivery.status}${Colors.ENDC}`);
+                        console.log(`  Attempts:    ${delivery.attempts || 0}`);
+                        if (delivery.lastError) {
+                            console.log(`  Error:       ${Colors.FAIL}${delivery.lastError}${Colors.ENDC}`);
+                        }
+                        console.log('');
+                    });
+                }
+            }
+        } else if (subcommand === 'replay') {
+            const eventId = parsedArgs.args[0];
+
+            if (!eventId) {
+                console.error(`${Colors.FAIL}Error: Event ID required${Colors.ENDC}`);
+                console.log('Usage: ghost webhook replay <event-id>');
+                process.exit(1);
+            }
+
+            const controller = new WebhookController({
+                auditLogger: this.auditLogger
+            });
+
+            controller.getDeliveryQueue().setGateway(this.gateway);
+            controller.getDeliveryQueue().setRuntime(this.runtime);
+
+            const eventStore = controller.getEventStore();
+            const event = await eventStore.replayEvent(eventId);
+
+            if (!event) {
+                console.error(`${Colors.FAIL}Error: Event not found: ${eventId}${Colors.ENDC}`);
+                process.exit(1);
+            }
+
+            console.log(`${Colors.CYAN}Replaying webhook event ${eventId}...${Colors.ENDC}\n`);
+
+            await controller._processWebhook(event);
+
+            console.log(`${Colors.GREEN}✓${Colors.ENDC} Webhook event replayed successfully`);
+        } else if (subcommand === 'queue-stats') {
+            if (!this.webhookController) {
+                console.error(`${Colors.FAIL}Error: Webhook server not running${Colors.ENDC}`);
+                process.exit(1);
+            }
+
+            const stats = this.webhookController.getDeliveryQueue().getQueueStats();
+
+            if (parsedArgs.flags.json) {
+                console.log(JSON.stringify(stats, null, 2));
+            } else {
+                console.log(`\n${Colors.BOLD}${Colors.CYAN}Delivery Queue Statistics${Colors.ENDC}`);
+                console.log(`${Colors.DIM}${'─'.repeat(50)}${Colors.ENDC}`);
+                console.log(`Total:         ${stats.total}`);
+                console.log(`Pending:       ${stats.pending}`);
+                console.log(`Retrying:      ${stats.retrying}`);
+                console.log(`Processing:    ${stats.processing}`);
+                console.log('');
+            }
+        } else if (subcommand === 'prune') {
+            const days = parseInt(parsedArgs.args[0]) || 30;
+
+            const controller = new WebhookController();
+            const eventStore = controller.getEventStore();
+
+            const result = await eventStore.pruneOldEvents(days);
+
+            console.log(`${Colors.GREEN}✓${Colors.ENDC} Pruned old webhook events`);
+            console.log(`  Events removed:      ${result.eventsRemoved}`);
+            console.log(`  Deliveries removed:  ${result.deliveriesRemoved}`);
+            console.log('');
+        } else {
+            console.error(`${Colors.FAIL}Error: Unknown webhook subcommand '${subcommand}'${Colors.ENDC}\n`);
+            console.log(`Run ${Colors.CYAN}ghost webhook help${Colors.ENDC} to see all webhook commands\n`);
+            process.exit(1);
+        }
+    }
+
     async handleLogsCommand(parsedArgs) {
         const subcommand = parsedArgs.subcommand || 'help';
 
@@ -2925,6 +3177,16 @@ ${Colors.BOLD}GATEWAY & MONITORING:${Colors.ENDC}
   ${Colors.CYAN}logs prune${Colors.ENDC} [days]             Cleanup old telemetry/audit logs
   ${Colors.CYAN}logs info${Colors.ENDC}                     Show log directory information
 
+${Colors.BOLD}WEBHOOK AUTOMATION:${Colors.ENDC}
+  ${Colors.CYAN}webhook start${Colors.ENDC}                 Start webhook receiver server
+  ${Colors.CYAN}webhook stop${Colors.ENDC}                  Stop webhook receiver server
+  ${Colors.CYAN}webhook status${Colors.ENDC}                Show webhook server status
+  ${Colors.CYAN}webhook events${Colors.ENDC}                List received webhook events
+  ${Colors.CYAN}webhook deliveries${Colors.ENDC}            Show webhook delivery status
+  ${Colors.CYAN}webhook replay${Colors.ENDC} <id>           Replay a webhook event
+  ${Colors.CYAN}webhook queue-stats${Colors.ENDC}           Show delivery queue stats
+  ${Colors.CYAN}webhook prune${Colors.ENDC} [days]          Prune old webhook events
+
 ${Colors.BOLD}WORKFLOW COMMANDS:${Colors.ENDC}`);
 
         // Dynamically list extension commands
@@ -3080,6 +3342,10 @@ ${Colors.BOLD}SHELL COMPLETION:${Colors.ENDC}
      * - No direct business logic, only cleanup coordination
      */
     async cleanup() {
+        if (this.webhookController) {
+            await this.webhookController.stop();
+        }
+        
         if (this.telemetryServer) {
             await this.stopTelemetryServer();
         }
