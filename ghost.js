@@ -23,7 +23,20 @@ const Colors = {
     FAIL: '\x1b[91m',
     ENDC: '\x1b[0m',
     BOLD: '\x1b[1m',
-    DIM: '\x1b[2m'
+    DIM: '\x1b[2m',
+    _enabled: true,
+    disable() {
+        this.HEADER = '';
+        this.BLUE = '';
+        this.CYAN = '';
+        this.GREEN = '';
+        this.WARNING = '';
+        this.FAIL = '';
+        this.ENDC = '';
+        this.BOLD = '';
+        this.DIM = '';
+        this._enabled = false;
+    }
 };
 
 /**
@@ -202,7 +215,8 @@ class GatewayLauncher {
             flags: {
                 verbose: false,
                 help: false,
-                json: false
+                json: false,
+                noColor: false
             }
         };
 
@@ -217,6 +231,8 @@ class GatewayLauncher {
                 parsed.flags.help = true;
             } else if (arg === '--json') {
                 parsed.flags.json = true;
+            } else if (arg === '--no-color') {
+                parsed.flags.noColor = true;
             } else if (arg.startsWith('--')) {
                 parsed.flags[arg.slice(2)] = args[i + 1] || true;
                 if (args[i + 1] && !args[i + 1].startsWith('--')) {
@@ -245,6 +261,11 @@ class GatewayLauncher {
     async route(parsedArgs) {
         this.verbose = parsedArgs.flags.verbose;
 
+        // Disable colors if --no-color flag is present
+        if (parsedArgs.flags.noColor) {
+            Colors.disable();
+        }
+
         // Setup verbose telemetry display if enabled
         if (this._isVerbose()) {
             this._setupVerboseTelemetry(parsedArgs.flags.verbose);
@@ -268,6 +289,8 @@ class GatewayLauncher {
             await this.handleConsoleCommand(parsedArgs);
         } else if (parsedArgs.command === 'doctor') {
             await this.handleDoctorCommand(parsedArgs);
+        } else if (parsedArgs.command === 'completion') {
+            await this.handleCompletionCommand(parsedArgs);
         } else {
             // Pure routing: delegate domain commands to extensions
             await this.forwardToExtension(parsedArgs);
@@ -639,7 +662,21 @@ class GatewayLauncher {
             const extPath = parsedArgs.args[0] || '.';
             await this._validateExtension(extPath);
         } else {
-            console.error(`${Colors.FAIL}Unknown subcommand: ${subcommand}${Colors.ENDC}`);
+            console.error(`${Colors.FAIL}Error: Unknown extension subcommand '${subcommand}'${Colors.ENDC}\n`);
+            
+            // Suggest similar subcommands
+            const validSubcommands = ['list', 'install', 'remove', 'info', 'init', 'validate'];
+            const suggestions = this._findSimilarCommands(subcommand, validSubcommands);
+            
+            if (suggestions.length > 0) {
+                console.log(`${Colors.WARNING}Did you mean?${Colors.ENDC}`);
+                suggestions.forEach(cmd => {
+                    console.log(`  ${Colors.CYAN}ghost extension ${cmd}${Colors.ENDC}`);
+                });
+                console.log('');
+            }
+            
+            console.log(`Run ${Colors.CYAN}ghost extension help${Colors.ENDC} to see all extension commands\n`);
             process.exit(1);
         }
     }
@@ -883,7 +920,21 @@ class GatewayLauncher {
                 }
             }
         } else {
-            console.error(`${Colors.FAIL}Unknown subcommand: ${subcommand}${Colors.ENDC}`);
+            console.error(`${Colors.FAIL}Error: Unknown gateway subcommand '${subcommand}'${Colors.ENDC}\n`);
+            
+            // Suggest similar subcommands
+            const validSubcommands = ['status', 'extensions', 'health', 'logs', 'metrics', 'spans'];
+            const suggestions = this._findSimilarCommands(subcommand, validSubcommands);
+            
+            if (suggestions.length > 0) {
+                console.log(`${Colors.WARNING}Did you mean?${Colors.ENDC}`);
+                suggestions.forEach(cmd => {
+                    console.log(`  ${Colors.CYAN}ghost gateway ${cmd}${Colors.ENDC}`);
+                });
+                console.log('');
+            }
+            
+            console.log(`Run ${Colors.CYAN}ghost gateway help${Colors.ENDC} to see all gateway commands\n`);
             process.exit(1);
         }
     }
@@ -909,7 +960,136 @@ class GatewayLauncher {
         } else if (subcommand === 'stop') {
             await this.stopTelemetryServer();
         } else {
-            console.error(`${Colors.FAIL}Unknown subcommand: ${subcommand}${Colors.ENDC}`);
+            console.error(`${Colors.FAIL}Error: Unknown console subcommand '${subcommand}'${Colors.ENDC}\n`);
+            console.log(`Valid subcommands: ${Colors.CYAN}start${Colors.ENDC}, ${Colors.CYAN}stop${Colors.ENDC}`);
+            console.log(`\nUsage:`);
+            console.log(`  ${Colors.CYAN}ghost console start${Colors.ENDC} [--port 9876]`);
+            console.log(`  ${Colors.CYAN}ghost console stop${Colors.ENDC}\n`);
+            process.exit(1);
+        }
+    }
+
+    /**
+     * Handle completion command for shell autocompletion.
+     * 
+     * ORCHESTRATION ROLE: Correct implementation
+     * - Query Gateway for available commands
+     * - Generate shell completion script dynamically
+     * - No direct business logic
+     */
+    async handleCompletionCommand(parsedArgs) {
+        const shell = parsedArgs.subcommand || 'bash';
+        const commands = [
+            'setup', 'doctor', 'completion', 'extension', 'gateway', 'audit-log', 'console'
+        ];
+        const extensionSubcommands = ['list', 'install', 'remove', 'info', 'init', 'validate'];
+        const gatewaySubcommands = ['status', 'extensions', 'health', 'logs', 'metrics', 'spans'];
+        
+        // Get extension commands dynamically
+        const extensionCommands = this._getAllAvailableCommands();
+        const allCommands = [...commands, ...extensionCommands];
+        
+        if (shell === 'bash') {
+            console.log(`# Ghost CLI bash completion
+_ghost_completion() {
+    local cur prev opts
+    COMPREPLY=()
+    cur="\${COMP_WORDS[COMP_CWORD]}"
+    prev="\${COMP_WORDS[COMP_CWORD-1]}"
+    
+    case "\${COMP_CWORD}" in
+        1)
+            opts="${allCommands.join(' ')}"
+            COMPREPLY=( $(compgen -W "\${opts}" -- \${cur}) )
+            return 0
+            ;;
+        2)
+            case "\${prev}" in
+                extension)
+                    opts="${extensionSubcommands.join(' ')}"
+                    COMPREPLY=( $(compgen -W "\${opts}" -- \${cur}) )
+                    return 0
+                    ;;
+                gateway)
+                    opts="${gatewaySubcommands.join(' ')}"
+                    COMPREPLY=( $(compgen -W "\${opts}" -- \${cur}) )
+                    return 0
+                    ;;
+                completion)
+                    opts="bash zsh fish"
+                    COMPREPLY=( $(compgen -W "\${opts}" -- \${cur}) )
+                    return 0
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+complete -F _ghost_completion ghost`);
+        } else if (shell === 'zsh') {
+            console.log(`# Ghost CLI zsh completion
+#compdef ghost
+
+_ghost() {
+    local -a commands extension_cmds gateway_cmds extension_commands
+    
+    commands=(
+        ${allCommands.map(cmd => `'${cmd}:Ghost command'`).join('\n        ')}
+    )
+    
+    extension_cmds=(
+        ${extensionSubcommands.map(cmd => `'${cmd}:Extension management'`).join('\n        ')}
+    )
+    
+    gateway_cmds=(
+        ${gatewaySubcommands.map(cmd => `'${cmd}:Gateway monitoring'`).join('\n        ')}
+    )
+    
+    case $words[2] in
+        extension)
+            _describe 'extension commands' extension_cmds
+            ;;
+        gateway)
+            _describe 'gateway commands' gateway_cmds
+            ;;
+        completion)
+            _values 'shell' bash zsh fish
+            ;;
+        *)
+            _describe 'commands' commands
+            ;;
+    esac
+}
+
+_ghost "$@"`);
+        } else if (shell === 'fish') {
+            console.log(`# Ghost CLI fish completion
+complete -c ghost -f
+
+# Main commands
+${allCommands.map(cmd => `complete -c ghost -n "__fish_use_subcommand" -a "${cmd}"`).join('\n')}
+
+# Extension subcommands
+${extensionSubcommands.map(cmd => `complete -c ghost -n "__fish_seen_subcommand_from extension" -a "${cmd}"`).join('\n')}
+
+# Gateway subcommands
+${gatewaySubcommands.map(cmd => `complete -c ghost -n "__fish_seen_subcommand_from gateway" -a "${cmd}"`).join('\n')}
+
+# Completion shell options
+complete -c ghost -n "__fish_seen_subcommand_from completion" -a "bash zsh fish"
+
+# Options
+complete -c ghost -l verbose -s v -d "Show detailed telemetry"
+complete -c ghost -l json -d "Output in JSON format"
+complete -c ghost -l no-color -d "Disable colored output"
+complete -c ghost -l help -s h -d "Show help message"`);
+        } else {
+            console.error(`${Colors.FAIL}Error: Unsupported shell '${shell}'${Colors.ENDC}`);
+            console.log(`Supported shells: bash, zsh, fish`);
+            console.log(`\nUsage:`);
+            console.log(`  bash:  eval "$(ghost completion bash)"`);
+            console.log(`  zsh:   eval "$(ghost completion zsh)"`);
+            console.log(`  fish:  ghost completion fish | source`);
             process.exit(1);
         }
     }
@@ -1160,7 +1340,10 @@ class GatewayLauncher {
                 }
             }
         } else {
-            console.error(`${Colors.FAIL}Unknown subcommand: ${subcommand}${Colors.ENDC}`);
+            console.error(`${Colors.FAIL}Error: Unknown audit-log subcommand '${subcommand}'${Colors.ENDC}\n`);
+            console.log(`Valid subcommand: ${Colors.CYAN}view${Colors.ENDC}`);
+            console.log(`\nUsage:`);
+            console.log(`  ${Colors.CYAN}ghost audit-log view${Colors.ENDC} [--limit N] [--extension ID] [--type TYPE]\n`);
             process.exit(1);
         }
     }
@@ -1185,11 +1368,24 @@ class GatewayLauncher {
         const targetExtension = this._findExtensionForCommand(command);
 
         if (!targetExtension) {
-            console.error(`${Colors.FAIL}Error: No extension found to handle command '${command}'${Colors.ENDC}`);
-            console.log(`\nAvailable extensions:`);
-            this.gateway.listExtensions().forEach(ext => {
-                console.log(`  - ${ext.id} (${ext.name})`);
-            });
+            console.error(`${Colors.FAIL}Error: No extension found to handle command '${command}'${Colors.ENDC}\n`);
+            
+            // Get all available commands from extensions
+            const availableCommands = this._getAllAvailableCommands();
+            
+            // Find similar commands using Levenshtein-like heuristic
+            const suggestions = this._findSimilarCommands(command, availableCommands);
+            
+            if (suggestions.length > 0) {
+                console.log(`${Colors.WARNING}Did you mean one of these?${Colors.ENDC}`);
+                suggestions.forEach(cmd => {
+                    console.log(`  ${Colors.CYAN}${cmd}${Colors.ENDC}`);
+                });
+                console.log('');
+            }
+            
+            console.log(`Run ${Colors.CYAN}ghost extension list${Colors.ENDC} to see available extensions`);
+            console.log(`Run ${Colors.CYAN}ghost --help${Colors.ENDC} to see all commands\n`);
             process.exit(1);
         }
 
@@ -1272,6 +1468,96 @@ class GatewayLauncher {
         }
 
         return null;
+    }
+
+    /**
+     * Get all available commands from registered extensions.
+     * 
+     * ORCHESTRATION ROLE: Correct implementation
+     * - Query Gateway for extension metadata
+     * - Extract commands from manifests
+     */
+    _getAllAvailableCommands() {
+        const commands = new Set();
+        const extensions = this.gateway.listExtensions();
+        
+        for (const ext of extensions) {
+            const fullExt = this.gateway.getExtension(ext.id);
+            if (fullExt && fullExt.manifest && fullExt.manifest.commands) {
+                if (Array.isArray(fullExt.manifest.commands)) {
+                    fullExt.manifest.commands.forEach(cmd => commands.add(cmd));
+                }
+            }
+        }
+        
+        return Array.from(commands);
+    }
+
+    /**
+     * Find similar commands using simple string distance heuristic.
+     * 
+     * ORCHESTRATION ROLE: Correct implementation
+     * - Pure string comparison logic
+     * - No business logic, only formatting
+     */
+    _findSimilarCommands(input, availableCommands, maxSuggestions = 3) {
+        const suggestions = [];
+        
+        for (const cmd of availableCommands) {
+            const distance = this._levenshteinDistance(input.toLowerCase(), cmd.toLowerCase());
+            const maxLength = Math.max(input.length, cmd.length);
+            const similarity = 1 - (distance / maxLength);
+            
+            // Include commands with >40% similarity or that contain/are contained in the input
+            if (similarity > 0.4 || cmd.includes(input) || input.includes(cmd)) {
+                suggestions.push({ cmd, similarity, distance });
+            }
+        }
+        
+        // Sort by similarity (higher first) and then by distance (lower first)
+        suggestions.sort((a, b) => {
+            if (Math.abs(a.similarity - b.similarity) < 0.1) {
+                return a.distance - b.distance;
+            }
+            return b.similarity - a.similarity;
+        });
+        
+        return suggestions.slice(0, maxSuggestions).map(s => s.cmd);
+    }
+
+    /**
+     * Calculate Levenshtein distance between two strings.
+     * 
+     * ORCHESTRATION ROLE: Correct implementation
+     * - Pure algorithm implementation
+     * - No I/O or business logic
+     */
+    _levenshteinDistance(str1, str2) {
+        const matrix = [];
+        
+        for (let i = 0; i <= str2.length; i++) {
+            matrix[i] = [i];
+        }
+        
+        for (let j = 0; j <= str1.length; j++) {
+            matrix[0][j] = j;
+        }
+        
+        for (let i = 1; i <= str2.length; i++) {
+            for (let j = 1; j <= str1.length; j++) {
+                if (str2.charAt(i - 1) === str1.charAt(j - 1)) {
+                    matrix[i][j] = matrix[i - 1][j - 1];
+                } else {
+                    matrix[i][j] = Math.min(
+                        matrix[i - 1][j - 1] + 1,
+                        matrix[i][j - 1] + 1,
+                        matrix[i - 1][j] + 1
+                    );
+                }
+            }
+        }
+        
+        return matrix[str2.length][str1.length];
     }
 
     /**
@@ -2187,8 +2473,11 @@ See [Extension API Documentation](https://github.com/lamallamadel/ghost/blob/mai
      * 
      * ORCHESTRATION ROLE: Correct implementation
      * - Pure output formatting, no business logic
+     * - Dynamically lists extension commands
      */
     showHelp() {
+        // Get dynamically available extension commands
+        const extensionCommands = this._getAllAvailableCommands();
         console.log(`
 ${Colors.BOLD}${Colors.CYAN}GHOST CLI v0.4.0${Colors.ENDC} - Gateway Launcher
 Zero-dependency Git assistant with extensible architecture
@@ -2196,35 +2485,50 @@ Zero-dependency Git assistant with extensible architecture
 ${Colors.BOLD}USAGE:${Colors.ENDC}
   ghost <command> [subcommand] [options]
 
-${Colors.BOLD}GATEWAY COMMANDS:${Colors.ENDC}
-  setup                         Interactive setup wizard for initial configuration
-  doctor                        Check installation health (paths, permissions, gateway)
-  extension list                List installed extensions
-  extension install <path>      Install extension from path
-  extension remove <id>         Remove extension
-  extension info <id>           Show extension details
-  extension init <name>         Scaffold new extension project
-  extension validate [path]     Validate extension manifest
-  gateway status                Show gateway status and pipeline statistics
-  gateway extensions            Show loaded extensions with runtime state
-  gateway health                Show extension health
-  gateway logs [options]        View audit logs (alias for audit-log view)
-  gateway metrics [ext-id]      Show telemetry metrics
-  gateway spans [limit]         Show recent spans
-  audit-log view                View audit logs
-  console [start|stop]          Start/stop telemetry HTTP/WebSocket server
+${Colors.BOLD}CORE COMMANDS:${Colors.ENDC}
+  ${Colors.CYAN}setup${Colors.ENDC}                         Interactive setup wizard - configure AI providers and settings
+  ${Colors.CYAN}doctor${Colors.ENDC}                        Health check - verify installation and dependencies
+  ${Colors.CYAN}completion${Colors.ENDC}                    Shell completion - output script for bash/zsh/fish
 
-${Colors.BOLD}EXTENSION COMMANDS:${Colors.ENDC}
-  commit                        AI-powered commit generation (via ghost-git-extension)
-  audit                         Security audit (via ghost-git-extension)
-  version                       Version management (via ghost-git-extension)
-  merge                         Merge conflict resolution (via ghost-git-extension)
-  history                       Commit history (via ghost-git-extension)
+${Colors.BOLD}EXTENSION MANAGEMENT:${Colors.ENDC}
+  ${Colors.CYAN}extension list${Colors.ENDC}                List all installed extensions
+  ${Colors.CYAN}extension install${Colors.ENDC} <path>      Install extension from local directory
+  ${Colors.CYAN}extension remove${Colors.ENDC} <id>         Uninstall extension by ID
+  ${Colors.CYAN}extension info${Colors.ENDC} <id>           Show detailed extension information
+  ${Colors.CYAN}extension init${Colors.ENDC} <name>         Scaffold new extension project with boilerplate
+  ${Colors.CYAN}extension validate${Colors.ENDC} [path]     Validate extension manifest and permissions
 
+${Colors.BOLD}GATEWAY & MONITORING:${Colors.ENDC}
+  ${Colors.CYAN}gateway status${Colors.ENDC}                Gateway status and pipeline statistics
+  ${Colors.CYAN}gateway extensions${Colors.ENDC}            Show loaded extensions with runtime state
+  ${Colors.CYAN}gateway health${Colors.ENDC}                Extension health status
+  ${Colors.CYAN}gateway logs${Colors.ENDC} [options]        View audit logs with filtering
+  ${Colors.CYAN}gateway metrics${Colors.ENDC} [ext-id]      Telemetry metrics for extensions
+  ${Colors.CYAN}gateway spans${Colors.ENDC} [limit]         Recent telemetry spans
+  ${Colors.CYAN}audit-log view${Colors.ENDC}                Comprehensive audit logs
+  ${Colors.CYAN}console${Colors.ENDC} [start|stop]          Telemetry HTTP/WebSocket server
+
+${Colors.BOLD}WORKFLOW COMMANDS:${Colors.ENDC}`);
+
+        // Dynamically list extension commands
+        if (extensionCommands.length > 0) {
+            extensionCommands.forEach(cmd => {
+                const ext = this._findExtensionForCommand(cmd);
+                const extName = ext ? ext.manifest.name : 'unknown';
+                console.log(`  ${Colors.CYAN}${cmd.padEnd(30)}${Colors.ENDC} ${Colors.DIM}(${extName})${Colors.ENDC}`);
+            });
+            console.log(`  ${Colors.DIM}Use --help with any command for detailed information${Colors.ENDC}`);
+        } else {
+            console.log(`  ${Colors.DIM}No extension commands available${Colors.ENDC}`);
+            console.log(`  ${Colors.DIM}Install extensions to add workflow commands${Colors.ENDC}`);
+        }
+
+        console.log(`
 ${Colors.BOLD}OPTIONS:${Colors.ENDC}
   --verbose, -v                 Show detailed real-time telemetry with pipeline flow
   --verbose=<filter>            Show telemetry filtered by extension-id or intent type
   --json                        Output in JSON format
+  --no-color                    Disable colored output
   --port <port>                 Specify port for telemetry server (default: 9876)
   --help, -h                    Show this help message
 
@@ -2234,17 +2538,9 @@ ${Colors.BOLD}EXAMPLES:${Colors.ENDC}
   ghost extension list
   ghost extension init my-extension
   ghost extension validate
+  ghost completion bash
   ghost gateway status --verbose --json
-  ghost gateway extensions --json
-  ghost gateway logs --limit 100 --extension ghost-git-extension
-  ghost gateway metrics ghost-git-extension
-  ghost gateway spans 100
-  ghost commit --dry-run
-  ghost audit --verbose
-  ghost commit --verbose=ghost-git-extension
-  ghost commit --verbose=filesystem
-  ghost audit-log view --limit 100 --extension ghost-git-extension
-  ghost console start --port 9876
+  ghost commit --dry-run --no-color
 
 ${Colors.BOLD}VERBOSE MODE:${Colors.ENDC}
   Real-time telemetry display shows pipeline flow for each request:
@@ -2278,6 +2574,12 @@ ${Colors.BOLD}TELEMETRY:${Colors.ENDC}
     GET /metrics/<extension-id>  Extension-specific metrics
     GET /spans                   Recent spans
     GET /logs?severity=<level>   Filter logs by severity
+
+${Colors.BOLD}SHELL COMPLETION:${Colors.ENDC}
+  Add to your shell profile:
+    bash:  eval "$(ghost completion bash)"
+    zsh:   eval "$(ghost completion zsh)"
+    fish:  ghost completion fish | source
 `);
     }
 
