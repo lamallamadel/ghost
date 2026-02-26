@@ -22,3 +22,12 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Playwright
+playwright-report/
+test-results/
+playwright/.cache/
+
+# E2E test artifacts
+e2e/screenshots/baseline/*.png
+!e2e/screenshots/baseline/.gitkeep
