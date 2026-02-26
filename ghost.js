@@ -8,6 +8,7 @@ const { ExtensionRuntime } = require('./core/runtime');
 const { IOPipeline, instrumentPipeline } = require('./core/pipeline');
 const { AuditLogger } = require('./core/pipeline/audit');
 const { GlobMatcher } = require('./core/pipeline/auth');
+const SetupWizard = require('./lib/setup-wizard');
 
 const USER_EXTENSIONS_DIR = path.join(os.homedir(), '.ghost', 'extensions');
 const BUNDLED_EXTENSIONS_DIR = path.join(__dirname, 'extensions');
@@ -255,7 +256,9 @@ class GatewayLauncher {
         }
 
         // Pure routing: delegate to appropriate handler
-        if (parsedArgs.command === 'extension') {
+        if (parsedArgs.command === 'setup') {
+            await this.handleSetupCommand(parsedArgs);
+        } else if (parsedArgs.command === 'extension') {
             await this.handleExtensionCommand(parsedArgs);
         } else if (parsedArgs.command === 'gateway') {
             await this.handleGatewayCommand(parsedArgs);
@@ -445,6 +448,19 @@ class GatewayLauncher {
                 }
             }
         }
+    }
+
+    /**
+     * Handle setup wizard command.
+     * 
+     * ORCHESTRATION ROLE:
+     * - Launch interactive setup wizard for initial configuration
+     * - Delegate to SetupWizard class for prompt logic
+     * - No direct business logic, only coordination
+     */
+    async handleSetupCommand(parsedArgs) {
+        const wizard = new SetupWizard();
+        await wizard.run();
     }
 
     /**
@@ -2181,6 +2197,7 @@ ${Colors.BOLD}USAGE:${Colors.ENDC}
   ghost <command> [subcommand] [options]
 
 ${Colors.BOLD}GATEWAY COMMANDS:${Colors.ENDC}
+  setup                         Interactive setup wizard for initial configuration
   doctor                        Check installation health (paths, permissions, gateway)
   extension list                List installed extensions
   extension install <path>      Install extension from path
@@ -2212,6 +2229,7 @@ ${Colors.BOLD}OPTIONS:${Colors.ENDC}
   --help, -h                    Show this help message
 
 ${Colors.BOLD}EXAMPLES:${Colors.ENDC}
+  ghost setup
   ghost doctor
   ghost extension list
   ghost extension init my-extension
