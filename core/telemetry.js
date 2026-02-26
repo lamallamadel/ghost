@@ -1169,6 +1169,7 @@ class TelemetryServer {
         this.devMode = options.devMode || null;
         this.runtime = options.runtime || null;
         this.pipeline = options.pipeline || null;
+        this.advancedRateLimiting = options.advancedRateLimiting || null;
         
         this._loadExporterConfig();
     }
@@ -1553,6 +1554,53 @@ class TelemetryServer {
                 this.devMode.disable();
                 res.writeHead(200);
                 res.end(JSON.stringify({ success: true, enabled: false }));
+                return;
+            }
+        }
+
+        // Rate limiting endpoints
+        if (resource === 'rate-limiting') {
+            if (!this.advancedRateLimiting) {
+                res.writeHead(503);
+                res.end(JSON.stringify({ error: 'Advanced rate limiting not available' }));
+                return;
+            }
+
+            if (req.method === 'GET' && pathParts[0] === 'dashboard') {
+                const dashboard = this.advancedRateLimiting.getDashboard();
+                res.writeHead(200);
+                res.end(JSON.stringify(dashboard));
+                return;
+            }
+
+            if (req.method === 'GET' && pathParts[0] === 'extension' && pathParts[1]) {
+                const extensionId = pathParts[1];
+                const state = this.advancedRateLimiting.getExtensionState(extensionId);
+                res.writeHead(200);
+                res.end(JSON.stringify(state));
+                return;
+            }
+
+            if (req.method === 'GET' && pathParts[0] === 'global') {
+                const state = this.advancedRateLimiting.getGlobalState();
+                res.writeHead(200);
+                res.end(JSON.stringify(state));
+                return;
+            }
+
+            if (req.method === 'GET' && pathParts[0] === 'analytics') {
+                const analytics = this.advancedRateLimiting.analytics ? 
+                    this.advancedRateLimiting.analytics.generateDashboardData() : null;
+                res.writeHead(200);
+                res.end(JSON.stringify(analytics));
+                return;
+            }
+
+            if (req.method === 'POST' && pathParts[0] === 'reset' && pathParts[1]) {
+                const extensionId = pathParts[1];
+                this.advancedRateLimiting.reset(extensionId);
+                res.writeHead(200);
+                res.end(JSON.stringify({ success: true }));
                 return;
             }
         }

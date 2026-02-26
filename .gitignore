@@ -149,6 +149,14 @@ vite.config.ts.timestamp-*
 *.ghost*
 .ghost_*
 
+# Ghost CLI - Advanced Rate Limiting persistence
+.ghost/rate-limits.json
+.ghost/rate-limits.json.tmp
+.ghost/rate-limits.json.backup
+.ghost/advanced-rate-limits.json
+.ghost/global-rate-limits.json
+.ghost/rate-limit-analytics.json
+
 # Test temporary directories
 test/temp_ghostignore_test/
 
