@@ -1,0 +1,385 @@
+const https = require('https');
+const http = require('http');
+const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+
+const MARKETPLACE_REGISTRY_URL = process.env.GHOST_MARKETPLACE_URL || 'https://registry.ghost-cli.dev/api';
+const DEFAULT_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAw8+JBKqK5vHxqD8xhN2K
+-----END PUBLIC KEY-----`;
+
+class MarketplaceService {
+    constructor(options = {}) {
+        this.registryUrl = options.registryUrl || MARKETPLACE_REGISTRY_URL;
+        this.publicKey = options.publicKey || DEFAULT_PUBLIC_KEY;
+        this.cacheDir = path.join(os.homedir(), '.ghost', 'marketplace-cache');
+        this.cacheTTL = options.cacheTTL || 3600000;
+        this._ensureCacheDir();
+    }
+
+    _ensureCacheDir() {
+        if (!fs.existsSync(this.cacheDir)) {
+            fs.mkdirSync(this.cacheDir, { recursive: true });
+        }
+    }
+
+    async fetchExtensions(options = {}) {
+        const { category, search, sort = 'downloads', limit = 50, offset = 0 } = options;
+        
+        const cacheKey = `extensions-${JSON.stringify({ category, search, sort, limit, offset })}`;
+        const cached = this._getCached(cacheKey);
+        if (cached) return cached;
+
+        const queryParams = new URLSearchParams();
+        if (category) queryParams.append('category', category);
+        if (search) queryParams.append('q', search);
+        queryParams.append('sort', sort);
+        queryParams.append('limit', String(limit));
+        queryParams.append('offset', String(offset));
+
+        try {
+            const data = await this._httpRequest('GET', `/marketplace/extensions?${queryParams.toString()}`);
+            this._setCached(cacheKey, data);
+            return data;
+        } catch (error) {
+            const fallback = this._loadLocalRegistry();
+            return { extensions: fallback.extensions || [], total: fallback.extensions?.length || 0 };
+        }
+    }
+
+    async fetchExtensionById(extensionId) {
+        const cacheKey = `extension-${extensionId}`;
+        const cached = this._getCached(cacheKey);
+        if (cached) return cached;
+
+        try {
+            const data = await this._httpRequest('GET', `/marketplace/extensions/${extensionId}`);
+            this._setCached(cacheKey, data);
+            return data;
+        } catch (error) {
+            const fallback = this._loadLocalRegistry();
+            const extension = fallback.extensions?.find(e => e.id === extensionId);
+            if (!extension) throw new Error(`Extension ${extensionId} not found`);
+            return extension;
+        }
+    }
+
+    async installExtension(extensionId, options = {}) {
+        const { version, targetDir } = options;
+        
+        const extension = await this.fetchExtensionById(extensionId);
+        const versionData = version 
+            ? extension.versions.find(v => v.version === version)
+            : extension.versions[0];
+
+        if (!versionData) {
+            throw new Error(`Version ${version || 'latest'} not found for ${extensionId}`);
+        }
+
+        const extensionData = await this._downloadExtension(versionData.downloadUrl);
+        
+        if (versionData.signature) {
+            const isValid = this._verifySignature(extensionData, versionData.signature);
+            if (!isValid) {
+                throw new Error('Signature verification failed - extension may be compromised');
+            }
+        }
+
+        const installPath = targetDir || path.join(os.homedir(), '.ghost', 'extensions', extensionId);
+        await this._extractExtension(extensionData, installPath, versionData);
+
+        const dependencies = await this._resolveDependencies(versionData.dependencies || {});
+        
+        return {
+            success: true,
+            extensionId,
+            version: versionData.version,
+            installPath,
+            dependencies
+        };
+    }
+
+    async _downloadExtension(downloadUrl) {
+        return new Promise((resolve, reject) => {
+            const protocol = downloadUrl.startsWith('https') ? https : http;
+            
+            protocol.get(downloadUrl, (res) => {
+                if (res.statusCode === 302 || res.statusCode === 301) {
+                    return this._downloadExtension(res.headers.location).then(resolve).catch(reject);
+                }
+
+                if (res.statusCode !== 200) {
+                    return reject(new Error(`Download failed with status ${res.statusCode}`));
+                }
+
+                const chunks = [];
+                res.on('data', chunk => chunks.push(chunk));
+                res.on('end', () => resolve(Buffer.concat(chunks)));
+                res.on('error', reject);
+            }).on('error', reject);
+        });
+    }
+
+    async _extractExtension(data, installPath, versionData) {
+        if (fs.existsSync(installPath)) {
+            fs.rmSync(installPath, { recursive: true, force: true });
+        }
+        fs.mkdirSync(installPath, { recursive: true });
+
+        if (versionData.format === 'tarball' || versionData.downloadUrl.endsWith('.tar.gz')) {
+            throw new Error('Tarball extraction requires tar binary - use directory format');
+        }
+
+        const manifest = JSON.parse(versionData.manifest || '{}');
+        fs.writeFileSync(path.join(installPath, 'manifest.json'), JSON.stringify(manifest, null, 2));
+        
+        const indexContent = versionData.mainFile || this._generateDefaultIndex(manifest);
+        fs.writeFileSync(path.join(installPath, manifest.main || 'index.js'), indexContent);
+
+        if (versionData.files) {
+            for (const [fileName, content] of Object.entries(versionData.files)) {
+                const filePath = path.join(installPath, fileName);
+                const fileDir = path.dirname(filePath);
+                if (!fs.existsSync(fileDir)) {
+                    fs.mkdirSync(fileDir, { recursive: true });
+                }
+                fs.writeFileSync(filePath, content);
+            }
+        }
+    }
+
+    _generateDefaultIndex(manifest) {
+        return `const { ExtensionSDK } = require('@ghost/extension-sdk');
+
+class ${this._toPascalCase(manifest.id)}Extension {
+    constructor() {
+        this.sdk = new ExtensionSDK('${manifest.id}');
+    }
+
+    async initialize() {
+        console.log('${manifest.name} extension initialized');
+    }
+
+    async shutdown() {
+        console.log('${manifest.name} extension shutting down');
+    }
+}
+
+module.exports = ${this._toPascalCase(manifest.id)}Extension;
+`;
+    }
+
+    _toPascalCase(str) {
+        return str.split(/[-_]/).map(word => 
+            word.charAt(0).toUpperCase() + word.slice(1).toLowerCase()
+        ).join('');
+    }
+
+    async _resolveDependencies(dependencies) {
+        const resolved = [];
+        
+        for (const [depId, versionConstraint] of Object.entries(dependencies)) {
+            const extension = await this.fetchExtensionById(depId);
+            const matchingVersion = this._findMatchingVersion(extension.versions, versionConstraint);
+            
+            if (!matchingVersion) {
+                throw new Error(`No matching version found for dependency ${depId}@${versionConstraint}`);
+            }
+
+            resolved.push({
+                id: depId,
+                version: matchingVersion.version,
+                satisfied: false
+            });
+        }
+
+        return resolved;
+    }
+
+    _findMatchingVersion(versions, constraint) {
+        if (constraint === '*' || constraint === 'latest') {
+            return versions[0];
+        }
+
+        const match = constraint.match(/^([~^]?)(\d+\.\d+\.\d+)$/);
+        if (!match) return null;
+
+        const [, modifier, version] = match;
+        const [major, minor, patch] = version.split('.').map(Number);
+
+        for (const v of versions) {
+            const [vMajor, vMinor, vPatch] = v.version.split('.').map(Number);
+            
+            if (modifier === '^') {
+                if (vMajor === major && (vMinor > minor || (vMinor === minor && vPatch >= patch))) {
+                    return v;
+                }
+            } else if (modifier === '~') {
+                if (vMajor === major && vMinor === minor && vPatch >= patch) {
+                    return v;
+                }
+            } else {
+                if (vMajor === major && vMinor === minor && vPatch === patch) {
+                    return v;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    _verifySignature(data, signature) {
+        try {
+            const verify = crypto.createVerify('RSA-SHA256');
+            verify.update(data);
+            verify.end();
+            
+            return verify.verify(this.publicKey, signature, 'base64');
+        } catch (error) {
+            console.error('Signature verification error:', error);
+            return false;
+        }
+    }
+
+    _httpRequest(method, path, body = null) {
+        return new Promise((resolve, reject) => {
+            const url = new URL(this.registryUrl + path);
+            const protocol = url.protocol === 'https:' ? https : http;
+            
+            const options = {
+                hostname: url.hostname,
+                port: url.port,
+                path: url.pathname + url.search,
+                method,
+                headers: {
+                    'Content-Type': 'application/json',
+                    'User-Agent': 'ghost-cli-marketplace/1.0'
+                }
+            };
+
+            if (body) {
+                const bodyStr = JSON.stringify(body);
+                options.headers['Content-Length'] = Buffer.byteLength(bodyStr);
+            }
+
+            const req = protocol.request(options, (res) => {
+                const chunks = [];
+                res.on('data', chunk => chunks.push(chunk));
+                res.on('end', () => {
+                    const responseBody = Buffer.concat(chunks).toString();
+                    
+                    if (res.statusCode >= 200 && res.statusCode < 300) {
+                        try {
+                            resolve(JSON.parse(responseBody));
+                        } catch {
+                            resolve(responseBody);
+                        }
+                    } else {
+                        reject(new Error(`HTTP ${res.statusCode}: ${responseBody}`));
+                    }
+                });
+            });
+
+            req.on('error', reject);
+            
+            if (body) {
+                req.write(JSON.stringify(body));
+            }
+            
+            req.end();
+        });
+    }
+
+    _getCached(key) {
+        const cachePath = path.join(this.cacheDir, `${this._hash(key)}.json`);
+        
+        if (!fs.existsSync(cachePath)) return null;
+
+        try {
+            const cached = JSON.parse(fs.readFileSync(cachePath, 'utf8'));
+            if (Date.now() - cached.timestamp > this.cacheTTL) {
+                fs.unlinkSync(cachePath);
+                return null;
+            }
+            return cached.data;
+        } catch {
+            return null;
+        }
+    }
+
+    _setCached(key, data) {
+        const cachePath = path.join(this.cacheDir, `${this._hash(key)}.json`);
+        
+        try {
+            fs.writeFileSync(cachePath, JSON.stringify({
+                timestamp: Date.now(),
+                data
+            }));
+        } catch (error) {
+        }
+    }
+
+    _hash(str) {
+        return crypto.createHash('sha256').update(str).digest('hex').substring(0, 16);
+    }
+
+    _loadLocalRegistry() {
+        const registryPath = path.join(__dirname, '..', 'marketplace-registry.json');
+        
+        if (fs.existsSync(registryPath)) {
+            try {
+                return JSON.parse(fs.readFileSync(registryPath, 'utf8'));
+            } catch {
+                return { extensions: [] };
+            }
+        }
+
+        return {
+            extensions: [
+                {
+                    id: 'example-extension',
+                    name: 'Example Extension',
+                    description: 'A sample extension for demonstration',
+                    author: 'Ghost Team',
+                    category: 'utilities',
+                    tags: ['example', 'demo'],
+                    ratings: { average: 4.5, count: 10 },
+                    downloads: 150,
+                    verified: true,
+                    versions: [
+                        {
+                            version: '1.0.0',
+                            publishedAt: new Date().toISOString(),
+                            compatibility: { ghostCli: '>=0.4.0' },
+                            downloadUrl: 'https://example.com/extensions/example-extension-1.0.0.tar.gz',
+                            signature: null,
+                            manifest: JSON.stringify({
+                                id: 'example-extension',
+                                name: 'Example Extension',
+                                version: '1.0.0',
+                                main: 'index.js',
+                                capabilities: {
+                                    filesystem: { read: ['**/*.md'], write: [] },
+                                    network: { allowlist: [], rateLimit: { cir: 60, bc: 100, be: 204800 } }
+                                }
+                            })
+                        }
+                    ]
+                }
+            ]
+        };
+    }
+
+    clearCache() {
+        if (fs.existsSync(this.cacheDir)) {
+            const files = fs.readdirSync(this.cacheDir);
+            for (const file of files) {
+                fs.unlinkSync(path.join(this.cacheDir, file));
+            }
+        }
+    }
+}
+
+module.exports = { MarketplaceService };

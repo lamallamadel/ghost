@@ -1,0 +1,206 @@
+{
+  "version": "1.0",
+  "lastUpdated": "2024-01-15T00:00:00Z",
+  "extensions": [
+    {
+      "id": "ai-commit-helper",
+      "name": "AI Commit Helper",
+      "description": "Generates intelligent commit messages using AI models based on staged changes",
+      "author": "Ghost Team",
+      "category": "git",
+      "tags": ["ai", "git", "commit", "automation"],
+      "ratings": {
+        "average": 4.8,
+        "count": 245
+      },
+      "downloads": 5420,
+      "verified": true,
+      "homepage": "https://github.com/ghost/ai-commit-helper",
+      "repository": "https://github.com/ghost/ai-commit-helper.git",
+      "versions": [
+        {
+          "version": "2.1.0",
+          "publishedAt": "2024-01-10T12:00:00Z",
+          "compatibility": {
+            "ghostCli": ">=0.4.0",
+            "node": ">=14.0.0"
+          },
+          "downloadUrl": "https://registry.ghost-cli.dev/packages/ai-commit-helper-2.1.0.tar.gz",
+          "signature": null,
+          "dependencies": {},
+          "changelog": "Added support for multiple AI providers, improved prompt templates",
+          "manifest": "{\"id\":\"ai-commit-helper\",\"name\":\"AI Commit Helper\",\"version\":\"2.1.0\",\"main\":\"index.js\",\"capabilities\":{\"filesystem\":{\"read\":[\"**/*\"],\"write\":[]},\"network\":{\"allowlist\":[\"https://api.openai.com\",\"https://api.anthropic.com\"],\"rateLimit\":{\"cir\":30,\"bc\":50,\"be\":204800}},\"git\":{\"read\":true,\"write\":false}}}"
+        },
+        {
+          "version": "2.0.5",
+          "publishedAt": "2023-12-20T10:00:00Z",
+          "compatibility": {
+            "ghostCli": ">=0.3.0",
+            "node": ">=14.0.0"
+          },
+          "downloadUrl": "https://registry.ghost-cli.dev/packages/ai-commit-helper-2.0.5.tar.gz",
+          "signature": null,
+          "dependencies": {},
+          "changelog": "Bug fixes and performance improvements"
+        }
+      ]
+    },
+    {
+      "id": "code-review-assistant",
+      "name": "Code Review Assistant",
+      "description": "Automated code review with best practices checking, security scanning, and style enforcement",
+      "author": "DevTools Contributors",
+      "category": "development",
+      "tags": ["review", "quality", "security", "linting"],
+      "ratings": {
+        "average": 4.6,
+        "count": 187
+      },
+      "downloads": 3890,
+      "verified": true,
+      "homepage": "https://github.com/devtools/code-review",
+      "repository": "https://github.com/devtools/code-review.git",
+      "versions": [
+        {
+          "version": "1.5.2",
+          "publishedAt": "2024-01-08T14:30:00Z",
+          "compatibility": {
+            "ghostCli": ">=0.4.0",
+            "node": ">=16.0.0"
+          },
+          "downloadUrl": "https://registry.ghost-cli.dev/packages/code-review-assistant-1.5.2.tar.gz",
+          "signature": null,
+          "dependencies": {
+            "eslint-config-standard": "^1.0.0"
+          },
+          "changelog": "Added TypeScript support and improved security scanning",
+          "manifest": "{\"id\":\"code-review-assistant\",\"name\":\"Code Review Assistant\",\"version\":\"1.5.2\",\"main\":\"index.js\",\"capabilities\":{\"filesystem\":{\"read\":[\"**/*.js\",\"**/*.ts\",\"**/*.jsx\",\"**/*.tsx\"],\"write\":[\"reports/**\"]},\"network\":{\"allowlist\":[\"https://api.sonarqube.com\"],\"rateLimit\":{\"cir\":20,\"bc\":30,\"be\":409600}},\"git\":{\"read\":true,\"write\":false}}}"
+        }
+      ]
+    },
+    {
+      "id": "dependency-scanner",
+      "name": "Dependency Security Scanner",
+      "description": "Scans project dependencies for known vulnerabilities and license compliance issues",
+      "author": "Security Tools Inc",
+      "category": "security",
+      "tags": ["security", "dependencies", "vulnerabilities", "npm"],
+      "ratings": {
+        "average": 4.9,
+        "count": 312
+      },
+      "downloads": 8750,
+      "verified": true,
+      "homepage": "https://github.com/sectools/dep-scanner",
+      "repository": "https://github.com/sectools/dep-scanner.git",
+      "versions": [
+        {
+          "version": "3.2.1",
+          "publishedAt": "2024-01-12T09:00:00Z",
+          "compatibility": {
+            "ghostCli": ">=0.4.0",
+            "node": ">=14.0.0"
+          },
+          "downloadUrl": "https://registry.ghost-cli.dev/packages/dependency-scanner-3.2.1.tar.gz",
+          "signature": null,
+          "dependencies": {},
+          "changelog": "Updated vulnerability database, added SBOM generation",
+          "manifest": "{\"id\":\"dependency-scanner\",\"name\":\"Dependency Security Scanner\",\"version\":\"3.2.1\",\"main\":\"index.js\",\"capabilities\":{\"filesystem\":{\"read\":[\"**/package.json\",\"**/package-lock.json\",\"**/yarn.lock\"],\"write\":[\"security-reports/**\"]},\"network\":{\"allowlist\":[\"https://registry.npmjs.org\",\"https://nvd.nist.gov\"],\"rateLimit\":{\"cir\":60,\"bc\":100,\"be\":512000}},\"git\":{\"read\":true,\"write\":false}}}"
+        }
+      ]
+    },
+    {
+      "id": "changelog-generator",
+      "name": "Changelog Generator",
+      "description": "Automatically generates changelogs from commit history with semantic versioning support",
+      "author": "Ghost Community",
+      "category": "git",
+      "tags": ["changelog", "git", "documentation", "semver"],
+      "ratings": {
+        "average": 4.4,
+        "count": 98
+      },
+      "downloads": 2340,
+      "verified": false,
+      "homepage": "https://github.com/community/changelog-gen",
+      "repository": "https://github.com/community/changelog-gen.git",
+      "versions": [
+        {
+          "version": "1.3.0",
+          "publishedAt": "2024-01-05T16:20:00Z",
+          "compatibility": {
+            "ghostCli": ">=0.3.0",
+            "node": ">=14.0.0"
+          },
+          "downloadUrl": "https://registry.ghost-cli.dev/packages/changelog-generator-1.3.0.tar.gz",
+          "signature": null,
+          "dependencies": {},
+          "changelog": "Added support for custom templates and multiple changelog formats",
+          "manifest": "{\"id\":\"changelog-generator\",\"name\":\"Changelog Generator\",\"version\":\"1.3.0\",\"main\":\"index.js\",\"capabilities\":{\"filesystem\":{\"read\":[\"**/*\"],\"write\":[\"CHANGELOG.md\",\"CHANGELOG.json\"]},\"network\":{\"allowlist\":[],\"rateLimit\":{\"cir\":10,\"bc\":20,\"be\":102400}},\"git\":{\"read\":true,\"write\":false}}}"
+        }
+      ]
+    },
+    {
+      "id": "pr-template-helper",
+      "name": "Pull Request Template Helper",
+      "description": "Creates and manages pull request templates with customizable checklists and guidelines",
+      "author": "Workflow Tools",
+      "category": "utilities",
+      "tags": ["pr", "template", "github", "gitlab"],
+      "ratings": {
+        "average": 4.3,
+        "count": 76
+      },
+      "downloads": 1680,
+      "verified": false,
+      "homepage": "https://github.com/workflow/pr-template",
+      "repository": "https://github.com/workflow/pr-template.git",
+      "versions": [
+        {
+          "version": "1.0.5",
+          "publishedAt": "2023-12-28T11:00:00Z",
+          "compatibility": {
+            "ghostCli": ">=0.4.0",
+            "node": ">=14.0.0"
+          },
+          "downloadUrl": "https://registry.ghost-cli.dev/packages/pr-template-helper-1.0.5.tar.gz",
+          "signature": null,
+          "dependencies": {},
+          "changelog": "Initial stable release with GitHub and GitLab support",
+          "manifest": "{\"id\":\"pr-template-helper\",\"name\":\"Pull Request Template Helper\",\"version\":\"1.0.5\",\"main\":\"index.js\",\"capabilities\":{\"filesystem\":{\"read\":[\"**/*\"],\"write\":[\".github/PULL_REQUEST_TEMPLATE.md\",\".gitlab/merge_request_templates/**\"]},\"network\":{\"allowlist\":[],\"rateLimit\":{\"cir\":5,\"bc\":10,\"be\":51200}},\"git\":{\"read\":true,\"write\":false}}}"
+        }
+      ]
+    },
+    {
+      "id": "test-coverage-reporter",
+      "name": "Test Coverage Reporter",
+      "description": "Generates comprehensive test coverage reports with CI/CD integration",
+      "author": "Testing Tools",
+      "category": "testing",
+      "tags": ["testing", "coverage", "ci-cd", "quality"],
+      "ratings": {
+        "average": 4.7,
+        "count": 154
+      },
+      "downloads": 4210,
+      "verified": true,
+      "homepage": "https://github.com/testing/coverage-reporter",
+      "repository": "https://github.com/testing/coverage-reporter.git",
+      "versions": [
+        {
+          "version": "2.4.0",
+          "publishedAt": "2024-01-11T13:45:00Z",
+          "compatibility": {
+            "ghostCli": ">=0.4.0",
+            "node": ">=14.0.0"
+          },
+          "downloadUrl": "https://registry.ghost-cli.dev/packages/test-coverage-reporter-2.4.0.tar.gz",
+          "signature": null,
+          "dependencies": {},
+          "changelog": "Added support for multiple coverage formats and badge generation",
+          "manifest": "{\"id\":\"test-coverage-reporter\",\"name\":\"Test Coverage Reporter\",\"version\":\"2.4.0\",\"main\":\"index.js\",\"capabilities\":{\"filesystem\":{\"read\":[\"coverage/**\",\"**/coverage/**\"],\"write\":[\"coverage-reports/**\"]},\"network\":{\"allowlist\":[\"https://codecov.io\",\"https://coveralls.io\"],\"rateLimit\":{\"cir\":40,\"bc\":60,\"be\":307200}},\"git\":{\"read\":true,\"write\":false}}}"
+        }
+      ]
+    }
+  ]
+}

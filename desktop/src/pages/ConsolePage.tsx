@@ -12,6 +12,7 @@ import { LogsTab } from '@/tabs/LogsTab'
 import { GatewayTab } from '@/tabs/GatewayTab'
 import { ExtensionsTab } from '@/tabs/ExtensionsTab'
 import { ExtensionManagerTab } from '@/tabs/ExtensionManagerTab'
+import { MarketplaceTab } from '@/tabs/MarketplaceTab'
 import { useToastsStore } from '@/stores/useToastsStore'
 import { OnboardingWalkthrough } from '@/components/OnboardingWalkthrough'
 
@@ -175,6 +176,7 @@ export default function ConsolePage() {
             {activeTab.kind === 'gateway' ? <GatewayTab /> : null}
             {activeTab.kind === 'extensions' ? <ExtensionsTab /> : null}
             {activeTab.kind === 'extension-manager' ? <ExtensionManagerTab /> : null}
+            {activeTab.kind === 'marketplace' ? <MarketplaceTab /> : null}
             {activeTab.kind === 'history' ? <HistoryTab /> : null}
             {activeTab.kind === 'git' ? <GitTab /> : null}
             {activeTab.kind === 'logs' ? <LogsTab /> : null}

@@ -281,6 +281,8 @@ class GatewayLauncher {
             await this.handleSetupCommand(parsedArgs);
         } else if (parsedArgs.command === 'extension') {
             await this.handleExtensionCommand(parsedArgs);
+        } else if (parsedArgs.command === 'marketplace') {
+            await this.handleMarketplaceCommand(parsedArgs);
         } else if (parsedArgs.command === 'gateway') {
             await this.handleGatewayCommand(parsedArgs);
         } else if (parsedArgs.command === 'audit-log') {
@@ -679,6 +681,225 @@ class GatewayLauncher {
             }
             
             console.log(`Run ${Colors.CYAN}ghost extension help${Colors.ENDC} to see all extension commands\n`);
+            process.exit(1);
+        }
+    }
+
+    /**
+     * Handle marketplace commands for extension discovery and installation.
+     */
+    async handleMarketplaceCommand(parsedArgs) {
+        const { MarketplaceService } = require('./core/marketplace');
+        const marketplace = new MarketplaceService();
+        const subcommand = parsedArgs.subcommand;
+
+        if (!subcommand || subcommand === 'help') {
+            console.log(`${Colors.BOLD}Marketplace Commands:${Colors.ENDC}
+  ghost marketplace browse [category]     Browse available extensions
+  ghost marketplace search <query>        Search for extensions
+  ghost marketplace info <id>             Show extension details
+  ghost marketplace install <id>          Install extension from marketplace
+  ghost marketplace refresh               Clear cache and refresh marketplace data
+`);
+            return;
+        }
+
+        if (subcommand === 'browse') {
+            const category = parsedArgs.args[0];
+            const sort = parsedArgs.flags.sort || 'downloads';
+            
+            try {
+                console.log(`${Colors.CYAN}Fetching extensions from marketplace...${Colors.ENDC}\n`);
+                const result = await marketplace.fetchExtensions({ category, sort, limit: 20 });
+                
+                if (parsedArgs.flags.json) {
+                    console.log(JSON.stringify(result, null, 2));
+                    return;
+                }
+
+                console.log(`${Colors.BOLD}${Colors.CYAN}Marketplace Extensions${category ? ` - ${category}` : ''}${Colors.ENDC}`);
+                console.log(`${Colors.DIM}${'─'.repeat(80)}${Colors.ENDC}\n`);
+
+                if (result.extensions.length === 0) {
+                    console.log(`${Colors.DIM}No extensions found.${Colors.ENDC}\n`);
+                    return;
+                }
+
+                result.extensions.forEach(ext => {
+                    const verifiedBadge = ext.verified ? `${Colors.GREEN}✓${Colors.ENDC}` : '';
+                    console.log(`${Colors.BOLD}${ext.name}${Colors.ENDC} ${verifiedBadge} ${Colors.DIM}v${ext.versions[0].version}${Colors.ENDC}`);
+                    console.log(`  ${Colors.DIM}ID:${Colors.ENDC} ${ext.id}`);
+                    console.log(`  ${Colors.DIM}${ext.description}${Colors.ENDC}`);
+                    console.log(`  ${Colors.DIM}Author:${Colors.ENDC} ${ext.author} | ${Colors.DIM}Category:${Colors.ENDC} ${ext.category}`);
+                    
+                    if (ext.ratings) {
+                        const stars = '★'.repeat(Math.round(ext.ratings.average)) + '☆'.repeat(5 - Math.round(ext.ratings.average));
+                        console.log(`  ${Colors.YELLOW}${stars}${Colors.ENDC} ${ext.ratings.average.toFixed(1)} (${ext.ratings.count} reviews) | ${Colors.CYAN}↓ ${ext.downloads}${Colors.ENDC} downloads`);
+                    }
+                    
+                    console.log('');
+                });
+
+                console.log(`${Colors.DIM}Total: ${result.total} extensions${Colors.ENDC}`);
+                console.log(`${Colors.DIM}Use 'ghost marketplace info <id>' for details${Colors.ENDC}\n`);
+            } catch (error) {
+                console.error(`${Colors.FAIL}Error fetching marketplace: ${error.message}${Colors.ENDC}`);
+                process.exit(1);
+            }
+        } else if (subcommand === 'search') {
+            const query = parsedArgs.args[0];
+            
+            if (!query) {
+                console.error(`${Colors.FAIL}Error: Search query required${Colors.ENDC}`);
+                console.log('Usage: ghost marketplace search <query>');
+                process.exit(1);
+            }
+
+            try {
+                console.log(`${Colors.CYAN}Searching for: ${query}...${Colors.ENDC}\n`);
+                const result = await marketplace.fetchExtensions({ search: query, limit: 10 });
+                
+                if (parsedArgs.flags.json) {
+                    console.log(JSON.stringify(result, null, 2));
+                    return;
+                }
+
+                if (result.extensions.length === 0) {
+                    console.log(`${Colors.WARNING}No extensions found matching "${query}"${Colors.ENDC}\n`);
+                    return;
+                }
+
+                console.log(`${Colors.BOLD}${Colors.CYAN}Search Results (${result.total})${Colors.ENDC}`);
+                console.log(`${Colors.DIM}${'─'.repeat(80)}${Colors.ENDC}\n`);
+
+                result.extensions.forEach(ext => {
+                    const verifiedBadge = ext.verified ? `${Colors.GREEN}✓${Colors.ENDC}` : '';
+                    console.log(`${Colors.BOLD}${ext.name}${Colors.ENDC} ${verifiedBadge}`);
+                    console.log(`  ${ext.id} ${Colors.DIM}v${ext.versions[0].version}${Colors.ENDC}`);
+                    console.log(`  ${Colors.DIM}${ext.description}${Colors.ENDC}`);
+                    console.log('');
+                });
+            } catch (error) {
+                console.error(`${Colors.FAIL}Error searching marketplace: ${error.message}${Colors.ENDC}`);
+                process.exit(1);
+            }
+        } else if (subcommand === 'info') {
+            const extensionId = parsedArgs.args[0];
+            
+            if (!extensionId) {
+                console.error(`${Colors.FAIL}Error: Extension ID required${Colors.ENDC}`);
+                console.log('Usage: ghost marketplace info <id>');
+                process.exit(1);
+            }
+
+            try {
+                const ext = await marketplace.fetchExtensionById(extensionId);
+                
+                if (parsedArgs.flags.json) {
+                    console.log(JSON.stringify(ext, null, 2));
+                    return;
+                }
+
+                const verifiedBadge = ext.verified ? `${Colors.GREEN}✓ Verified${Colors.ENDC}` : `${Colors.WARNING}Not Verified${Colors.ENDC}`;
+                
+                console.log(`\n${Colors.BOLD}${Colors.CYAN}${ext.name}${Colors.ENDC} ${verifiedBadge}`);
+                console.log(`${Colors.DIM}${'─'.repeat(80)}${Colors.ENDC}`);
+                console.log(`ID:           ${ext.id}`);
+                console.log(`Version:      ${ext.versions[0].version}`);
+                console.log(`Author:       ${ext.author}`);
+                console.log(`Category:     ${ext.category}`);
+                console.log(`Description:  ${ext.description}`);
+                
+                if (ext.tags && ext.tags.length > 0) {
+                    console.log(`Tags:         ${ext.tags.join(', ')}`);
+                }
+
+                if (ext.ratings) {
+                    const stars = '★'.repeat(Math.round(ext.ratings.average)) + '☆'.repeat(5 - Math.round(ext.ratings.average));
+                    console.log(`\n${Colors.BOLD}Ratings:${Colors.ENDC}`);
+                    console.log(`  ${Colors.YELLOW}${stars}${Colors.ENDC} ${ext.ratings.average.toFixed(1)}/5.0 (${ext.ratings.count} reviews)`);
+                }
+
+                console.log(`\n${Colors.BOLD}Downloads:${Colors.ENDC} ${Colors.CYAN}${ext.downloads}${Colors.ENDC}`);
+
+                if (ext.homepage) {
+                    console.log(`Homepage:     ${ext.homepage}`);
+                }
+                if (ext.repository) {
+                    console.log(`Repository:   ${ext.repository}`);
+                }
+
+                console.log(`\n${Colors.BOLD}Available Versions:${Colors.ENDC}`);
+                ext.versions.forEach((v, idx) => {
+                    const latest = idx === 0 ? `${Colors.GREEN}(latest)${Colors.ENDC}` : '';
+                    console.log(`  v${v.version} ${latest}`);
+                    console.log(`    Published: ${new Date(v.publishedAt).toLocaleDateString()}`);
+                    if (v.compatibility) {
+                        console.log(`    Requires: Ghost CLI ${v.compatibility.ghostCli}, Node ${v.compatibility.node}`);
+                    }
+                    if (v.changelog) {
+                        console.log(`    ${Colors.DIM}${v.changelog}${Colors.ENDC}`);
+                    }
+                });
+
+                const manifest = JSON.parse(ext.versions[0].manifest || '{}');
+                if (manifest.capabilities) {
+                    console.log(`\n${Colors.BOLD}Capabilities:${Colors.ENDC}`);
+                    if (manifest.capabilities.filesystem) {
+                        console.log(`  Filesystem: ${manifest.capabilities.filesystem.read?.length || 0} read patterns, ${manifest.capabilities.filesystem.write?.length || 0} write patterns`);
+                    }
+                    if (manifest.capabilities.network) {
+                        console.log(`  Network: ${manifest.capabilities.network.allowlist?.length || 0} allowed domains`);
+                    }
+                    if (manifest.capabilities.git) {
+                        console.log(`  Git: Read=${manifest.capabilities.git.read ? '✓' : '✗'}, Write=${manifest.capabilities.git.write ? '✓' : '✗'}`);
+                    }
+                }
+
+                console.log(`\n${Colors.BOLD}To install:${Colors.ENDC} ${Colors.CYAN}ghost marketplace install ${ext.id}${Colors.ENDC}`);
+                console.log('');
+            } catch (error) {
+                console.error(`${Colors.FAIL}Error fetching extension info: ${error.message}${Colors.ENDC}`);
+                process.exit(1);
+            }
+        } else if (subcommand === 'install') {
+            const extensionId = parsedArgs.args[0];
+            const version = parsedArgs.flags.version;
+            
+            if (!extensionId) {
+                console.error(`${Colors.FAIL}Error: Extension ID required${Colors.ENDC}`);
+                console.log('Usage: ghost marketplace install <id> [--version=X.Y.Z]');
+                process.exit(1);
+            }
+
+            try {
+                console.log(`${Colors.CYAN}Installing ${extensionId}${version ? `@${version}` : ''} from marketplace...${Colors.ENDC}\n`);
+                
+                const result = await marketplace.installExtension(extensionId, { version });
+                
+                console.log(`${Colors.GREEN}✓${Colors.ENDC} Extension ${Colors.BOLD}${result.extensionId}${Colors.ENDC} v${result.version} installed successfully`);
+                console.log(`${Colors.DIM}  Location: ${result.installPath}${Colors.ENDC}`);
+                
+                if (result.dependencies && result.dependencies.length > 0) {
+                    console.log(`\n${Colors.BOLD}Dependencies:${Colors.ENDC}`);
+                    result.dependencies.forEach(dep => {
+                        console.log(`  ${dep.id}@${dep.version}`);
+                    });
+                    console.log(`${Colors.WARNING}Note: Dependencies must be installed manually${Colors.ENDC}`);
+                }
+                
+                console.log(`\n${Colors.DIM}Restart Ghost or reload extensions to activate: ghost gateway extensions${Colors.ENDC}`);
+                console.log('');
+            } catch (error) {
+                console.error(`${Colors.FAIL}Error installing extension: ${error.message}${Colors.ENDC}`);
+                process.exit(1);
+            }
+        } else if (subcommand === 'refresh') {
+            marketplace.clearCache();
+            console.log(`${Colors.GREEN}✓${Colors.ENDC} Marketplace cache cleared\n`);
+        } else {
+            console.error(`${Colors.FAIL}Error: Unknown marketplace subcommand '${subcommand}'${Colors.ENDC}\n`);
+            console.log(`Run ${Colors.CYAN}ghost marketplace help${Colors.ENDC} to see all marketplace commands\n`);
             process.exit(1);
         }
     }
