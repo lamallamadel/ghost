@@ -291,6 +291,8 @@ class GatewayLauncher {
             await this.handleDoctorCommand(parsedArgs);
         } else if (parsedArgs.command === 'completion') {
             await this.handleCompletionCommand(parsedArgs);
+        } else if (parsedArgs.command === 'logs') {
+            await this.handleLogsCommand(parsedArgs);
         } else {
             // Pure routing: delegate domain commands to extensions
             await this.forwardToExtension(parsedArgs);
@@ -980,10 +982,11 @@ class GatewayLauncher {
     async handleCompletionCommand(parsedArgs) {
         const shell = parsedArgs.subcommand || 'bash';
         const commands = [
-            'setup', 'doctor', 'completion', 'extension', 'gateway', 'audit-log', 'console'
+            'setup', 'doctor', 'completion', 'extension', 'gateway', 'audit-log', 'console', 'logs'
         ];
         const extensionSubcommands = ['list', 'install', 'remove', 'info', 'init', 'validate'];
         const gatewaySubcommands = ['status', 'extensions', 'health', 'logs', 'metrics', 'spans'];
+        const logsSubcommands = ['prune', 'info'];
         
         // Get extension commands dynamically
         const extensionCommands = this._getAllAvailableCommands();
@@ -1015,6 +1018,11 @@ _ghost_completion() {
                     COMPREPLY=( $(compgen -W "\${opts}" -- \${cur}) )
                     return 0
                     ;;
+                logs)
+                    opts="${logsSubcommands.join(' ')}"
+                    COMPREPLY=( $(compgen -W "\${opts}" -- \${cur}) )
+                    return 0
+                    ;;
                 completion)
                     opts="bash zsh fish"
                     COMPREPLY=( $(compgen -W "\${opts}" -- \${cur}) )
@@ -1031,7 +1039,7 @@ complete -F _ghost_completion ghost`);
 #compdef ghost
 
 _ghost() {
-    local -a commands extension_cmds gateway_cmds extension_commands
+    local -a commands extension_cmds gateway_cmds logs_cmds extension_commands
     
     commands=(
         ${allCommands.map(cmd => `'${cmd}:Ghost command'`).join('\n        ')}
@@ -1045,12 +1053,19 @@ _ghost() {
         ${gatewaySubcommands.map(cmd => `'${cmd}:Gateway monitoring'`).join('\n        ')}
     )
     
+    logs_cmds=(
+        ${logsSubcommands.map(cmd => `'${cmd}:Log management'`).join('\n        ')}
+    )
+    
     case $words[2] in
         extension)
             _describe 'extension commands' extension_cmds
             ;;
         gateway)
             _describe 'gateway commands' gateway_cmds
+            ;;
+        logs)
+            _describe 'logs commands' logs_cmds
             ;;
         completion)
             _values 'shell' bash zsh fish
@@ -1074,6 +1089,9 @@ ${extensionSubcommands.map(cmd => `complete -c ghost -n "__fish_seen_subcommand_
 
 # Gateway subcommands
 ${gatewaySubcommands.map(cmd => `complete -c ghost -n "__fish_seen_subcommand_from gateway" -a "${cmd}"`).join('\n')}
+
+# Logs subcommands
+${logsSubcommands.map(cmd => `complete -c ghost -n "__fish_seen_subcommand_from logs" -a "${cmd}"`).join('\n')}
 
 # Completion shell options
 complete -c ghost -n "__fish_seen_subcommand_from completion" -a "bash zsh fish"
@@ -1344,6 +1362,160 @@ complete -c ghost -l help -s h -d "Show help message"`);
             console.log(`Valid subcommand: ${Colors.CYAN}view${Colors.ENDC}`);
             console.log(`\nUsage:`);
             console.log(`  ${Colors.CYAN}ghost audit-log view${Colors.ENDC} [--limit N] [--extension ID] [--type TYPE]\n`);
+            process.exit(1);
+        }
+    }
+
+    /**
+     * Handle logs management commands.
+     * 
+     * ORCHESTRATION ROLE: Correct implementation
+     * - Query telemetry logger for log management operations
+     * - Format and display results
+     * - Delegates to StructuredLogger.pruneLogs()
+     */
+    async handleLogsCommand(parsedArgs) {
+        const subcommand = parsedArgs.subcommand || 'help';
+
+        if (subcommand === 'help' || !subcommand) {
+            console.log(`${Colors.BOLD}Logs Management Commands:${Colors.ENDC}
+  ghost logs prune [days]              Clean up old telemetry and audit logs
+  ghost logs info                      Show log directory information
+`);
+            return;
+        }
+
+        if (subcommand === 'prune') {
+            const daysToKeep = parsedArgs.args[0] ? parseInt(parsedArgs.args[0]) : null;
+            
+            console.log(`${Colors.CYAN}Pruning old log files...${Colors.ENDC}`);
+            
+            const telemetryResult = this.telemetryInstance.logger.pruneLogs(daysToKeep);
+            
+            const AUDIT_LOG_PATH = path.join(os.homedir(), '.ghost', 'audit.log');
+            let auditResult = { deletedCount: 0, totalSizeFreed: 0 };
+            
+            try {
+                if (fs.existsSync(AUDIT_LOG_PATH)) {
+                    const auditDir = path.dirname(AUDIT_LOG_PATH);
+                    const files = fs.readdirSync(auditDir);
+                    const auditFiles = files
+                        .filter(f => f.startsWith('audit') && f.endsWith('.log'))
+                        .map(f => {
+                            const filePath = path.join(auditDir, f);
+                            const stats = fs.statSync(filePath);
+                            return {
+                                path: filePath,
+                                mtime: stats.mtime,
+                                size: stats.size
+                            };
+                        });
+                    
+                    const maxDays = daysToKeep || this.telemetryInstance.logger.logConfig.maxDailyFiles;
+                    const maxAgeMs = maxDays * 24 * 60 * 60 * 1000;
+                    const now = Date.now();
+                    
+                    for (const file of auditFiles) {
+                        const age = now - file.mtime.getTime();
+                        if (age > maxAgeMs) {
+                            try {
+                                fs.unlinkSync(file.path);
+                                auditResult.deletedCount++;
+                                auditResult.totalSizeFreed += file.size;
+                            } catch (error) {
+                            }
+                        }
+                    }
+                }
+            } catch (error) {
+            }
+
+            const totalDeleted = telemetryResult.deletedCount + auditResult.deletedCount;
+            const totalFreed = telemetryResult.totalSizeFreed + auditResult.totalSizeFreed;
+            const totalFreedMB = (totalFreed / (1024 * 1024)).toFixed(2);
+
+            if (parsedArgs.flags.json) {
+                console.log(JSON.stringify({
+                    telemetry: telemetryResult,
+                    audit: auditResult,
+                    total: {
+                        deletedCount: totalDeleted,
+                        totalSizeFreed: totalFreed
+                    }
+                }, null, 2));
+            } else {
+                console.log(`\n${Colors.GREEN}✓${Colors.ENDC} Log cleanup complete`);
+                console.log(`  Telemetry logs deleted: ${telemetryResult.deletedCount}`);
+                console.log(`  Audit logs deleted: ${auditResult.deletedCount}`);
+                console.log(`  Total files deleted: ${totalDeleted}`);
+                console.log(`  Space freed: ${totalFreedMB} MB`);
+                console.log('');
+            }
+        } else if (subcommand === 'info') {
+            const telemetryDir = path.join(os.homedir(), '.ghost', 'telemetry');
+            const auditLogPath = path.join(os.homedir(), '.ghost', 'audit.log');
+            
+            let telemetryFiles = [];
+            let telemetrySize = 0;
+            
+            try {
+                if (fs.existsSync(telemetryDir)) {
+                    const files = fs.readdirSync(telemetryDir);
+                    telemetryFiles = files.filter(f => f.startsWith('telemetry-') && f.endsWith('.log'));
+                    telemetrySize = telemetryFiles.reduce((sum, f) => {
+                        try {
+                            return sum + fs.statSync(path.join(telemetryDir, f)).size;
+                        } catch {
+                            return sum;
+                        }
+                    }, 0);
+                }
+            } catch (error) {
+            }
+            
+            let auditSize = 0;
+            try {
+                if (fs.existsSync(auditLogPath)) {
+                    auditSize = fs.statSync(auditLogPath).size;
+                }
+            } catch (error) {
+            }
+            
+            const totalSize = telemetrySize + auditSize;
+            const totalSizeMB = (totalSize / (1024 * 1024)).toFixed(2);
+            const telemetrySizeMB = (telemetrySize / (1024 * 1024)).toFixed(2);
+            const auditSizeMB = (auditSize / (1024 * 1024)).toFixed(2);
+            
+            const config = this.telemetryInstance.logger.logConfig;
+
+            if (parsedArgs.flags.json) {
+                console.log(JSON.stringify({
+                    telemetryDir,
+                    telemetryFileCount: telemetryFiles.length,
+                    telemetrySizeMB: parseFloat(telemetrySizeMB),
+                    auditLogPath,
+                    auditSizeMB: parseFloat(auditSizeMB),
+                    totalSizeMB: parseFloat(totalSizeMB),
+                    config
+                }, null, 2));
+            } else {
+                console.log(`\n${Colors.BOLD}${Colors.CYAN}Log Directory Information${Colors.ENDC}`);
+                console.log(`${Colors.DIM}${'─'.repeat(50)}${Colors.ENDC}`);
+                console.log(`Telemetry directory:   ${telemetryDir}`);
+                console.log(`Telemetry log files:   ${telemetryFiles.length}`);
+                console.log(`Telemetry size:        ${telemetrySizeMB} MB`);
+                console.log(`Audit log:             ${auditLogPath}`);
+                console.log(`Audit size:            ${auditSizeMB} MB`);
+                console.log(`Total size:            ${totalSizeMB} MB`);
+                console.log('');
+                console.log(`${Colors.BOLD}Configuration:${Colors.ENDC}`);
+                console.log(`Max file size:         ${config.maxFileSizeMB} MB`);
+                console.log(`Max daily files:       ${config.maxDailyFiles}`);
+                console.log('');
+            }
+        } else {
+            console.error(`${Colors.FAIL}Error: Unknown logs subcommand '${subcommand}'${Colors.ENDC}\n`);
+            console.log(`Run ${Colors.CYAN}ghost logs help${Colors.ENDC} to see all logs commands\n`);
             process.exit(1);
         }
     }
@@ -2507,6 +2679,8 @@ ${Colors.BOLD}GATEWAY & MONITORING:${Colors.ENDC}
   ${Colors.CYAN}gateway spans${Colors.ENDC} [limit]         Recent telemetry spans
   ${Colors.CYAN}audit-log view${Colors.ENDC}                Comprehensive audit logs
   ${Colors.CYAN}console${Colors.ENDC} [start|stop]          Telemetry HTTP/WebSocket server
+  ${Colors.CYAN}logs prune${Colors.ENDC} [days]             Cleanup old telemetry/audit logs
+  ${Colors.CYAN}logs info${Colors.ENDC}                     Show log directory information
 
 ${Colors.BOLD}WORKFLOW COMMANDS:${Colors.ENDC}`);
 
@@ -2564,6 +2738,8 @@ ${Colors.BOLD}TELEMETRY:${Colors.ENDC}
   - Metrics (request count, latency percentiles, rate limit violations)
   - HTTP/WebSocket server for real-time monitoring
   - Logs stored in ~/.ghost/telemetry/
+  - Automatic log rotation (max 10MB per file, keep last 7 daily files by default)
+  - PII scrubbing (emails, IPs, home paths automatically redacted)
   
   Start telemetry server:
     ghost console start
@@ -2574,6 +2750,18 @@ ${Colors.BOLD}TELEMETRY:${Colors.ENDC}
     GET /metrics/<extension-id>  Extension-specific metrics
     GET /spans                   Recent spans
     GET /logs?severity=<level>   Filter logs by severity
+  
+  Log management:
+    ghost logs info              Show log directory information
+    ghost logs prune [days]      Cleanup old logs (default: 7 days)
+  
+  Configuration (~/.ghost/config/ghostrc.json):
+    {
+      "logs": {
+        "maxFileSizeMB": 10,     // Max size per log file before rotation
+        "maxDailyFiles": 7       // Number of daily log files to keep
+      }
+    }
 
 ${Colors.BOLD}SHELL COMPLETION:${Colors.ENDC}
   Add to your shell profile:

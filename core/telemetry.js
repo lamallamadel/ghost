@@ -4,6 +4,7 @@ const os = require('os');
 const http = require('http');
 
 const TELEMETRY_DIR = path.join(os.homedir(), '.ghost', 'telemetry');
+const CONFIG_FILE = path.join(os.homedir(), '.ghost', 'config', 'ghostrc.json');
 const SEVERITY_LEVELS = {
     INFO: 'INFO',
     WARN: 'WARN',
@@ -12,6 +13,11 @@ const SEVERITY_LEVELS = {
 };
 
 const SECRET_FIELDS = ['api_key', 'apiKey', 'token', 'password', 'secret', 'auth', 'authorization', 'credentials'];
+
+const DEFAULT_LOG_CONFIG = {
+    maxFileSizeMB: 10,
+    maxDailyFiles: 7
+};
 
 class Span {
     constructor(name, parentSpan = null) {
@@ -86,7 +92,22 @@ class Span {
 class StructuredLogger {
     constructor(baseDir = TELEMETRY_DIR) {
         this.baseDir = baseDir;
+        this.logConfig = this._loadLogConfig();
         this._ensureDirectory();
+    }
+
+    _loadLogConfig() {
+        try {
+            if (fs.existsSync(CONFIG_FILE)) {
+                const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+                return {
+                    maxFileSizeMB: config.logs?.maxFileSizeMB || DEFAULT_LOG_CONFIG.maxFileSizeMB,
+                    maxDailyFiles: config.logs?.maxDailyFiles || DEFAULT_LOG_CONFIG.maxDailyFiles
+                };
+            }
+        } catch (error) {
+        }
+        return DEFAULT_LOG_CONFIG;
     }
 
     _ensureDirectory() {
@@ -116,6 +137,55 @@ class StructuredLogger {
     _getLogPath(date = null) {
         const dateStr = date || new Date().toISOString().split('T')[0];
         return path.join(this.baseDir, `telemetry-${dateStr}.log`);
+    }
+
+    _scrubPII(text) {
+        if (typeof text !== 'string') {
+            return text;
+        }
+
+        let scrubbed = text;
+
+        // Email pattern
+        scrubbed = scrubbed.replace(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b/g, '[EMAIL]');
+
+        // IPv4 addresses
+        scrubbed = scrubbed.replace(/\b\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}\b/g, '[IP]');
+
+        // IPv6 addresses (simplified pattern)
+        scrubbed = scrubbed.replace(/\b([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}\b/g, '[IP]');
+
+        // Unix home paths: /home/<user>/
+        scrubbed = scrubbed.replace(/\/home\/[^\/\s]+/g, '/home/[USER]');
+
+        // Windows home paths: C:\Users\<user>\
+        scrubbed = scrubbed.replace(/[A-Za-z]:\\Users\\[^\\\/\s]+/gi, 'C:\\Users\\[USER]');
+
+        return scrubbed;
+    }
+
+    _scrubPIIFromValue(value) {
+        if (value === null || value === undefined) {
+            return value;
+        }
+
+        if (typeof value === 'string') {
+            return this._scrubPII(value);
+        }
+
+        if (Array.isArray(value)) {
+            return value.map(item => this._scrubPIIFromValue(item));
+        }
+
+        if (typeof value === 'object') {
+            const scrubbed = {};
+            for (const [key, val] of Object.entries(value)) {
+                scrubbed[key] = this._scrubPIIFromValue(val);
+            }
+            return scrubbed;
+        }
+
+        return value;
     }
 
     _sanitizeValue(value) {
@@ -172,18 +242,70 @@ class StructuredLogger {
         return sanitized;
     }
 
+    _rotateIfNeeded() {
+        try {
+            const logPath = this._getLogPath();
+            
+            if (!fs.existsSync(logPath)) {
+                return;
+            }
+
+            const stats = fs.statSync(logPath);
+            const maxSizeBytes = this.logConfig.maxFileSizeMB * 1024 * 1024;
+
+            if (stats.size >= maxSizeBytes) {
+                const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                const dateStr = new Date().toISOString().split('T')[0];
+                const rotatedPath = path.join(this.baseDir, `telemetry-${dateStr}-${timestamp}.log`);
+                
+                fs.renameSync(logPath, rotatedPath);
+                
+                this._cleanupOldLogs();
+            }
+        } catch (error) {
+        }
+    }
+
+    _cleanupOldLogs() {
+        try {
+            const files = fs.readdirSync(this.baseDir);
+            const logFiles = files
+                .filter(f => f.startsWith('telemetry-') && f.endsWith('.log'))
+                .map(f => ({
+                    name: f,
+                    path: path.join(this.baseDir, f),
+                    mtime: fs.statSync(path.join(this.baseDir, f)).mtime
+                }))
+                .sort((a, b) => b.mtime - a.mtime);
+
+            const maxFiles = this.logConfig.maxDailyFiles;
+            if (logFiles.length > maxFiles) {
+                const filesToDelete = logFiles.slice(maxFiles);
+                for (const file of filesToDelete) {
+                    try {
+                        fs.unlinkSync(file.path);
+                    } catch (error) {
+                    }
+                }
+            }
+        } catch (error) {
+        }
+    }
+
     log(severity, message, metadata = {}) {
+        this._rotateIfNeeded();
+
         const sanitized = this._sanitizeMetadata(metadata);
         
         const entry = {
             timestamp: new Date().toISOString(),
             severity,
-            message,
+            message: this._scrubPII(message),
             extensionId: sanitized.extensionId || null,
             requestId: sanitized.requestId || null,
             layer: sanitized.layer || null,
             errorCode: sanitized.errorCode || sanitized.code || null,
-            ...sanitized
+            ...this._scrubPIIFromValue(sanitized)
         };
 
         const logLine = JSON.stringify(entry) + '\n';
@@ -259,6 +381,49 @@ class StructuredLogger {
             console.error('[StructuredLogger] Failed to read logs:', error.message);
             return [];
         }
+    }
+
+    pruneLogs(daysToKeep = null) {
+        const maxDays = daysToKeep || this.logConfig.maxDailyFiles;
+        const now = Date.now();
+        const maxAgeMs = maxDays * 24 * 60 * 60 * 1000;
+        let deletedCount = 0;
+        let totalSizeFreed = 0;
+
+        try {
+            if (!fs.existsSync(this.baseDir)) {
+                return { deletedCount, totalSizeFreed };
+            }
+
+            const files = fs.readdirSync(this.baseDir);
+            const logFiles = files
+                .filter(f => f.startsWith('telemetry-') && f.endsWith('.log'))
+                .map(f => {
+                    const filePath = path.join(this.baseDir, f);
+                    const stats = fs.statSync(filePath);
+                    return {
+                        name: f,
+                        path: filePath,
+                        mtime: stats.mtime,
+                        size: stats.size
+                    };
+                });
+
+            for (const file of logFiles) {
+                const age = now - file.mtime.getTime();
+                if (age > maxAgeMs) {
+                    try {
+                        fs.unlinkSync(file.path);
+                        deletedCount++;
+                        totalSizeFreed += file.size;
+                    } catch (error) {
+                    }
+                }
+            }
+        } catch (error) {
+        }
+
+        return { deletedCount, totalSizeFreed };
     }
 }
 
