@@ -3,6 +3,15 @@ const ExtensionLoader = require('./extension-loader');
 const { ExtensionRuntime, ExtensionProcess, SandboxedExtension } = require('./runtime');
 const { PluginSandbox, SandboxError, ResourceMonitor, SandboxEscapeDetector } = require('./sandbox');
 const manifestSchema = require('./manifest-schema.json');
+const {
+    AgentMeshNetwork,
+    AgentDiscoveryService,
+    CRDTStateSync,
+    AgentAuthService,
+    WorkflowOrchestrator,
+    DistributedTelemetryCollector,
+    MeshCoordinator
+} = require('./mesh');
 
 module.exports = {
     Gateway,
@@ -14,5 +23,12 @@ module.exports = {
     SandboxError,
     ResourceMonitor,
     SandboxEscapeDetector,
-    manifestSchema
+    manifestSchema,
+    AgentMeshNetwork,
+    AgentDiscoveryService,
+    CRDTStateSync,
+    AgentAuthService,
+    WorkflowOrchestrator,
+    DistributedTelemetryCollector,
+    MeshCoordinator
 };
