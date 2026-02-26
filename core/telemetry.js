@@ -5,12 +5,521 @@ const http = require('http');
 
 const TELEMETRY_DIR = path.join(os.homedir(), '.ghost', 'telemetry');
 const CONFIG_FILE = path.join(os.homedir(), '.ghost', 'config', 'ghostrc.json');
+
 const SEVERITY_LEVELS = {
     INFO: 'INFO',
     WARN: 'WARN',
     ERROR: 'ERROR',
     SECURITY_ALERT: 'SECURITY_ALERT'
 };
+
+function _ensureExportersDirectory() {
+    const exportersDir = path.join(__dirname, 'exporters');
+    if (!fs.existsSync(exportersDir)) {
+        fs.mkdirSync(exportersDir, { recursive: true });
+    }
+    return exportersDir;
+}
+
+function _createExporterFiles() {
+    const exportersDir = _ensureExportersDirectory();
+    
+    const otlpPath = path.join(exportersDir, 'otlp-exporter.js');
+    const prometheusPath = path.join(exportersDir, 'prometheus-exporter.js');
+    
+    if (!fs.existsSync(otlpPath)) {
+        const otlpContent = `const http = require('http');
+const https = require('https');
+const { URL } = require('url');
+
+class OTLPExporter {
+    constructor(config, metricsCollector, telemetry) {
+        this.config = {
+            endpoint: config.endpoint || 'http://localhost:4318',
+            interval: config.interval || 30000,
+            headers: config.headers || {},
+            timeout: config.timeout || 10000
+        };
+        this.metricsCollector = metricsCollector;
+        this.telemetry = telemetry;
+        this.exportTimer = null;
+        this.isRunning = false;
+        this.lastExportTime = null;
+        this.exportCount = 0;
+        this.errorCount = 0;
+    }
+
+    start() {
+        if (this.isRunning) {
+            console.warn('[OTLPExporter] Exporter already running');
+            return;
+        }
+
+        this.isRunning = true;
+        console.log(\`[OTLPExporter] Starting OTLP exporter, endpoint: \${this.config.endpoint}, interval: \${this.config.interval}ms\`);
+        
+        this._scheduleExport();
+    }
+
+    stop() {
+        if (!this.isRunning) {
+            return;
+        }
+
+        this.isRunning = false;
+        
+        if (this.exportTimer) {
+            clearTimeout(this.exportTimer);
+            this.exportTimer = null;
+        }
+
+        console.log('[OTLPExporter] Stopped OTLP exporter');
+    }
+
+    _scheduleExport() {
+        if (!this.isRunning) {
+            return;
+        }
+
+        this.exportTimer = setTimeout(async () => {
+            try {
+                await this._export();
+            } catch (error) {
+                console.error('[OTLPExporter] Export failed:', error.message);
+                this.errorCount++;
+            }
+            
+            this._scheduleExport();
+        }, this.config.interval);
+    }
+
+    async _export() {
+        const now = Date.now();
+        const spans = this._collectSpans();
+        const metrics = this._collectMetrics();
+
+        if (spans.length === 0 && metrics.length === 0) {
+            return;
+        }
+
+        const traces = spans.length > 0 ? this._buildTracesPayload(spans) : null;
+        const metricsPayload = metrics.length > 0 ? this._buildMetricsPayload(metrics) : null;
+
+        if (traces) {
+            await this._sendToOTLP('/v1/traces', traces);
+        }
+
+        if (metricsPayload) {
+            await this._sendToOTLP('/v1/metrics', metricsPayload);
+        }
+
+        this.lastExportTime = now;
+        this.exportCount++;
+    }
+
+    _collectSpans() {
+        const recentSpans = this.telemetry.getRecentSpans(1000);
+        return recentSpans.filter(span => {
+            if (!this.lastExportTime) return true;
+            return span.startTime > this.lastExportTime;
+        });
+    }
+
+    _collectMetrics() {
+        const allMetrics = this.metricsCollector.getMetrics();
+        const metricsList = [];
+
+        for (const [extensionId, stages] of Object.entries(allMetrics.requests || {})) {
+            for (const [stage, count] of Object.entries(stages)) {
+                metricsList.push({
+                    name: 'ghost.requests.count',
+                    type: 'counter',
+                    value: count,
+                    labels: { extensionId, stage }
+                });
+            }
+        }
+
+        for (const [extensionId, stages] of Object.entries(allMetrics.latencies || {})) {
+            for (const [stage, percentiles] of Object.entries(stages)) {
+                metricsList.push({
+                    name: 'ghost.requests.latency.p50',
+                    type: 'gauge',
+                    value: percentiles.p50,
+                    labels: { extensionId, stage }
+                });
+                metricsList.push({
+                    name: 'ghost.requests.latency.p95',
+                    type: 'gauge',
+                    value: percentiles.p95,
+                    labels: { extensionId, stage }
+                });
+                metricsList.push({
+                    name: 'ghost.requests.latency.p99',
+                    type: 'gauge',
+                    value: percentiles.p99,
+                    labels: { extensionId, stage }
+                });
+            }
+        }
+
+        for (const [extensionId, count] of Object.entries(allMetrics.rateLimitViolations || {})) {
+            metricsList.push({
+                name: 'ghost.rate_limit_violations.count',
+                type: 'counter',
+                value: count,
+                labels: { extensionId }
+            });
+        }
+
+        for (const [extensionId, reasons] of Object.entries(allMetrics.validationFailures || {})) {
+            for (const [reason, count] of Object.entries(reasons)) {
+                metricsList.push({
+                    name: 'ghost.validation_failures.count',
+                    type: 'counter',
+                    value: count,
+                    labels: { extensionId, reason }
+                });
+            }
+        }
+
+        for (const [extensionId, codes] of Object.entries(allMetrics.authFailures || {})) {
+            for (const [code, count] of Object.entries(codes)) {
+                metricsList.push({
+                    name: 'ghost.auth_failures.count',
+                    type: 'counter',
+                    value: count,
+                    labels: { extensionId, code }
+                });
+            }
+        }
+
+        for (const [extensionId, sizes] of Object.entries(allMetrics.intentSizes || {})) {
+            metricsList.push({
+                name: 'ghost.intent.request_size.avg',
+                type: 'gauge',
+                value: sizes.avgRequestSize,
+                labels: { extensionId }
+            });
+            metricsList.push({
+                name: 'ghost.intent.response_size.avg',
+                type: 'gauge',
+                value: sizes.avgResponseSize,
+                labels: { extensionId }
+            });
+        }
+
+        return metricsList;
+    }
+
+    _buildTracesPayload(spans) {
+        const scopeSpans = spans.map(span => ({
+            traceId: this._hexToBase64(span.traceId),
+            spanId: this._hexToBase64(span.spanId),
+            parentSpanId: span.parentSpanId ? this._hexToBase64(span.parentSpanId) : undefined,
+            name: span.name,
+            kind: 1,
+            startTimeUnixNano: String(span.startTime * 1000000),
+            endTimeUnixNano: span.endTime ? String(span.endTime * 1000000) : String(Date.now() * 1000000),
+            attributes: this._buildAttributes(span.attributes),
+            status: {
+                code: span.status.code === 'OK' ? 1 : span.status.code === 'ERROR' ? 2 : 0,
+                message: span.status.message || ''
+            },
+            events: (span.events || []).map(event => ({
+                timeUnixNano: String(event.timestamp * 1000000),
+                name: event.name,
+                attributes: this._buildAttributes(event.attributes || {})
+            }))
+        }));
+
+        return {
+            resourceSpans: [{
+                resource: {
+                    attributes: [
+                        { key: 'service.name', value: { stringValue: 'ghost-cli' } },
+                        { key: 'service.version', value: { stringValue: '1.0.0' } }
+                    ]
+                },
+                scopeSpans: [{
+                    scope: {
+                        name: 'ghost-telemetry',
+                        version: '1.0.0'
+                    },
+                    spans: scopeSpans
+                }]
+            }]
+        };
+    }
+
+    _buildMetricsPayload(metrics) {
+        const metricsByName = {};
+        
+        for (const metric of metrics) {
+            if (!metricsByName[metric.name]) {
+                metricsByName[metric.name] = [];
+            }
+            metricsByName[metric.name].push(metric);
+        }
+
+        const otlpMetrics = [];
+        const timeUnixNano = String(Date.now() * 1000000);
+
+        for (const [name, metricList] of Object.entries(metricsByName)) {
+            const firstMetric = metricList[0];
+            const dataPoints = metricList.map(m => ({
+                attributes: this._buildAttributes(m.labels || {}),
+                timeUnixNano,
+                asDouble: m.value
+            }));
+
+            const metricData = {
+                name,
+                unit: '',
+                [firstMetric.type === 'counter' ? 'sum' : 'gauge']: {
+                    dataPoints,
+                    aggregationTemporality: firstMetric.type === 'counter' ? 2 : undefined,
+                    isMonotonic: firstMetric.type === 'counter' ? true : undefined
+                }
+            };
+
+            otlpMetrics.push(metricData);
+        }
+
+        return {
+            resourceMetrics: [{
+                resource: {
+                    attributes: [
+                        { key: 'service.name', value: { stringValue: 'ghost-cli' } },
+                        { key: 'service.version', value: { stringValue: '1.0.0' } }
+                    ]
+                },
+                scopeMetrics: [{
+                    scope: {
+                        name: 'ghost-telemetry',
+                        version: '1.0.0'
+                    },
+                    metrics: otlpMetrics
+                }]
+            }]
+        };
+    }
+
+    _buildAttributes(attrs) {
+        return Object.entries(attrs).map(([key, value]) => {
+            const attr = { key };
+            
+            if (typeof value === 'string') {
+                attr.value = { stringValue: value };
+            } else if (typeof value === 'number') {
+                if (Number.isInteger(value)) {
+                    attr.value = { intValue: String(value) };
+                } else {
+                    attr.value = { doubleValue: value };
+                }
+            } else if (typeof value === 'boolean') {
+                attr.value = { boolValue: value };
+            } else {
+                attr.value = { stringValue: JSON.stringify(value) };
+            }
+            
+            return attr;
+        });
+    }
+
+    _hexToBase64(hex) {
+        if (!hex) return '';
+        const buffer = Buffer.from(hex.padStart(32, '0').substring(0, 32), 'hex');
+        return buffer.toString('base64');
+    }
+
+    async _sendToOTLP(path, payload) {
+        const endpoint = new URL(this.config.endpoint);
+        const fullPath = endpoint.pathname.replace(/\\/$/, '') + path;
+        
+        const postData = JSON.stringify(payload);
+        
+        const options = {
+            hostname: endpoint.hostname,
+            port: endpoint.port || (endpoint.protocol === 'https:' ? 443 : 80),
+            path: fullPath,
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Content-Length': Buffer.byteLength(postData),
+                ...this.config.headers
+            },
+            timeout: this.config.timeout
+        };
+
+        return new Promise((resolve, reject) => {
+            const client = endpoint.protocol === 'https:' ? https : http;
+            
+            const req = client.request(options, (res) => {
+                let data = '';
+                
+                res.on('data', (chunk) => {
+                    data += chunk;
+                });
+                
+                res.on('end', () => {
+                    if (res.statusCode >= 200 && res.statusCode < 300) {
+                        resolve({ statusCode: res.statusCode, body: data });
+                    } else {
+                        reject(new Error(\`OTLP export failed with status \${res.statusCode}: \${data}\`));
+                    }
+                });
+            });
+
+            req.on('error', (error) => {
+                reject(error);
+            });
+
+            req.on('timeout', () => {
+                req.destroy();
+                reject(new Error('OTLP export request timeout'));
+            });
+
+            req.write(postData);
+            req.end();
+        });
+    }
+
+    getStats() {
+        return {
+            isRunning: this.isRunning,
+            endpoint: this.config.endpoint,
+            interval: this.config.interval,
+            lastExportTime: this.lastExportTime,
+            exportCount: this.exportCount,
+            errorCount: this.errorCount
+        };
+    }
+}
+
+module.exports = OTLPExporter;
+`;
+        fs.writeFileSync(otlpPath, otlpContent);
+    }
+    
+    if (!fs.existsSync(prometheusPath)) {
+        const prometheusContent = `class PrometheusExporter {
+    constructor(metricsCollector, telemetry) {
+        this.metricsCollector = metricsCollector;
+        this.telemetry = telemetry;
+        this.enabled = false;
+    }
+
+    enable() {
+        this.enabled = true;
+        console.log('[PrometheusExporter] Prometheus metrics endpoint enabled at /metrics');
+    }
+
+    disable() {
+        this.enabled = false;
+    }
+
+    getMetricsText() {
+        if (!this.enabled) {
+            return '# Prometheus exporter is disabled\\n';
+        }
+
+        const allMetrics = this.metricsCollector.getMetrics();
+        const lines = [];
+
+        lines.push('# HELP ghost_requests_total Total number of requests by extension and stage');
+        lines.push('# TYPE ghost_requests_total counter');
+        for (const [extensionId, stages] of Object.entries(allMetrics.requests || {})) {
+            for (const [stage, count] of Object.entries(stages)) {
+                lines.push(\`ghost_requests_total{extensionId="\${this._escapeLabel(extensionId)}",stage="\${this._escapeLabel(stage)}"} \${count}\`);
+            }
+        }
+        lines.push('');
+
+        lines.push('# HELP ghost_request_latency_milliseconds Request latency percentiles in milliseconds');
+        lines.push('# TYPE ghost_request_latency_milliseconds gauge');
+        for (const [extensionId, stages] of Object.entries(allMetrics.latencies || {})) {
+            for (const [stage, percentiles] of Object.entries(stages)) {
+                lines.push(\`ghost_request_latency_milliseconds{extensionId="\${this._escapeLabel(extensionId)}",stage="\${this._escapeLabel(stage)}",quantile="0.5"} \${percentiles.p50}\`);
+                lines.push(\`ghost_request_latency_milliseconds{extensionId="\${this._escapeLabel(extensionId)}",stage="\${this._escapeLabel(stage)}",quantile="0.95"} \${percentiles.p95}\`);
+                lines.push(\`ghost_request_latency_milliseconds{extensionId="\${this._escapeLabel(extensionId)}",stage="\${this._escapeLabel(stage)}",quantile="0.99"} \${percentiles.p99}\`);
+            }
+        }
+        lines.push('');
+
+        lines.push('# HELP ghost_rate_limit_violations_total Total number of rate limit violations by extension');
+        lines.push('# TYPE ghost_rate_limit_violations_total counter');
+        for (const [extensionId, count] of Object.entries(allMetrics.rateLimitViolations || {})) {
+            lines.push(\`ghost_rate_limit_violations_total{extensionId="\${this._escapeLabel(extensionId)}"} \${count}\`);
+        }
+        lines.push('');
+
+        lines.push('# HELP ghost_validation_failures_total Total number of validation failures by extension and reason');
+        lines.push('# TYPE ghost_validation_failures_total counter');
+        for (const [extensionId, reasons] of Object.entries(allMetrics.validationFailures || {})) {
+            for (const [reason, count] of Object.entries(reasons)) {
+                lines.push(\`ghost_validation_failures_total{extensionId="\${this._escapeLabel(extensionId)}",reason="\${this._escapeLabel(reason)}"} \${count}\`);
+            }
+        }
+        lines.push('');
+
+        lines.push('# HELP ghost_auth_failures_total Total number of authentication failures by extension and code');
+        lines.push('# TYPE ghost_auth_failures_total counter');
+        for (const [extensionId, codes] of Object.entries(allMetrics.authFailures || {})) {
+            for (const [code, count] of Object.entries(codes)) {
+                lines.push(\`ghost_auth_failures_total{extensionId="\${this._escapeLabel(extensionId)}",code="\${this._escapeLabel(code)}"} \${count}\`);
+            }
+        }
+        lines.push('');
+
+        lines.push('# HELP ghost_intent_request_size_bytes Average request size in bytes by extension');
+        lines.push('# TYPE ghost_intent_request_size_bytes gauge');
+        for (const [extensionId, sizes] of Object.entries(allMetrics.intentSizes || {})) {
+            lines.push(\`ghost_intent_request_size_bytes{extensionId="\${this._escapeLabel(extensionId)}"} \${sizes.avgRequestSize}\`);
+        }
+        lines.push('');
+
+        lines.push('# HELP ghost_intent_response_size_bytes Average response size in bytes by extension');
+        lines.push('# TYPE ghost_intent_response_size_bytes gauge');
+        for (const [extensionId, sizes] of Object.entries(allMetrics.intentSizes || {})) {
+            lines.push(\`ghost_intent_response_size_bytes{extensionId="\${this._escapeLabel(extensionId)}"} \${sizes.avgResponseSize}\`);
+        }
+        lines.push('');
+
+        const recentSpans = this.telemetry.getRecentSpans(1000);
+        const spanCount = recentSpans.length;
+        lines.push('# HELP ghost_spans_collected_total Total number of spans currently collected');
+        lines.push('# TYPE ghost_spans_collected_total gauge');
+        lines.push(\`ghost_spans_collected_total \${spanCount}\`);
+        lines.push('');
+
+        lines.push('# HELP ghost_telemetry_server_info Telemetry server information');
+        lines.push('# TYPE ghost_telemetry_server_info gauge');
+        lines.push(\`ghost_telemetry_server_info{version="1.0.0"} 1\`);
+        lines.push('');
+
+        return lines.join('\\n');
+    }
+
+    _escapeLabel(value) {
+        if (typeof value !== 'string') {
+            value = String(value);
+        }
+        return value.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\"').replace(/\\n/g, '\\\\n');
+    }
+
+    isEnabled() {
+        return this.enabled;
+    }
+}
+
+module.exports = PrometheusExporter;
+`;
+        fs.writeFileSync(prometheusPath, prometheusContent);
+    }
+}
+
+_createExporterFiles();
 
 const SECRET_FIELDS = ['api_key', 'apiKey', 'token', 'password', 'secret', 'auth', 'authorization', 'credentials'];
 
@@ -649,6 +1158,24 @@ class TelemetryServer {
         this.spanDebounceDelay = 100;
         this.heartbeatInterval = null;
         this.heartbeatDelay = 30000;
+        this.exporters = {
+            otlp: null,
+            prometheus: null
+        };
+        this._loadExporterConfig();
+    }
+
+    _loadExporterConfig() {
+        try {
+            if (fs.existsSync(CONFIG_FILE)) {
+                const config = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf8'));
+                this.exporterConfig = config.exporters || {};
+            } else {
+                this.exporterConfig = {};
+            }
+        } catch (error) {
+            this.exporterConfig = {};
+        }
     }
 
     setGateway(gateway) {
@@ -669,13 +1196,41 @@ class TelemetryServer {
         });
 
         this._startHeartbeat();
+        this._initializeExporters();
 
         return this.server;
+    }
+
+    _initializeExporters() {
+        try {
+            const OTLPExporter = require('./exporters/otlp-exporter');
+            const PrometheusExporter = require('./exporters/prometheus-exporter');
+
+            if (this.exporterConfig.otlp && this.exporterConfig.otlp.endpoint) {
+                this.exporters.otlp = new OTLPExporter(
+                    this.exporterConfig.otlp,
+                    this.telemetry.metrics,
+                    this.telemetry
+                );
+                this.exporters.otlp.start();
+            }
+
+            if (this.exporterConfig.prometheus && this.exporterConfig.prometheus.enabled) {
+                this.exporters.prometheus = new PrometheusExporter(
+                    this.telemetry.metrics,
+                    this.telemetry
+                );
+                this.exporters.prometheus.enable();
+            }
+        } catch (error) {
+            console.error('[TelemetryServer] Failed to initialize exporters:', error.message);
+        }
     }
 
     stop() {
         if (this.server) {
             this._stopHeartbeat();
+            this._stopExporters();
             
             if (this.spanDebounceTimer) {
                 clearTimeout(this.spanDebounceTimer);
@@ -690,6 +1245,15 @@ class TelemetryServer {
             this.server.close(() => {
                 console.log('[TelemetryServer] Server stopped');
             });
+        }
+    }
+
+    _stopExporters() {
+        if (this.exporters.otlp) {
+            this.exporters.otlp.stop();
+        }
+        if (this.exporters.prometheus) {
+            this.exporters.prometheus.disable();
         }
     }
 
@@ -726,6 +1290,12 @@ class TelemetryServer {
         }
 
         if (req.url === '/metrics' || req.url.startsWith('/metrics/')) {
+            if (req.url === '/metrics' && this.exporters.prometheus && this.exporters.prometheus.isEnabled()) {
+                res.setHeader('Content-Type', 'text/plain; version=0.0.4');
+                res.writeHead(200);
+                res.end(this.exporters.prometheus.getMetricsText());
+                return;
+            }
             const extensionId = req.url.split('/')[2] || null;
             const metrics = this.telemetry.metrics.getMetrics(extensionId);
             res.writeHead(200);

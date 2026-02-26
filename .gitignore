@@ -153,3 +153,6 @@ isolate-*.log
 Heap-*.heapprofile
 profiling-output/
 *.heapsnapshot
+
+# Temporary helper scripts
+create-exporters.js

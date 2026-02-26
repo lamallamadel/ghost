@@ -1,0 +1,28 @@
+{
+  "workingDirectory": "/path/to/your/repo",
+  "gitEditor": "vim",
+  "telemetry": {
+    "enabled": true
+  },
+  "ai": {
+    "provider": "groq",
+    "apiKey": "your-api-key-here"
+  },
+  "exporters": {
+    "otlp": {
+      "endpoint": "http://localhost:4318",
+      "interval": 30000,
+      "headers": {
+        "Authorization": "Bearer your-token-here"
+      },
+      "timeout": 10000
+    },
+    "prometheus": {
+      "enabled": true
+    }
+  },
+  "logs": {
+    "maxFileSizeMB": 10,
+    "maxDailyFiles": 7
+  }
+}
