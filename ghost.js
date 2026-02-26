@@ -142,11 +142,39 @@ class GatewayLauncher {
         this.telemetryInstance = instrumented.telemetry;
         this.auditLogger = new AuditLogger(AUDIT_LOG_PATH);
 
+        // Initialize developer tools
+        const { DevMode } = require('./core/dev-mode');
+        const { ProfilingManager } = require('./core/profiler');
+        const { DebuggerManager } = require('./core/debugger-adapter');
+        
+        this.devMode = new DevMode({ enabled: false });
+        this.profilingManager = new ProfilingManager();
+        this.debuggerManager = new DebuggerManager();
+
+        // Wire dev mode into pipeline for bypass capabilities
+        this.pipeline.devMode = this.devMode;
+
         // Pure orchestration: wire up event handlers
         this._setupRuntimeEventHandlers();
+        this._setupDevModeHandlers();
 
         // Pure orchestration: delegate extension loading to Gateway
         await this._initializeExtensions();
+    }
+
+    _setupDevModeHandlers() {
+        if (!this.devMode) return;
+
+        this.devMode.on('mode-change', (data) => {
+            if (data.enabled) {
+                console.log(`${Colors.GREEN}✓${Colors.ENDC} Developer mode enabled`);
+                console.log(`${Colors.DIM}  - Rate limiting: disabled${Colors.ENDC}`);
+                console.log(`${Colors.DIM}  - Validation: relaxed${Colors.ENDC}`);
+                console.log(`${Colors.DIM}  - Hot reload: enabled${Colors.ENDC}`);
+            } else {
+                console.log(`${Colors.WARNING}Developer mode disabled${Colors.ENDC}`);
+            }
+        });
     }
 
     /**
@@ -651,16 +679,10 @@ class GatewayLauncher {
                 console.log('');
             }
         } else if (subcommand === 'init') {
-            // VIOLATION: Delegates to _scaffoldExtension which has direct fs operations
-            const extName = parsedArgs.args[0];
-            
-            if (!extName) {
-                console.error(`${Colors.FAIL}Error: Extension name required${Colors.ENDC}`);
-                console.log('Usage: ghost extension init <name>');
-                process.exit(1);
-            }
-
-            await this._scaffoldExtension(extName, parsedArgs.flags);
+            // Delegate to interactive template wizard for better UX
+            const TemplateWizard = require('./core/template-wizard');
+            const wizard = new TemplateWizard();
+            await wizard.run();
         } else if (subcommand === 'validate') {
             // VIOLATION: Delegates to _validateExtension which has direct fs operations
             const extPath = parsedArgs.args[0] || '.';
@@ -3006,7 +3028,17 @@ ${Colors.BOLD}SHELL COMPLETION:${Colors.ENDC}
         }
 
         try {
-            this.telemetryServer = this.telemetryInstance.startServer(port);
+            // Pass developer tools to telemetry server
+            const serverOptions = {
+                debuggerManager: this.debuggerManager,
+                profilingManager: this.profilingManager,
+                devMode: this.devMode,
+                runtime: this.runtime,
+                gateway: this.gateway,
+                pipeline: this.pipeline
+            };
+            
+            this.telemetryServer = this.telemetryInstance.startServer(port, serverOptions);
             console.log(`${Colors.GREEN}✓${Colors.ENDC} Telemetry server started on http://localhost:${port}`);
             console.log(`${Colors.DIM}  Available endpoints:${Colors.ENDC}`);
             console.log(`${Colors.DIM}    - GET  /health${Colors.ENDC}`);
@@ -3014,6 +3046,10 @@ ${Colors.BOLD}SHELL COMPLETION:${Colors.ENDC}
             console.log(`${Colors.DIM}    - GET  /metrics/<extension-id>${Colors.ENDC}`);
             console.log(`${Colors.DIM}    - GET  /spans${Colors.ENDC}`);
             console.log(`${Colors.DIM}    - GET  /logs?severity=<level>&limit=<n>${Colors.ENDC}`);
+            console.log(`${Colors.DIM}    - POST /api/debugger/<id>/attach${Colors.ENDC}`);
+            console.log(`${Colors.DIM}    - GET  /api/profiling/metrics${Colors.ENDC}`);
+            console.log(`${Colors.DIM}    - POST /api/playground/execute${Colors.ENDC}`);
+            console.log(`${Colors.DIM}    - POST /api/devmode/enable${Colors.ENDC}`);
             console.log(`${Colors.DIM}    - WebSocket upgrades supported${Colors.ENDC}`);
         } catch (error) {
             console.error(`${Colors.FAIL}Failed to start telemetry server: ${error.message}${Colors.ENDC}`);
@@ -3046,6 +3082,14 @@ ${Colors.BOLD}SHELL COMPLETION:${Colors.ENDC}
     async cleanup() {
         if (this.telemetryServer) {
             await this.stopTelemetryServer();
+        }
+        
+        if (this.profilingManager) {
+            this.profilingManager.shutdown();
+        }
+        
+        if (this.debuggerManager) {
+            this.debuggerManager.shutdown();
         }
         
         if (this.runtime) {

@@ -1146,7 +1146,7 @@ class MetricsCollector {
 }
 
 class TelemetryServer {
-    constructor(telemetry, port = 9876) {
+    constructor(telemetry, port = 9876, options = {}) {
         this.telemetry = telemetry;
         this.port = port;
         this.server = null;
@@ -1162,6 +1162,14 @@ class TelemetryServer {
             otlp: null,
             prometheus: null
         };
+        
+        // Developer tools
+        this.debuggerManager = options.debuggerManager || null;
+        this.profilingManager = options.profilingManager || null;
+        this.devMode = options.devMode || null;
+        this.runtime = options.runtime || null;
+        this.pipeline = options.pipeline || null;
+        
         this._loadExporterConfig();
     }
 
@@ -1333,8 +1341,224 @@ class TelemetryServer {
             return;
         }
 
+        // Developer tools endpoints
+        if (req.url.startsWith('/api/')) {
+            this._handleAPIRequest(req, res);
+            return;
+        }
+
         res.writeHead(404);
         res.end(JSON.stringify({ error: 'Not found' }));
+    }
+
+    _handleAPIRequest(req, res) {
+        let body = '';
+        
+        req.on('data', chunk => {
+            body += chunk.toString();
+        });
+
+        req.on('end', async () => {
+            try {
+                const parsedBody = body ? JSON.parse(body) : {};
+                await this._routeAPIRequest(req, res, parsedBody);
+            } catch (error) {
+                res.writeHead(400);
+                res.end(JSON.stringify({ error: 'Invalid JSON' }));
+            }
+        });
+    }
+
+    async _routeAPIRequest(req, res, body) {
+        const [, , resource, ...pathParts] = req.url.split('/');
+
+        // Debugger endpoints
+        if (resource === 'debugger') {
+            if (!this.debuggerManager) {
+                res.writeHead(503);
+                res.end(JSON.stringify({ error: 'Debugger not available' }));
+                return;
+            }
+
+            const extensionId = pathParts[0];
+            const action = pathParts[1];
+
+            if (req.method === 'GET' && !action) {
+                const dbg = this.debuggerManager.getDebugger(extensionId);
+                if (!dbg) {
+                    res.writeHead(200);
+                    res.end(JSON.stringify({ isAttached: false, inspectorUrl: null, debugPort: null, breakpoints: [], pid: null }));
+                    return;
+                }
+                res.writeHead(200);
+                res.end(JSON.stringify(dbg.getDebugInfo()));
+                return;
+            }
+
+            if (req.method === 'POST' && action === 'attach') {
+                try {
+                    const extensionProcess = this.runtime ? this.runtime.extensions.get(extensionId) : null;
+                    if (!extensionProcess) {
+                        res.writeHead(404);
+                        res.end(JSON.stringify({ error: 'Extension not found' }));
+                        return;
+                    }
+                    const result = await this.debuggerManager.attachDebugger(extensionId, extensionProcess);
+                    res.writeHead(200);
+                    res.end(JSON.stringify(result));
+                } catch (error) {
+                    res.writeHead(500);
+                    res.end(JSON.stringify({ error: error.message }));
+                }
+                return;
+            }
+
+            if (req.method === 'POST' && action === 'detach') {
+                this.debuggerManager.detachDebugger(extensionId);
+                res.writeHead(200);
+                res.end(JSON.stringify({ success: true }));
+                return;
+            }
+
+            if (req.method === 'POST' && action === 'breakpoint') {
+                const dbg = this.debuggerManager.getDebugger(extensionId);
+                if (!dbg) {
+                    res.writeHead(404);
+                    res.end(JSON.stringify({ error: 'Debugger not attached' }));
+                    return;
+                }
+                const { scriptPath, line, condition } = body;
+                const breakpoint = dbg.addBreakpoint(scriptPath, line, condition);
+                res.writeHead(200);
+                res.end(JSON.stringify(breakpoint));
+                return;
+            }
+
+            if (req.method === 'DELETE' && action === 'breakpoint') {
+                const dbg = this.debuggerManager.getDebugger(extensionId);
+                const breakpointId = pathParts[2];
+                if (!dbg) {
+                    res.writeHead(404);
+                    res.end(JSON.stringify({ error: 'Debugger not attached' }));
+                    return;
+                }
+                const removed = dbg.removeBreakpoint(breakpointId);
+                res.writeHead(200);
+                res.end(JSON.stringify({ success: removed }));
+                return;
+            }
+        }
+
+        // Profiling endpoints
+        if (resource === 'profiling') {
+            if (!this.profilingManager) {
+                res.writeHead(503);
+                res.end(JSON.stringify({ error: 'Profiling not available' }));
+                return;
+            }
+
+            if (pathParts[0] === 'metrics') {
+                const metrics = this.profilingManager.getAllMetrics();
+                res.writeHead(200);
+                res.end(JSON.stringify(metrics));
+                return;
+            }
+
+            if (pathParts[0] === 'flamegraph') {
+                const extensionId = pathParts[1];
+                const profiler = this.profilingManager.getProfiler(extensionId);
+                if (!profiler) {
+                    res.writeHead(404);
+                    res.end(JSON.stringify({ error: 'Profiler not found' }));
+                    return;
+                }
+                const flamegraph = profiler.generateFlamegraph();
+                res.writeHead(200);
+                res.end(JSON.stringify(flamegraph));
+                return;
+            }
+
+            if (req.method === 'POST' && pathParts[0] === 'reset') {
+                const extensionId = pathParts[1];
+                this.profilingManager.reset(extensionId);
+                res.writeHead(200);
+                res.end(JSON.stringify({ success: true }));
+                return;
+            }
+        }
+
+        // Playground endpoints
+        if (resource === 'playground') {
+            if (req.method === 'POST' && pathParts[0] === 'validate') {
+                const { extensionId, intent } = body;
+                
+                const errors = [];
+                if (!intent.type) errors.push({ field: 'type', message: 'Intent type is required' });
+                if (!intent.operation) errors.push({ field: 'operation', message: 'Operation is required' });
+                if (!intent.params) errors.push({ field: 'params', message: 'Parameters are required' });
+
+                if (errors.length > 0) {
+                    res.writeHead(200);
+                    res.end(JSON.stringify({ success: false, validationErrors: errors }));
+                    return;
+                }
+
+                res.writeHead(200);
+                res.end(JSON.stringify({ success: true, message: 'Intent is valid' }));
+                return;
+            }
+
+            if (req.method === 'POST' && pathParts[0] === 'execute') {
+                if (!this.pipeline) {
+                    res.writeHead(503);
+                    res.end(JSON.stringify({ error: 'Pipeline not available' }));
+                    return;
+                }
+
+                try {
+                    const { extensionId, intent } = body;
+                    const result = await this.pipeline.process(intent, { extensionId });
+                    res.writeHead(200);
+                    res.end(JSON.stringify({ success: true, result }));
+                } catch (error) {
+                    res.writeHead(500);
+                    res.end(JSON.stringify({ success: false, error: error.message }));
+                }
+                return;
+            }
+        }
+
+        // Dev mode endpoints
+        if (resource === 'devmode') {
+            if (!this.devMode) {
+                res.writeHead(503);
+                res.end(JSON.stringify({ error: 'Dev mode not available' }));
+                return;
+            }
+
+            if (req.method === 'GET' && pathParts[0] === 'status') {
+                res.writeHead(200);
+                res.end(JSON.stringify(this.devMode.getConfig()));
+                return;
+            }
+
+            if (req.method === 'POST' && pathParts[0] === 'enable') {
+                this.devMode.enable();
+                res.writeHead(200);
+                res.end(JSON.stringify({ success: true, enabled: true }));
+                return;
+            }
+
+            if (req.method === 'POST' && pathParts[0] === 'disable') {
+                this.devMode.disable();
+                res.writeHead(200);
+                res.end(JSON.stringify({ success: true, enabled: false }));
+                return;
+            }
+        }
+
+        res.writeHead(404);
+        res.end(JSON.stringify({ error: 'API endpoint not found' }));
     }
 
     _handleWebSocketUpgrade(req, socket, head) {
@@ -1742,13 +1966,13 @@ class Telemetry {
         return this.spans.slice(-limit).map(span => span.toJSON());
     }
 
-    startServer(port = 9876) {
+    startServer(port = 9876, options = {}) {
         if (this.server) {
             console.warn('[Telemetry] Server already running');
             return this.server;
         }
 
-        this.server = new TelemetryServer(this, port);
+        this.server = new TelemetryServer(this, port, options);
         return this.server.start();
     }
 

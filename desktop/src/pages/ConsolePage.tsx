@@ -13,6 +13,7 @@ import { GatewayTab } from '@/tabs/GatewayTab'
 import { ExtensionsTab } from '@/tabs/ExtensionsTab'
 import { ExtensionManagerTab } from '@/tabs/ExtensionManagerTab'
 import { MarketplaceTab } from '@/tabs/MarketplaceTab'
+import { DeveloperTab } from '@/tabs/DeveloperTab'
 import { useToastsStore } from '@/stores/useToastsStore'
 import { OnboardingWalkthrough } from '@/components/OnboardingWalkthrough'
 
@@ -180,6 +181,7 @@ export default function ConsolePage() {
             {activeTab.kind === 'history' ? <HistoryTab /> : null}
             {activeTab.kind === 'git' ? <GitTab /> : null}
             {activeTab.kind === 'logs' ? <LogsTab /> : null}
+            {activeTab.kind === 'developer' ? <DeveloperTab extensions={[]} /> : null}
           </div>
         </div>
       </div>
