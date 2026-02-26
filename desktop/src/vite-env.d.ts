@@ -14,6 +14,7 @@ declare global {
       appInfo: () => Promise<unknown>
       gatewayState: () => Promise<unknown>
       manualOverride: (req: unknown) => Promise<unknown>
+      reloadExtension: (extensionId: string) => Promise<unknown>
     }
   }
 }

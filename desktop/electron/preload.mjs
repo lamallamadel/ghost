@@ -12,5 +12,6 @@ contextBridge.exposeInMainWorld('ghost', {
   appInfo: () => ipcRenderer.invoke('app.info'),
   gatewayState: () => ipcRenderer.invoke('gateway.state'),
   manualOverride: (req) => ipcRenderer.invoke('gateway.manualOverride', req),
+  reloadExtension: (extensionId) => ipcRenderer.invoke('gateway.reloadExtension', { extensionId }),
 })
 

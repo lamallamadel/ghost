@@ -15,6 +15,7 @@ import type {
   LogsListResult,
   ManualOverrideRequest,
   ManualOverrideResult,
+  ReloadExtensionResult,
   RepoSelectResult,
 } from './types'
 
@@ -56,5 +57,8 @@ export const ghost = {
   },
   manualOverride(req: ManualOverrideRequest): Promise<ManualOverrideResult> {
     return ensure().manualOverride(req) as Promise<ManualOverrideResult>
+  },
+  reloadExtension(extensionId: string): Promise<ReloadExtensionResult> {
+    return ensure().reloadExtension(extensionId) as Promise<ReloadExtensionResult>
   },
 }

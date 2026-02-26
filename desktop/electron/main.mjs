@@ -302,6 +302,76 @@ app.whenReady().then(() => {
       auditLogId
     }
   })
+
+  ipcMain.handle('gateway.reloadExtension', async (_, { extensionId }) => {
+    const ghostCliPath = path.join(__dirname, '..', '..', 'ghost.js')
+    
+    try {
+      store.addLog({ 
+        ts: nowIso(), 
+        level: 'info', 
+        scope: 'command', 
+        message: 'gateway.reloadExtension', 
+        data: { extensionId } 
+      })
+
+      const { createRequire } = await import('module')
+      const require = createRequire(import.meta.url)
+      
+      const Gateway = require('../../core/gateway.js')
+      
+      const gateway = new Gateway({
+        bundledExtensionsDir: path.join(__dirname, '..', '..', 'extensions')
+      })
+      
+      await gateway.initialize()
+      
+      const ext = gateway.getExtension(extensionId)
+      
+      if (!ext) {
+        store.addLog({ 
+          ts: nowIso(), 
+          level: 'error', 
+          scope: 'command', 
+          message: 'gateway.reloadExtension.notFound', 
+          data: { extensionId } 
+        })
+        return {
+          success: false,
+          error: `Extension ${extensionId} introuvable`
+        }
+      }
+
+      gateway.unloadExtension(extensionId)
+      
+      await gateway.initialize()
+      
+      store.addLog({ 
+        ts: nowIso(), 
+        level: 'info', 
+        scope: 'command', 
+        message: 'gateway.reloadExtension.success', 
+        data: { extensionId } 
+      })
+      
+      return {
+        success: true
+      }
+    } catch (error) {
+      store.addLog({ 
+        ts: nowIso(), 
+        level: 'error', 
+        scope: 'command', 
+        message: 'gateway.reloadExtension.error', 
+        data: { extensionId, error: error.message } 
+      })
+      
+      return {
+        success: false,
+        error: error.message
+      }
+    }
+  })
 })
 
 app.on('window-all-closed', () => {

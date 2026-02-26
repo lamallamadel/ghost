@@ -11,6 +11,7 @@ import { GitTab } from '@/tabs/GitTab'
 import { LogsTab } from '@/tabs/LogsTab'
 import { GatewayTab } from '@/tabs/GatewayTab'
 import { ExtensionsTab } from '@/tabs/ExtensionsTab'
+import { ExtensionManagerTab } from '@/tabs/ExtensionManagerTab'
 import { useToastsStore } from '@/stores/useToastsStore'
 
 function TabButton({
@@ -163,6 +164,7 @@ export default function ConsolePage() {
             {activeTab.kind === 'commands' ? <CommandsTab tabId={activeTab.id} /> : null}
             {activeTab.kind === 'gateway' ? <GatewayTab /> : null}
             {activeTab.kind === 'extensions' ? <ExtensionsTab /> : null}
+            {activeTab.kind === 'extension-manager' ? <ExtensionManagerTab /> : null}
             {activeTab.kind === 'history' ? <HistoryTab /> : null}
             {activeTab.kind === 'git' ? <GitTab /> : null}
             {activeTab.kind === 'logs' ? <LogsTab /> : null}

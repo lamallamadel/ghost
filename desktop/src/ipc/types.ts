@@ -221,3 +221,8 @@ export type ManualOverrideResult = {
   auditLogId?: string
   reason?: string
 }
+
+export type ReloadExtensionResult = {
+  success: boolean
+  error?: string
+}
