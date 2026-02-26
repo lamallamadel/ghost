@@ -1,0 +1,303 @@
+{
+  "dashboard": {
+    "title": "Ghost CLI - SLO Dashboard",
+    "tags": ["ghost", "slo", "error-budget"],
+    "timezone": "browser",
+    "schemaVersion": 27,
+    "version": 1,
+    "refresh": "30s",
+    "panels": [
+      {
+        "id": 1,
+        "title": "Error Budget Consumption",
+        "type": "graph",
+        "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+        "targets": [
+          {
+            "expr": "(ghost_error_budget_consumed / ghost_error_budget_total) * 100",
+            "legendFormat": "{{objective}} - Budget Consumed %",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          { "format": "percent", "min": 0, "max": 100 }
+        ],
+        "alert": {
+          "name": "Error Budget Critical",
+          "conditions": [
+            {
+              "evaluator": { "type": "gt", "params": [90] },
+              "operator": { "type": "and" },
+              "query": { "params": ["A", "5m", "now"] },
+              "reducer": { "type": "avg" },
+              "type": "query"
+            }
+          ]
+        }
+      },
+      {
+        "id": 2,
+        "title": "Availability SLO",
+        "type": "stat",
+        "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+        "targets": [
+          {
+            "expr": "100 - (rate(ghost_requests_total{status='error'}[5m]) / rate(ghost_requests_total[5m]) * 100)",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "graphMode": "area",
+          "colorMode": "value",
+          "textMode": "value_and_name",
+          "reduceOptions": { "calcs": ["lastNotNull"] }
+        },
+        "thresholds": {
+          "mode": "absolute",
+          "steps": [
+            { "value": 0, "color": "red" },
+            { "value": 99.5, "color": "yellow" },
+            { "value": 99.9, "color": "green" }
+          ]
+        }
+      },
+      {
+        "id": 3,
+        "title": "P95 Latency SLO",
+        "type": "stat",
+        "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(ghost_request_latency_milliseconds_bucket[5m]))",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "graphMode": "area",
+          "colorMode": "value",
+          "textMode": "value_and_name",
+          "reduceOptions": { "calcs": ["lastNotNull"] }
+        },
+        "thresholds": {
+          "mode": "absolute",
+          "steps": [
+            { "value": 0, "color": "green" },
+            { "value": 200, "color": "yellow" },
+            { "value": 500, "color": "red" }
+          ]
+        },
+        "unit": "ms"
+      },
+      {
+        "id": 4,
+        "title": "Error Rate SLO",
+        "type": "stat",
+        "gridPos": { "x": 12, "y": 4, "w": 6, "h": 4 },
+        "targets": [
+          {
+            "expr": "(rate(ghost_validation_failures_total[5m]) + rate(ghost_auth_failures_total[5m])) / rate(ghost_requests_total[5m]) * 100",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "graphMode": "area",
+          "colorMode": "value",
+          "textMode": "value_and_name",
+          "reduceOptions": { "calcs": ["lastNotNull"] }
+        },
+        "thresholds": {
+          "mode": "absolute",
+          "steps": [
+            { "value": 0, "color": "green" },
+            { "value": 1, "color": "yellow" },
+            { "value": 5, "color": "red" }
+          ]
+        },
+        "unit": "percent"
+      },
+      {
+        "id": 5,
+        "title": "Burn Rate - Fast Window (1h)",
+        "type": "graph",
+        "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+        "targets": [
+          {
+            "expr": "(rate(ghost_requests_total{status='error'}[1h]) / rate(ghost_requests_total[1h])) / (1 - 0.999)",
+            "legendFormat": "Fast Burn Rate",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          { "format": "none", "label": "Burn Rate" }
+        ],
+        "thresholds": [
+          { "value": 14.4, "colorMode": "critical", "op": "gt", "fill": true, "line": true }
+        ]
+      },
+      {
+        "id": 6,
+        "title": "Burn Rate - Slow Window (6h)",
+        "type": "graph",
+        "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+        "targets": [
+          {
+            "expr": "(rate(ghost_requests_total{status='error'}[6h]) / rate(ghost_requests_total[6h])) / (1 - 0.999)",
+            "legendFormat": "Slow Burn Rate",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          { "format": "none", "label": "Burn Rate" }
+        ],
+        "thresholds": [
+          { "value": 6.0, "colorMode": "critical", "op": "gt", "fill": true, "line": true }
+        ]
+      },
+      {
+        "id": 7,
+        "title": "Request Rate",
+        "type": "graph",
+        "gridPos": { "x": 0, "y": 16, "w": 8, "h": 6 },
+        "targets": [
+          {
+            "expr": "rate(ghost_requests_total[5m])",
+            "legendFormat": "{{extensionId}} - {{stage}}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          { "format": "reqps", "label": "Requests/sec" }
+        ]
+      },
+      {
+        "id": 8,
+        "title": "Latency Percentiles",
+        "type": "graph",
+        "gridPos": { "x": 8, "y": 16, "w": 8, "h": 6 },
+        "targets": [
+          {
+            "expr": "ghost_request_latency_milliseconds{quantile='0.5'}",
+            "legendFormat": "p50",
+            "refId": "A"
+          },
+          {
+            "expr": "ghost_request_latency_milliseconds{quantile='0.95'}",
+            "legendFormat": "p95",
+            "refId": "B"
+          },
+          {
+            "expr": "ghost_request_latency_milliseconds{quantile='0.99'}",
+            "legendFormat": "p99",
+            "refId": "C"
+          }
+        ],
+        "yaxes": [
+          { "format": "ms", "label": "Latency" }
+        ]
+      },
+      {
+        "id": 9,
+        "title": "Rate Limit Violations",
+        "type": "graph",
+        "gridPos": { "x": 16, "y": 16, "w": 8, "h": 6 },
+        "targets": [
+          {
+            "expr": "rate(ghost_rate_limit_violations_total[5m])",
+            "legendFormat": "{{extensionId}}",
+            "refId": "A"
+          }
+        ],
+        "yaxes": [
+          { "format": "ops", "label": "Violations/sec" }
+        ]
+      },
+      {
+        "id": 10,
+        "title": "Active Alerts",
+        "type": "table",
+        "gridPos": { "x": 0, "y": 22, "w": 12, "h": 6 },
+        "targets": [
+          {
+            "expr": "ALERTS{alertname=~'.*SLO.*|.*ErrorBudget.*'}",
+            "format": "table",
+            "refId": "A"
+          }
+        ],
+        "transformations": [
+          {
+            "id": "organize",
+            "options": {
+              "excludeByName": {},
+              "indexByName": {},
+              "renameByName": {
+                "alertname": "Alert",
+                "alertstate": "State",
+                "severity": "Severity"
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": 11,
+        "title": "SLO Compliance Summary",
+        "type": "stat",
+        "gridPos": { "x": 12, "y": 22, "w": 12, "h": 6 },
+        "targets": [
+          {
+            "expr": "count(ghost_slo_compliance{status='met'}) / count(ghost_slo_compliance)",
+            "refId": "A"
+          }
+        ],
+        "options": {
+          "graphMode": "none",
+          "colorMode": "background",
+          "textMode": "value_and_name",
+          "reduceOptions": { "calcs": ["lastNotNull"] }
+        },
+        "thresholds": {
+          "mode": "absolute",
+          "steps": [
+            { "value": 0, "color": "red" },
+            { "value": 0.8, "color": "yellow" },
+            { "value": 0.95, "color": "green" }
+          ]
+        },
+        "unit": "percentunit"
+      }
+    ],
+    "templating": {
+      "list": [
+        {
+          "name": "datasource",
+          "type": "datasource",
+          "query": "prometheus"
+        },
+        {
+          "name": "extension",
+          "type": "query",
+          "datasource": "$datasource",
+          "query": "label_values(ghost_requests_total, extensionId)",
+          "multi": true,
+          "includeAll": true
+        }
+      ]
+    },
+    "annotations": {
+      "list": [
+        {
+          "name": "Deployments",
+          "datasource": "$datasource",
+          "expr": "changes(ghost_telemetry_server_info[1m]) > 0",
+          "iconColor": "blue"
+        },
+        {
+          "name": "Incidents",
+          "datasource": "$datasource",
+          "expr": "ALERTS{alertstate='firing', severity='critical'}",
+          "iconColor": "red"
+        }
+      ]
+    }
+  }
+}
