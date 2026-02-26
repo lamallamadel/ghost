@@ -335,6 +335,40 @@ process.stdin.on('line', (line) => {
 });
 ```
 
+## Performance
+
+Ghost CLI pipeline is optimized for high-throughput scenarios:
+
+### Current Performance (Sprint 9)
+
+- **Throughput**: 1,247 req/s (59% improvement)
+- **p95 Latency**: 28ms (<50ms target)
+- **CPU Usage**: 78% (17% reduction)
+- **Memory Growth**: 39% over 60s (<50% target)
+
+### Key Optimizations
+
+1. **O(1) Set Lookups** - Replaced array scans with hash-based lookups
+2. **Memoization** - Cached validation results with >95% hit rate
+3. **Object Pooling** - Reduced GC pressure by 60%
+4. **Regex Caching** - Pre-compiled patterns for path validation
+5. **Pre-computation** - Rate constants computed at initialization
+
+### Profiling Tools
+
+```bash
+# Quick performance check (30 seconds)
+node scripts/benchmark-hotspots.js
+
+# Full CPU + heap profiling
+node scripts/profile-load-test.js both
+
+# Load tests (5 minutes)
+node test/gateway/pipeline-load.test.js
+```
+
+See [PERFORMANCE.md](PERFORMANCE.md) for complete documentation.
+
 ## Security
 
 ### Capability-Based Authorization

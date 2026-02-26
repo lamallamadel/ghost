@@ -3,8 +3,17 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { IOPipeline } = require('../../core/pipeline');
+const { performance } = require('perf_hooks');
 
 console.log('🧪 Gateway Pipeline Load Test Suite - High Traffic API Scenarios\n');
+
+// Profiling metadata
+const PROFILING_ENABLED = process.env.GHOST_PROFILE === '1';
+const profilingData = {
+    intentSchemaValidate: [],
+    tokenBucketClassify: [],
+    pathValidatorIsPathAllowed: []
+};
 
 const testDir = path.join(os.tmpdir(), 'ghost-load-test');
 if (!fs.existsSync(testDir)) {

@@ -147,3 +147,9 @@ vite.config.ts.timestamp-*
 
 # Test temporary directories
 test/temp_ghostignore_test/
+
+# Profiling output (Node.js V8 profiler)
+isolate-*.log
+Heap-*.heapprofile
+profiling-output/
+*.heapsnapshot
