@@ -3,6 +3,8 @@
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
+const pkg = require('./package.json');
+const VERSION = pkg.version;
 const Gateway = require('./core/gateway');
 const { ExtensionRuntime } = require('./core/runtime');
 const { IOPipeline, instrumentPipeline } = require('./core/pipeline');
@@ -184,6 +186,7 @@ class GatewayLauncher {
      * ORCHESTRATION ROLE:
      * - Call Gateway.initialize() to load extensions
      * - Register each extension's manifest with the pipeline
+     * - Initialize extension instances with core RPC handler
      * - No direct business logic, only metadata operations
      */
     async _initializeExtensions() {
@@ -196,10 +199,85 @@ class GatewayLauncher {
             
             if (fullExt && fullExt.manifest) {
                 this.pipeline.registerExtension(ext.id, fullExt.manifest);
+
+                // Pure orchestration: Initialize instance with core handler if it supports it
+                if (fullExt.instance && typeof fullExt.instance.init === 'function') {
+                    await fullExt.instance.init({
+                        coreHandler: async (request) => {
+                            // Bridge from extension back to the core pipeline
+                            return await this.forwardIntent(ext.id, request);
+                        }
+                    });
+                }
             }
         }
         
         return result;
+    }
+
+    /**
+     * Forward an intent from an extension to the security pipeline.
+     */
+    async forwardIntent(extensionId, request) {
+        // Pure orchestration: delegate to pipeline
+        // The pipeline.process expects a "raw message" or intent object.
+        // We'll wrap the extension's request into the pipeline's expected format.
+        const pipelineMessage = {
+            extensionId,
+            ...request
+        };
+
+        try {
+            const pipelineResult = await this.pipeline.process(pipelineMessage);
+            
+            if (pipelineResult.success) {
+                return {
+                    jsonrpc: "2.0",
+                    id: request.id,
+                    result: pipelineResult.result
+                };
+            } else {
+                return {
+                    jsonrpc: "2.0",
+                    id: request.id,
+                    error: {
+                        code: this._mapPipelineErrorToCode(pipelineResult.code),
+                        message: pipelineResult.error,
+                        data: {
+                            stage: pipelineResult.stage,
+                            code: pipelineResult.code,
+                            violations: pipelineResult.violations
+                        }
+                    }
+                };
+            }
+        } catch (error) {
+            return {
+                jsonrpc: "2.0",
+                id: request.id,
+                error: {
+                    code: -32603,
+                    message: error.message
+                }
+            };
+        }
+    }
+
+    /**
+     * Map pipeline error codes to JSON-RPC error codes.
+     */
+    _mapPipelineErrorToCode(pipelineCode) {
+        switch (pipelineCode) {
+            case 'AUTHORIZATION_DENIED':
+            case 'AUTH_PERMISSION_DENIED':
+                return -32001; // Custom: Authorization error
+            case 'AUTH_RATE_LIMIT':
+                return -32002; // Custom: Rate limit error
+            case 'AUDIT_FAILED':
+                return -32003; // Custom: Audit error
+            default:
+                return -32603; // Internal error
+        }
     }
 
     /**
@@ -316,6 +394,8 @@ class GatewayLauncher {
             await this.handleGatewayCommand(parsedArgs);
         } else if (parsedArgs.command === 'audit-log') {
             await this.handleAuditLogCommand(parsedArgs);
+        } else if (parsedArgs.command === 'audit') {
+            await this.handleAuditCommand(parsedArgs);
         } else if (parsedArgs.command === 'console') {
             await this.handleConsoleCommand(parsedArgs);
         } else if (parsedArgs.command === 'doctor') {
@@ -1560,6 +1640,20 @@ complete -c ghost -l help -s h -d "Show help message"`);
     }
 
     /**
+     * Handle security audit command.
+     * 
+     * ORCHESTRATION ROLE:
+     * - Delegate to ghost-git-extension for full repository scan
+     * - Format and display findings (secrets, vulnerabilities)
+     * - Exit with non-zero if issues found (unless --force)
+     */
+    async handleAuditCommand(parsedArgs) {
+        // forwardToExtension will handle the routing and the primary output
+        // We call it but we might want to handle the result success state specifically
+        await this.forwardToExtension(parsedArgs);
+    }
+
+    /**
      * Handle audit log viewing commands.
      * 
      * ORCHESTRATION ROLE: Correct implementation
@@ -2366,7 +2460,7 @@ complete -c ghost -l help -s h -d "Show help message"`);
         const manifest = {
             id: extId,
             name: name,
-            version: '1.0.0',
+            version: VERSION,
             description: `${name} extension for Ghost CLI`,
             author: flags.author || 'Your Name',
             main: 'index.js',
@@ -2705,7 +2799,7 @@ export = ${className}Extension;
 
         const packageJson = {
             name: extId,
-            version: '1.0.0',
+            version: VERSION,
             description: `${name} extension for Ghost CLI`,
             main: 'index.js',
             types: 'index.d.ts',
@@ -3146,7 +3240,7 @@ See [Extension API Documentation](https://github.com/lamallamadel/ghost/blob/mai
         // Get dynamically available extension commands
         const extensionCommands = this._getAllAvailableCommands();
         console.log(`
-${Colors.BOLD}${Colors.CYAN}GHOST CLI v0.4.0${Colors.ENDC} - Gateway Launcher
+${Colors.BOLD}${Colors.CYAN}GHOST CLI v${VERSION}${Colors.ENDC} - Gateway Launcher
 Zero-dependency Git assistant with extensible architecture
 
 ${Colors.BOLD}USAGE:${Colors.ENDC}

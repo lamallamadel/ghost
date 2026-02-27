@@ -24,7 +24,7 @@ NC='\033[0m' # No Color
 # Banner
 echo -e "${CYAN}${BOLD}"
 echo "╔════════════════════════════════════════════╗"
-echo "║         Ghost CLI Installer v0.4.0         ║"
+echo "║         Ghost CLI Installer v1.0.0         ║"
 echo "║   Extensible Gateway-based Git Assistant   ║"
 echo "╚════════════════════════════════════════════╝"
 echo -e "${NC}"

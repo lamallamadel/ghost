@@ -1,4 +1,4 @@
-# Ghost Gateway Architecture Overview
+# Ghost CLI v1.0.0 Gateway Architecture Overview
 
 ## Introduction
 

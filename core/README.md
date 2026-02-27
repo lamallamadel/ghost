@@ -1,4 +1,4 @@
-# Ghost Gateway Architecture
+# Ghost CLI v1.0.0 Gateway Architecture
 
 This directory contains the core Ghost gateway architecture for extension management.
 

@@ -287,10 +287,10 @@ class PathValidator {
         }
 
         if (this.allowedPatterns.length > 0) {
-            if (this.matchesAnyPattern(relativePath, this.allowedPatterns)) {
+            if (relativePath === '' || this.matchesAnyPattern(relativePath, this.allowedPatterns)) {
                 result = {
                     allowed: true,
-                    reason: 'Path matches allowed pattern'
+                    reason: 'Path matches allowed pattern or is root directory'
                 };
                 this._cacheValidationResult(inputPath, result);
                 return result;

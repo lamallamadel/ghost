@@ -1,4 +1,4 @@
-# Ghost Extension Developer Toolkit
+# Ghost CLI v1.0.0 Extension Developer Toolkit
 
 Complete guide to the Ghost CLI extension developer toolkit.
 

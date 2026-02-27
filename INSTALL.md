@@ -196,7 +196,7 @@ where.exe ghost      # Windows
 ghost --help | head -n 1
 ```
 
-Should display: `GHOST CLI v0.4.0 - Gateway Launcher`
+Should display: `GHOST CLI v1.0.0 - Gateway Launcher`
 
 ### Check Directory Structure
 

@@ -8,12 +8,12 @@ console.log('🧪 Running Ghost CLI Tests...\n');
 try {
     // Test 1: Version check
     const packageJson = require('./package.json');
-    assert.strictEqual(packageJson.version, '0.4.0', 'package.json version should be 0.4.0');
+    assert.strictEqual(packageJson.version, '1.0.0', 'package.json version should be 1.0.0');
     console.log('✅ Test 1: package.json version is correct');
 
     // Test 2: Help flag
     const helpOutput = execSync('node ghost.js --help', { encoding: 'utf8' });
-    assert.ok(helpOutput.includes('GHOST CLI v0.4.0'), 'Help output should contain version');
+    assert.ok(helpOutput.includes(`GHOST CLI v${packageJson.version}`), `Help output should contain version v${packageJson.version}`);
     assert.ok(helpOutput.includes('Gateway'), 'Help output should contain Gateway');
     assert.ok(helpOutput.includes('extension'), 'Help output should contain extension command');
     assert.ok(helpOutput.includes('gateway'), 'Help output should contain gateway command');

@@ -1,4 +1,4 @@
-# @ghost/extension-sdk
+# @ghost/extension-sdk v1.0.0
 
 Official SDK for building Ghost CLI extensions with typed JSON-RPC helpers.
 

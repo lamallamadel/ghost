@@ -8,6 +8,16 @@
 
 const path = require('path');
 
+const Colors = {
+    GREEN: '\x1b[32m',
+    WARNING: '\x1b[33m',
+    FAIL: '\x1b[31m',
+    CYAN: '\x1b[36m',
+    BOLD: '\x1b[1m',
+    DIM: '\x1b[2m',
+    ENDC: '\x1b[0m'
+};
+
 class ExtensionRPCClient {
     constructor(coreHandler) {
         this.coreHandler = coreHandler || this.defaultHandler;
@@ -20,33 +30,97 @@ class ExtensionRPCClient {
 
     async call(method, params = {}) {
         const id = ++this.requestId;
-        const request = {
-            jsonrpc: "2.0",
-            id,
-            method,
-            params
-        };
+        
+        // Check if this is a standard capability call that should be wrapped as an intent
+        const capabilityMethods = ['filesystem', 'network', 'git', 'process', 'ui', 'log'];
+        let request;
+        
+        if (capabilityMethods.includes(method)) {
+            request = {
+                jsonrpc: "2.0",
+                id,
+                method: 'intent',
+                params: {
+                    type: method,
+                    operation: params.operation,
+                    params: params.params || params
+                }
+            };
+        } else {
+            request = {
+                jsonrpc: "2.0",
+                id,
+                method,
+                params
+            };
+        }
 
         const response = await this.coreHandler(request);
         
         if (response.error) {
-            throw new Error(`RPC Error (${response.error.code}): ${response.error.message}`);
+            let errorMsg = `RPC Error (${response.error.code}): ${response.error.message}`;
+            if (response.error.data && response.error.data.violations) {
+                errorMsg += '\\nViolations:\\n' + JSON.stringify(response.error.data.violations, null, 2);
+            }
+            throw new Error(errorMsg);
         }
         
         return response.result;
     }
 
+    async readFile(path, options = {}) {
+        const result = await this.call('filesystem', { operation: 'read', params: { path, ...options } });
+        let content = result && result.content !== undefined ? result.content : result;
+        if (content && typeof content === 'object' && content.type === 'Buffer') {
+            content = Buffer.from(content.data).toString(options.encoding || 'utf8');
+        } else if (typeof content !== 'string') {
+            content = String(content);
+        }
+        return content;
+    }
+
+    async readDir(path, options = {}) {
+        return await this.call('filesystem', { operation: 'readdir', params: { path, ...options } });
+    }
+
+    async writeFile(path, content, options = {}) {
+        const result = await this.call('filesystem', { operation: 'write', params: { path, content, ...options } });
+        return result && result.path !== undefined ? result.path : result;
+    }
+
+    async gitExec(args) {
+        if (!args || args.length === 0) {
+            throw new Error('gitExec requires at least one argument');
+        }
+        const operation = args[0];
+        const remainingArgs = args.slice(1);
+        const result = await this.call('git', { operation: operation, params: { args: remainingArgs } });
+        return result && result.stdout !== undefined ? result.stdout : result;
+    }
+
+    async log(level, message, meta = {}) {
+        console.log("[" + level.toUpperCase() + "] " + message, Object.keys(meta).length ? meta : "");
+        return { success: true };
+    }
+
+    async promptUser(question) {
+        console.log("[PROMPT] " + question);
+        return "";
+    }
+
     async emitIntent(type, operation, params) {
-        const intent = {
-            type,
-            operation,
-            params
-        };
-        return await this.call('intent', intent);
+        return await this.call(type, { operation, params });
     }
 
     async requestFileRead(path, encoding = 'utf8') {
-        return await this.emitIntent('filesystem', 'read', { path, encoding });
+        const result = await this.emitIntent('filesystem', 'read', { path, encoding });
+        let content = result && result.content !== undefined ? result.content : result;
+        if (content && typeof content === 'object' && content.type === 'Buffer') {
+            content = Buffer.from(content.data).toString(encoding || 'utf8');
+        } else if (typeof content !== 'string') {
+            content = String(content);
+        }
+        return content;
     }
 
     async requestFileWrite(path, content, encoding = 'utf8') {
@@ -58,7 +132,12 @@ class ExtensionRPCClient {
     }
 
     async requestFileExists(path) {
-        return await this.emitIntent('filesystem', 'exists', { path });
+        try {
+            await this.emitIntent('filesystem', 'stat', { path });
+            return true;
+        } catch (error) {
+            return false;
+        }
     }
 
     async requestFileReadDir(path, options = {}) {
@@ -86,7 +165,8 @@ class ExtensionRPCClient {
     }
 
     async requestLog(level, message, meta = {}) {
-        return await this.emitIntent('log', 'write', { level, message, meta });
+        console.log("[" + level.toUpperCase() + "] " + message, Object.keys(meta).length ? meta : "");
+        return { success: true };
     }
 
     async readFile(filePath) {
@@ -609,13 +689,66 @@ class GitExtension {
         return { blocked: false, reason: 'No secrets detected' };
     }
 
+
+
+
+
+
+    async audit(params = {}) {
+        const result = await this.performFullAudit(params.flags || {});
+        let output = "";
+
+        if (result.issues === 0) {
+            output = "\n" + Colors.GREEN + Colors.BOLD + "✓ Aucun secret détecté." + Colors.ENDC + " Votre dépôt semble propre.\n";
+        } else {
+            output = "\n" + Colors.FAIL + Colors.BOLD + "✗ " + result.issues + " problème(s) détecté(s) !" + Colors.ENDC + "\n\n";
+            result.findings.forEach(finding => {
+                output += Colors.BOLD + finding.file + Colors.ENDC + "\n";
+                finding.suspects.forEach(s => {
+                    const severityColor = s.severity === "critical" ? Colors.FAIL : Colors.WARNING;
+                    output += "  " + severityColor + "●" + Colors.ENDC + " " + s.type + " " + Colors.DIM + "(" + s.method + ")" + Colors.ENDC + "\n";
+                    output += "    " + Colors.DIM + s.display + Colors.ENDC + "\n";
+                });
+                output += "\n";
+            });
+
+            if (params.flags && params.flags.force) {
+                output += Colors.WARNING + "Warning: Audit failed but continuing due to --force" + Colors.ENDC + "\n";
+            }
+        }
+
+        return { 
+            success: result.issues === 0,
+            issues: result.issues, 
+            findings: result.findings,
+            output 
+        };
+    }
+
     async performFullAudit(flags = {}) {
         await this.rpc.log('info', 'SECURITY_ALERT: Starting full security audit');
         
         const ignoredPatterns = await this.loadGhostIgnore();
-        const isFileIgnored = (f) => ignoredPatterns.some(p => f.includes(p));
+        const isFileIgnored = (f) => ignoredPatterns.some(p => {
+            if (p.startsWith('*') && p.endsWith('*')) {
+                return f.includes(p.slice(1, -1));
+            } else if (p.startsWith('*')) {
+                return f.endsWith(p.slice(1));
+            } else if (p.endsWith('*')) {
+                return f.startsWith(p.slice(0, -1)) || f.includes('/' + p.slice(0, -1));
+            }
+            return f.includes(p);
+        });
 
-        const allFiles = await this.rpc.readDir(process.cwd(), { recursive: true });
+        const readDirResult = await this.rpc.readDir(process.cwd(), { recursive: true });
+        const allFiles = (readDirResult.entries || [])
+            .filter(e => e.isFile)
+            .map(e => {
+                const ePath = e.path || e.parentPath || process.cwd();
+                const relDir = require('path').relative(process.cwd(), ePath);
+                return relDir ? require('path').join(relDir, e.name).split(require('path').sep).join('/') : e.name;
+            });
+
         const filteredFiles = allFiles.filter(f => 
             !f.includes('node_modules') && 
             !f.includes('.git') &&
@@ -637,6 +770,7 @@ class GitExtension {
                 
                 const content = await this.rpc.readFile(filePath);
                 const suspects = await this.scanForSecrets(content);
+                // console.log("SCANNED " + file + ", SUSPECTS: " + suspects.length + ", CONTENT PREVIEW: " + (content.substring ? content.substring(0, 50) : 'not string'));
                 
                 if (suspects.length > 0) {
                     findings.push({ file, suspects });
@@ -652,7 +786,8 @@ class GitExtension {
                     }
                 }
             } catch (e) {
-                // Ignore binary files or read errors
+                // Log errors to see what's failing during file processing
+                console.log("Error processing file " + file + ": " + e.message);
             }
         }
         
@@ -1111,8 +1246,9 @@ class GitExtension {
                     );
                     break;
                     
+                case 'audit':
                 case 'git.performFullAudit':
-                    result = await this.performFullAudit(params.flags);
+                    result = await this.audit(params);
                     break;
                     
                 case 'git.version.bump':

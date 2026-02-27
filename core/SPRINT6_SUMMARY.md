@@ -754,7 +754,7 @@ curl http://localhost:9876/gateway/status
 **Response**:
 ```json
 {
-  "version": "0.4.0",
+  "version": "1.0.0",
   "uptime": 3600000,
   "uptimeFormatted": "1h 0m",
   "extensionsLoaded": 3,

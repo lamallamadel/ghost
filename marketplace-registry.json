@@ -22,7 +22,7 @@
           "version": "2.1.0",
           "publishedAt": "2024-01-10T12:00:00Z",
           "compatibility": {
-            "ghostCli": ">=0.4.0",
+            "ghostCli": ">=1.0.0",
             "node": ">=14.0.0"
           },
           "downloadUrl": "https://registry.ghost-cli.dev/packages/ai-commit-helper-2.1.0.tar.gz",
@@ -65,7 +65,7 @@
           "version": "1.5.2",
           "publishedAt": "2024-01-08T14:30:00Z",
           "compatibility": {
-            "ghostCli": ">=0.4.0",
+            "ghostCli": ">=1.0.0",
             "node": ">=16.0.0"
           },
           "downloadUrl": "https://registry.ghost-cli.dev/packages/code-review-assistant-1.5.2.tar.gz",
@@ -98,7 +98,7 @@
           "version": "3.2.1",
           "publishedAt": "2024-01-12T09:00:00Z",
           "compatibility": {
-            "ghostCli": ">=0.4.0",
+            "ghostCli": ">=1.0.0",
             "node": ">=14.0.0"
           },
           "downloadUrl": "https://registry.ghost-cli.dev/packages/dependency-scanner-3.2.1.tar.gz",
@@ -160,7 +160,7 @@
           "version": "1.0.5",
           "publishedAt": "2023-12-28T11:00:00Z",
           "compatibility": {
-            "ghostCli": ">=0.4.0",
+            "ghostCli": ">=1.0.0",
             "node": ">=14.0.0"
           },
           "downloadUrl": "https://registry.ghost-cli.dev/packages/pr-template-helper-1.0.5.tar.gz",
@@ -191,7 +191,7 @@
           "version": "2.4.0",
           "publishedAt": "2024-01-11T13:45:00Z",
           "compatibility": {
-            "ghostCli": ">=0.4.0",
+            "ghostCli": ">=1.0.0",
             "node": ">=14.0.0"
           },
           "downloadUrl": "https://registry.ghost-cli.dev/packages/test-coverage-reporter-2.4.0.tar.gz",

@@ -1,4 +1,4 @@
-# 👻 Ghost CLI - Gateway Launcher [![ghost audit passed](https://img.shields.io/badge/ghost%20audit-passed-success)](https://github.com/atlasia/ghost)
+# 👻 Ghost CLI v1.0.0 - Gateway Launcher [![ghost audit passed](https://img.shields.io/badge/ghost%20audit-passed-success)](https://github.com/atlasia/ghost)
 
 > Extensible Git assistant with AI-powered operations via JSON-RPC gateway architecture
 
@@ -9,7 +9,7 @@ Ghost CLI is a **pure gateway launcher** that:
 - Routes commands to appropriate extensions via JSON-RPC
 - Manages extension lifecycles (start, stop, restart)
 - Provides real-time telemetry with `--verbose` flag
-- Enforces security through capability-based authorization
+- Enforces strict security through capability-based authorization
 
 ## 🚀 Installation
 
@@ -85,7 +85,7 @@ This shows:
 
 ## Extension Developer Toolkit 🛠️
 
-Ghost now includes a complete toolkit for building custom extensions:
+Ghost includes a complete toolkit for building custom extensions:
 
 ### CLI Commands
 

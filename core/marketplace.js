@@ -365,7 +365,7 @@ module.exports = ${this._toPascalCase(manifest.id)}Extension;
                         {
                             version: '1.0.0',
                             publishedAt: new Date().toISOString(),
-                            compatibility: { ghostCli: '>=0.4.0' },
+                            compatibility: { ghostCli: '>=1.0.0' },
                             downloadUrl: 'https://example.com/extensions/example-extension-1.0.0.tar.gz',
                             signature: null,
                             manifest: JSON.stringify({

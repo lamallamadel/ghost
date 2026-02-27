@@ -23,7 +23,7 @@ function Write-ColorOutput($ForegroundColor) {
 Write-ColorOutput Cyan @"
 
 ╔════════════════════════════════════════════╗
-║         Ghost CLI Installer v0.4.0         ║
+║         Ghost CLI Installer v1.0.0         ║
 ║   Extensible Gateway-based Git Assistant   ║
 ╚════════════════════════════════════════════╝
 

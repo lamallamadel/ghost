@@ -1,4 +1,4 @@
-# Ghost CLI Documentation
+# Ghost CLI v1.0.0 Documentation
 
 Complete documentation for Ghost CLI and extension development.
 

@@ -185,14 +185,19 @@ class FilesystemExecutor {
 
     async _readdir(params) {
         try {
+            const options = { withFileTypes: true };
+            if (params.recursive) {
+                options.recursive = true;
+            }
             const entries = await TimeoutManager.withTimeout(
-                fs.readdir(params.path, { withFileTypes: true }),
+                fs.readdir(params.path, options),
                 params.timeout
             );
             return {
                 success: true,
                 entries: entries.map(e => ({
                     name: e.name,
+                    path: e.path || e.parentPath, // Node 20+ uses parentPath, older uses path
                     isFile: e.isFile(),
                     isDirectory: e.isDirectory()
                 }))

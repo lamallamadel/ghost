@@ -55,7 +55,7 @@ Public registry with extension metadata:
       "version": "1.0.0",
       "publishedAt": "2024-01-10T12:00:00Z",
       "compatibility": {
-        "ghostCli": ">=0.4.0",
+        "ghostCli": ">=1.0.0",
         "node": ">=14.0.0"
       },
       "downloadUrl": "https://...",
