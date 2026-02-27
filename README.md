@@ -91,6 +91,7 @@ Ghost now includes a complete toolkit for building custom extensions:
 
 - **`ghost extension init <name>`** - Scaffold a new extension project with boilerplate
 - **`ghost extension validate [path]`** - Validate manifest syntax and simulate permissions
+- **`ghost extension migrate [path]`** - Migrate v0.x extensions to v1.0.0 SDK
 - **`ghost extension install <path>`** - Install extension locally
 - **`ghost extension list`** - List installed extensions
 - **`ghost extension info <id>`** - Show extension details
@@ -133,6 +134,7 @@ module.exports = MyExtension;
 ### Documentation
 
 - 🛠️ [Developer Toolkit Guide](./docs/DEVELOPER_TOOLKIT.md) - Complete guide to extension development
+- 🔄 [Extension Migration Guide](./docs/EXTENSION_MIGRATION.md) - Migrate v0.x to v1.0.0
 - 📖 [Extension API Reference](./docs/extension-api.md) - I/O intent schema and examples
 - 💡 [Extension Examples](./docs/extension-examples.md) - Working examples for common patterns
 - 📦 [Extension SDK Package](./packages/extension-sdk/README.md) - SDK documentation

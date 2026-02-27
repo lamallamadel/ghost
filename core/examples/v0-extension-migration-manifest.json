@@ -1,0 +1,39 @@
+{
+  "_comment": "Sample v0.x manifest for migration testing",
+  "id": "sample-v0-extension",
+  "name": "Sample v0.x Extension",
+  "version": "0.9.5",
+  "description": "Sample extension using v0.x patterns for migration testing",
+  "author": "Test Author",
+  "main": "v0-extension-migration-sample.js",
+  "capabilities": {
+    "filesystem": {
+      "read": ["**/*.js", "package.json"],
+      "write": ["dist/**"]
+    },
+    "network": {
+      "allowlist": ["https://api.example.com"],
+      "rateLimit": {
+        "_comment": "Missing 'be' parameter - will be detected by migration tool",
+        "cir": 60,
+        "bc": 100
+      }
+    },
+    "git": {
+      "read": true,
+      "write": true
+    }
+  },
+  "permissions": [
+    "filesystem:read",
+    "filesystem:write",
+    "network:https",
+    "git:read",
+    "git:write"
+  ],
+  "_migration_notes": [
+    "This manifest is missing the 'be' (excess burst) parameter in rateLimit",
+    "Migration tool will add: 'be': 50 (50% of bc)",
+    "Migration tool will also add @ghost/extension-sdk to dependencies"
+  ]
+}

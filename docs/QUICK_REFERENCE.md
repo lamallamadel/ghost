@@ -11,6 +11,10 @@ ghost extension init <name>
 # Validate extension
 ghost extension validate [path]
 
+# Migrate v0.x extension to v1.0.0
+ghost extension migrate [path]          # Analyze only
+ghost extension migrate --apply         # Apply changes
+
 # Install extension
 ghost extension install <path>
 
