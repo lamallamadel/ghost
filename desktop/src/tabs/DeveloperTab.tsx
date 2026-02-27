@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { Code, Bug, Activity, Play } from 'lucide-react';
+import { Code, Bug, Activity, Play, BarChart3 } from 'lucide-react';
 import { ExtensionDebugger } from '@/components/ExtensionDebugger';
 import { IntentPlayground } from '@/components/IntentPlayground';
 import { ProfilingDashboard } from '@/components/ProfilingDashboard';
+import { AnalyticsDashboard } from '@/components/AnalyticsDashboard';
 
-type DeveloperView = 'debugger' | 'playground' | 'profiling';
+type DeveloperView = 'debugger' | 'playground' | 'profiling' | 'analytics';
 
 interface DeveloperTabProps {
   extensions: Array<{ id: string; name: string }>;
@@ -53,6 +54,17 @@ export function DeveloperTab({ extensions }: DeveloperTabProps) {
             <Activity className="w-4 h-4" />
             Profiling
           </button>
+          <button
+            onClick={() => setActiveView('analytics')}
+            className={`flex items-center gap-2 px-4 py-2 rounded transition-colors ${
+              activeView === 'analytics'
+                ? 'bg-cyan-600 text-white'
+                : 'bg-gray-700 text-gray-300 hover:bg-gray-600'
+            }`}
+          >
+            <BarChart3 className="w-4 h-4" />
+            Analytics
+          </button>
         </div>
       </div>
 
@@ -97,6 +109,8 @@ export function DeveloperTab({ extensions }: DeveloperTabProps) {
         )}
         
         {activeView === 'profiling' && <ProfilingDashboard />}
+        
+        {activeView === 'analytics' && <AnalyticsDashboard />}
       </div>
     </div>
   );
