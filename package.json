@@ -1,10 +1,11 @@
 {
   "name": "atlasia-ghost",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "Extensible gateway-based Git CLI with AI-powered operations",
   "main": "ghost.js",
   "files": [
     "ghost.js",
+    "lib/**/*.js",
     "core/**/*.js",
     "core/**/*.json",
     "extensions/ghost-git-extension/**",

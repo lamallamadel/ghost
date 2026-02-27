@@ -103,25 +103,43 @@ class GatewayLauncher {
      * - Wire up event handlers between components
      * - Delegate to _initializeExtensions() for extension loading
      */
-    async initialize() {
-        try {
-            // VIOLATION: Direct file system operations
-            // Should delegate to a system extension or Gateway method
-            const ghostDir = path.dirname(USER_EXTENSIONS_DIR);
-            if (!fs.existsSync(ghostDir)) {
-                fs.mkdirSync(ghostDir, { recursive: true });
+        async initialize() {
+            try {
+                // Bootstrap environment directories
+                const ghostDir = path.dirname(USER_EXTENSIONS_DIR);
+                
+                // Define required subdirectories
+                const dirs = {
+                    home: ghostDir,
+                    extensions: USER_EXTENSIONS_DIR,
+                    telemetry: path.join(ghostDir, 'telemetry'),
+                    config: path.join(ghostDir, 'config')
+                };
+    
+                // Clean up any files that should be directories
+                for (const [key, dirPath] of Object.entries(dirs)) {
+                    if (fs.existsSync(dirPath) && !fs.lstatSync(dirPath).isDirectory()) {
+                        fs.unlinkSync(dirPath);
+                    }
+                    if (!fs.existsSync(dirPath)) {
+                        fs.mkdirSync(dirPath, { recursive: true });
+                    }
+                }
+    
+                // Bootstrap default config if missing
+                const configPath = path.join(dirs.config, 'config.json');
+                if (!fs.existsSync(configPath)) {
+                    const defaultConfig = {
+                        telemetry: { enabled: false, retention: '7d' },
+                        extensions: { autoUpdate: false },
+                        audit: { enabled: true, logPath: '~/.ghost/audit.log' }
+                    };
+                    fs.writeFileSync(configPath, JSON.stringify(defaultConfig, null, 2), 'utf8');
+                }
+    
+            } catch (error) {
+                console.warn(`[GatewayLauncher] Failed to bootstrap environment: ${error.message}`);
             }
-            
-            if (fs.existsSync(USER_EXTENSIONS_DIR) && !fs.lstatSync(USER_EXTENSIONS_DIR).isDirectory()) {
-                fs.unlinkSync(USER_EXTENSIONS_DIR);
-            }
-            
-            if (!fs.existsSync(USER_EXTENSIONS_DIR)) {
-                fs.mkdirSync(USER_EXTENSIONS_DIR, { recursive: true });
-            }
-        } catch (error) {
-        }
-
         // Pure orchestration: component initialization
         this.gateway = new Gateway({ 
             extensionsDir: USER_EXTENSIONS_DIR,
