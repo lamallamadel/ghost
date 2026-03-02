@@ -40,8 +40,14 @@
 New commands and SDK for building extensions:
 
 **CLI Commands:**
-- `ghost extension init <name>` - Scaffold new extension with boilerplate
+- `ghost extension init` - Interactive template wizard with gallery
 - `ghost extension validate [path]` - Validate manifest and permissions
+
+**Template Gallery:** `core/templates/` - Production-ready templates:
+- **API Integration** - REST/GraphQL client with auth (Bearer, API Key, OAuth)
+- **File Processor** - Batch operations with progress tracking and transformations
+- **Git Workflow** - Commit hooks with validation (pre-commit, commit-msg, conventional commits)
+- **Testing** - Vitest/Jest setup with mocking, coverage, and E2E support
 
 **SDK Package:** `packages/extension-sdk/` - @ghost/extension-sdk NPM package with:
 - `ExtensionSDK` class - High-level API (requestFileRead, requestNetworkCall, requestGitExec)
@@ -54,3 +60,4 @@ New commands and SDK for building extensions:
 - `extension-examples.md` - Working examples (file processor, API integration, git helper)
 - `DEVELOPER_TOOLKIT.md` - Complete toolkit guide
 - `QUICK_REFERENCE.md` - Quick reference card
+- `TEMPLATE_GALLERY.md` - Template gallery guide
