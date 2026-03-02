@@ -180,3 +180,10 @@ create-exporters.js
 .ghost/ids/baselines.json
 .ghost/ids/alerts-*.log
 .ghost/policies/custom.json
+
+# Marketplace Backend
+core/marketplace-backend/registry.db
+core/marketplace-backend/uploads/
+core/marketplace-backend/node_modules/
+.ghost/marketplace/users.json
+.ghost/marketplace/jwt-secret.key
