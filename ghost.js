@@ -645,9 +645,13 @@ class GatewayLauncher {
   ghost extension remove <id>             Remove an extension by ID
   ghost extension info <id>               Show extension information
   ghost extension init <name>             Scaffold a new extension project
+    Options for init:
+      --template <name>                     Use specific template from gallery
+                                            (api-integration, file-processor, git-workflow, 
+                                             testing, basic, typescript, advanced)
   ghost extension validate [path]         Validate extension manifest and permissions
   ghost extension migrate [path]          Migrate v0.x extension to v1.0.0 SDK
-    Options:
+    Options for migrate:
       --auto                                Apply migration automatically (creates backups)
       --no-backup                           Skip backup creation during migration
       --validate                            Run basic validation after migration (requires --auto)
@@ -788,7 +792,14 @@ class GatewayLauncher {
             // Delegate to interactive template wizard for better UX
             const TemplateWizard = require('./core/template-wizard');
             const wizard = new TemplateWizard();
-            await wizard.run();
+            
+            const extensionName = parsedArgs.args[0];
+            const templateFlag = parsedArgs.flags.template;
+            
+            await wizard.run({
+                name: extensionName,
+                template: templateFlag
+            });
         } else if (subcommand === 'validate') {
             // VIOLATION: Delegates to _validateExtension which has direct fs operations
             const extPath = parsedArgs.args[0] || '.';

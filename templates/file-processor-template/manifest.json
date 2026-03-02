@@ -1,0 +1,15 @@
+{
+  "id": "file-processor-template",
+  "name": "File Processor Template",
+  "version": "1.0.0",
+  "description": "Template for batch file operations with progress events, streaming for large files, and glob pattern matching",
+  "author": "Ghost CLI Team",
+  "main": "index.js",
+  "capabilities": {
+    "filesystem": {
+      "read": ["**/*"],
+      "write": ["**/*"]
+    }
+  },
+  "commands": ["process-files", "batch-transform", "stream-large-file"]
+}

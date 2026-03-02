@@ -1,0 +1,21 @@
+{
+  "name": "api-integration-template",
+  "version": "1.0.0",
+  "description": "Template for building REST/GraphQL API integrations",
+  "main": "index.js",
+  "scripts": {
+    "test": "mocha test/**/*.test.js",
+    "test:watch": "mocha test/**/*.test.js --watch"
+  },
+  "keywords": [
+    "ghost-cli",
+    "extension",
+    "api",
+    "rest",
+    "graphql",
+    "template"
+  ],
+  "devDependencies": {
+    "mocha": "^10.2.0"
+  }
+}

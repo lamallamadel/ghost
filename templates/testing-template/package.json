@@ -1,0 +1,23 @@
+{
+  "name": "testing-template",
+  "version": "1.0.0",
+  "description": "Template with Vitest configuration, mock RPC client, and coverage reporting",
+  "main": "index.js",
+  "scripts": {
+    "test": "mocha test/**/*.test.js",
+    "test:watch": "mocha test/**/*.test.js --watch",
+    "coverage": "c8 mocha test/**/*.test.js"
+  },
+  "keywords": [
+    "ghost-cli",
+    "extension",
+    "testing",
+    "vitest",
+    "coverage",
+    "template"
+  ],
+  "devDependencies": {
+    "mocha": "^10.2.0",
+    "c8": "^8.0.0"
+  }
+}
