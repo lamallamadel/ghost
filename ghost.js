@@ -644,6 +644,7 @@ class GatewayLauncher {
   ghost extension install <path>          Install an extension from path
   ghost extension remove <id>             Remove an extension by ID
   ghost extension info <id>               Show extension information
+  ghost extension deps [id]               Show dependency tree for extension(s)
   ghost extension init <name>             Scaffold a new extension project
     Options for init:
       --template <name>                     Use specific template from gallery
@@ -810,11 +811,16 @@ class GatewayLauncher {
             const migrator = new ExtensionMigrator();
             const extPath = parsedArgs.args[0] || '.';
             await migrator.migrate(extPath, parsedArgs.flags);
+        } else if (subcommand === 'deps') {
+            // Delegate to dependency commands handler
+            const ExtensionDepsCommands = require('./core/extension-deps-commands');
+            const depsHandler = new ExtensionDepsCommands(Colors);
+            await depsHandler.handleDepsCommand(parsedArgs);
         } else {
             console.error(`${Colors.FAIL}Error: Unknown extension subcommand '${subcommand}'${Colors.ENDC}\n`);
             
             // Suggest similar subcommands
-            const validSubcommands = ['list', 'install', 'remove', 'info', 'init', 'validate', 'migrate'];
+            const validSubcommands = ['list', 'install', 'remove', 'info', 'deps', 'init', 'validate', 'migrate'];
             const suggestions = this._findSimilarCommands(subcommand, validSubcommands);
             
             if (suggestions.length > 0) {
@@ -844,6 +850,9 @@ class GatewayLauncher {
   ghost marketplace search <query>        Search for extensions
   ghost marketplace info <id>             Show extension details
   ghost marketplace install <id>          Install extension from marketplace
+    Options for install:
+      --version=X.Y.Z                       Install specific version
+      --with-deps                           Automatically install dependencies
   ghost marketplace refresh               Clear cache and refresh marketplace data
 `);
             return;
@@ -1010,17 +1019,18 @@ class GatewayLauncher {
         } else if (subcommand === 'install') {
             const extensionId = parsedArgs.args[0];
             const version = parsedArgs.flags.version;
+            const autoInstallDeps = parsedArgs.flags['with-deps'] || parsedArgs.flags.deps || false;
             
             if (!extensionId) {
                 console.error(`${Colors.FAIL}Error: Extension ID required${Colors.ENDC}`);
-                console.log('Usage: ghost marketplace install <id> [--version=X.Y.Z]');
+                console.log('Usage: ghost marketplace install <id> [--version=X.Y.Z] [--with-deps]');
                 process.exit(1);
             }
 
             try {
                 console.log(`${Colors.CYAN}Installing ${extensionId}${version ? `@${version}` : ''} from marketplace...${Colors.ENDC}\n`);
                 
-                const result = await marketplace.installExtension(extensionId, { version });
+                const result = await marketplace.installExtension(extensionId, { version, autoInstallDeps });
                 
                 console.log(`${Colors.GREEN}✓${Colors.ENDC} Extension ${Colors.BOLD}${result.extensionId}${Colors.ENDC} v${result.version} installed successfully`);
                 console.log(`${Colors.DIM}  Location: ${result.installPath}${Colors.ENDC}`);
@@ -1350,7 +1360,7 @@ class GatewayLauncher {
         const commands = [
             'setup', 'doctor', 'completion', 'extension', 'gateway', 'audit-log', 'console', 'logs', 'webhook'
         ];
-        const extensionSubcommands = ['list', 'install', 'remove', 'info', 'init', 'validate', 'migrate'];
+        const extensionSubcommands = ['list', 'install', 'remove', 'info', 'deps', 'init', 'validate', 'migrate'];
         const gatewaySubcommands = ['status', 'extensions', 'health', 'logs', 'metrics', 'spans'];
         const logsSubcommands = ['prune', 'info'];
         const webhookSubcommands = ['start', 'stop', 'status', 'events', 'deliveries', 'replay', 'queue-stats', 'prune'];
