@@ -2,6 +2,8 @@ const Gateway = require('./gateway');
 const ExtensionLoader = require('./extension-loader');
 const { ExtensionRuntime, ExtensionProcess, SandboxedExtension } = require('./runtime');
 const { PluginSandbox, SandboxError, ResourceMonitor, SandboxEscapeDetector } = require('./sandbox');
+const ExtensionHotReload = require('./hot-reload');
+const HotReloadWebSocketServer = require('./hot-reload-websocket');
 const manifestSchema = require('./manifest-schema.json');
 const {
     AgentMeshNetwork,
@@ -23,6 +25,8 @@ module.exports = {
     SandboxError,
     ResourceMonitor,
     SandboxEscapeDetector,
+    ExtensionHotReload,
+    HotReloadWebSocketServer,
     manifestSchema,
     AgentMeshNetwork,
     AgentDiscoveryService,
