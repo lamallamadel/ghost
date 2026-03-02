@@ -179,6 +179,12 @@ class GatewayLauncher {
         this._setupRuntimeEventHandlers();
         this._setupDevModeHandlers();
 
+        // Initialize hot reload if dev mode is enabled
+        if (this.devMode && this.devMode.isHotReloadEnabled()) {
+            this.runtime.enableHotReload(this.gateway.loader);
+            this._setupHotReloadHandlers();
+        }
+
         // Pure orchestration: delegate extension loading to Gateway
         await this._initializeExtensions();
     }
@@ -192,9 +198,66 @@ class GatewayLauncher {
                 console.log(`${Colors.DIM}  - Rate limiting: disabled${Colors.ENDC}`);
                 console.log(`${Colors.DIM}  - Validation: relaxed${Colors.ENDC}`);
                 console.log(`${Colors.DIM}  - Hot reload: enabled${Colors.ENDC}`);
+                
+                if (!this.runtime.hotReloadManager) {
+                    this.runtime.enableHotReload(this.gateway.loader);
+                    this._setupHotReloadHandlers();
+                }
             } else {
                 console.log(`${Colors.WARNING}Developer mode disabled${Colors.ENDC}`);
             }
+        });
+    }
+
+    _setupHotReloadHandlers() {
+        if (!this.runtime) return;
+
+        this.runtime.on('extension-reload-started', (info) => {
+            if (this._isVerbose()) {
+                console.log(`${Colors.CYAN}[Hot Reload] Starting reload of ${info.extensionId}...${Colors.ENDC}`);
+                console.log(`${Colors.DIM}  Reason: ${info.reason}${Colors.ENDC}`);
+            }
+        });
+
+        this.runtime.on('extension-reload-completed', (info) => {
+            console.log(`${Colors.GREEN}✓${Colors.ENDC} ${Colors.BOLD}${info.extensionId}${Colors.ENDC} reloaded successfully`);
+            if (info.previousVersion !== info.newVersion) {
+                console.log(`${Colors.DIM}  Version: ${info.previousVersion} → ${info.newVersion}${Colors.ENDC}`);
+            }
+            console.log(`${Colors.DIM}  Duration: ${info.duration}ms${Colors.ENDC}`);
+        });
+
+        this.runtime.on('extension-reload-failed', (info) => {
+            console.error(`${Colors.FAIL}✗${Colors.ENDC} Failed to reload ${Colors.BOLD}${info.extensionId}${Colors.ENDC}`);
+            console.error(`${Colors.DIM}  Error: ${info.error}${Colors.ENDC}`);
+        });
+
+        this.runtime.on('extension-rollback-completed', (info) => {
+            console.log(`${Colors.WARNING}↺${Colors.ENDC} Rolled back ${Colors.BOLD}${info.extensionId}${Colors.ENDC} to previous version`);
+        });
+
+        this.runtime.on('extension-rollback-failed', (info) => {
+            console.error(`${Colors.FAIL}✗${Colors.ENDC} Rollback failed for ${Colors.BOLD}${info.extensionId}${Colors.ENDC}`);
+            console.error(`${Colors.DIM}  Error: ${info.error}${Colors.ENDC}`);
+        });
+
+        this.runtime.on('extension-reload-timeout-warning', (info) => {
+            console.warn(`${Colors.WARNING}⚠${Colors.ENDC} Reload taking longer than expected for ${info.extensionId}`);
+            console.warn(`${Colors.DIM}  Queued requests: ${info.queuedRequests}${Colors.ENDC}`);
+        });
+
+        this.runtime.on('extension-requests-replayed', (info) => {
+            if (this._isVerbose()) {
+                console.log(`${Colors.GREEN}[Hot Reload] Replayed ${info.count} queued requests for ${info.extensionId}${Colors.ENDC}`);
+            }
+        });
+
+        this.runtime.on('extension-requests-rejected', (info) => {
+            console.warn(`${Colors.WARNING}[Hot Reload] Rejected ${info.count} queued requests for ${info.extensionId}${Colors.ENDC}`);
+        });
+
+        this.runtime.on('extension-watcher-error', (info) => {
+            console.error(`${Colors.FAIL}[Watcher Error] ${info.extensionId}: ${info.error.error}${Colors.ENDC}`);
         });
     }
 
@@ -226,6 +289,15 @@ class GatewayLauncher {
                             return await this.forwardIntent(ext.id, request);
                         }
                     });
+                }
+
+                // Enable hot reload for this extension if dev mode is on
+                if (this.devMode && this.devMode.isHotReloadEnabled() && this.runtime.hotReloadManager) {
+                    try {
+                        await this.runtime.enableExtensionHotReload(ext.id);
+                    } catch (error) {
+                        console.warn(`${Colors.WARNING}[Hot Reload] Failed to enable for ${ext.id}: ${error.message}${Colors.ENDC}`);
+                    }
                 }
             }
         }
@@ -424,9 +496,81 @@ class GatewayLauncher {
             await this.handleLogsCommand(parsedArgs);
         } else if (parsedArgs.command === 'webhook') {
             await this.handleWebhookCommand(parsedArgs);
+        } else if (parsedArgs.command === 'dev') {
+            await this.handleDevCommand(parsedArgs);
         } else {
             // Pure routing: delegate domain commands to extensions
             await this.forwardToExtension(parsedArgs);
+        }
+    }
+
+    async handleDevCommand(parsedArgs) {
+        const subcommand = parsedArgs.subcommand;
+
+        if (!subcommand || subcommand === 'help') {
+            console.log(`${Colors.BOLD}Developer Mode Commands:${Colors.ENDC}
+  ghost dev enable                        Enable developer mode (hot reload, relaxed validation)
+  ghost dev disable                       Disable developer mode
+  ghost dev status                        Show developer mode status
+`);
+            return;
+        }
+
+        if (subcommand === 'enable') {
+            if (this.devMode.isEnabled()) {
+                console.log(`${Colors.GREEN}✓${Colors.ENDC} Developer mode is already enabled\n`);
+                return;
+            }
+
+            this.devMode.enable();
+
+            if (!this.runtime.hotReloadManager) {
+                this.runtime.enableHotReload(this.gateway.loader);
+                this._setupHotReloadHandlers();
+            }
+
+            for (const ext of this.gateway.listExtensions()) {
+                try {
+                    await this.runtime.enableExtensionHotReload(ext.id);
+                } catch (error) {
+                    console.warn(`${Colors.WARNING}[Hot Reload] Failed to enable for ${ext.id}: ${error.message}${Colors.ENDC}`);
+                }
+            }
+
+            console.log('');
+        } else if (subcommand === 'disable') {
+            if (!this.devMode.isEnabled()) {
+                console.log(`${Colors.DIM}Developer mode is already disabled${Colors.ENDC}\n`);
+                return;
+            }
+
+            for (const ext of this.gateway.listExtensions()) {
+                try {
+                    await this.runtime.disableExtensionHotReload(ext.id);
+                } catch (error) {
+                }
+            }
+
+            this.devMode.disable();
+            console.log('');
+        } else if (subcommand === 'status') {
+            const config = this.devMode.getConfig();
+            
+            console.log(`\n${Colors.BOLD}${Colors.CYAN}Developer Mode Status${Colors.ENDC}`);
+            console.log(`${Colors.DIM}${'─'.repeat(50)}${Colors.ENDC}`);
+            console.log(`Status:           ${config.enabled ? Colors.GREEN + 'Enabled' : Colors.DIM + 'Disabled'}${Colors.ENDC}`);
+            
+            if (config.enabled) {
+                console.log(`Rate Limiting:    ${config.disableRateLimiting ? Colors.DIM + 'Disabled' : 'Enabled'}${Colors.ENDC}`);
+                console.log(`Validation:       ${config.relaxedValidation ? Colors.DIM + 'Relaxed' : 'Strict'}${Colors.ENDC}`);
+                console.log(`Hot Reload:       ${config.hotReload ? Colors.GREEN + 'Enabled' : Colors.DIM + 'Disabled'}${Colors.ENDC}`);
+                console.log(`Debug Mode:       ${config.debugMode ? Colors.GREEN + 'Enabled' : Colors.DIM + 'Disabled'}${Colors.ENDC}`);
+            }
+            console.log('');
+        } else {
+            console.error(`${Colors.FAIL}Error: Unknown dev subcommand '${subcommand}'${Colors.ENDC}\n`);
+            console.log(`Run ${Colors.CYAN}ghost dev help${Colors.ENDC} to see all dev commands\n`);
+            process.exit(1);
         }
     }
 
@@ -1076,6 +1220,7 @@ class GatewayLauncher {
   ghost gateway status                    Show gateway status and statistics
   ghost gateway extensions                Show loaded extensions with runtime state
   ghost gateway health                    Show extension health status
+  ghost gateway reload <extension-id>     Manually reload an extension
   ghost gateway logs [options]            View audit logs (alias for audit-log view)
   ghost gateway metrics [extension-id]    Show telemetry metrics
   ghost gateway spans [limit]             Show recent spans
@@ -1297,11 +1442,53 @@ class GatewayLauncher {
                     console.log('');
                 }
             }
+        } else if (subcommand === 'reload') {
+            const extensionId = parsedArgs.args[0];
+            
+            if (!extensionId) {
+                console.error(`${Colors.FAIL}Error: Extension ID is required${Colors.ENDC}\n`);
+                console.log(`Usage: ${Colors.CYAN}ghost gateway reload <extension-id>${Colors.ENDC}\n`);
+                process.exit(1);
+            }
+
+            const extension = this.gateway.getExtension(extensionId);
+            if (!extension) {
+                console.error(`${Colors.FAIL}Error: Extension '${extensionId}' not found${Colors.ENDC}\n`);
+                process.exit(1);
+            }
+
+            const isDevMode = this.devMode && this.devMode.isEnabled();
+            const isProduction = process.env.NODE_ENV === 'production';
+
+            if (isProduction && !parsedArgs.flags.force) {
+                console.error(`${Colors.FAIL}Error: Hot reload is disabled in production${Colors.ENDC}\n`);
+                console.log(`${Colors.DIM}Use --force to override this safety check${Colors.ENDC}\n`);
+                process.exit(1);
+            }
+
+            if (!isDevMode && !parsedArgs.flags.force) {
+                console.error(`${Colors.WARNING}Warning: Developer mode is not enabled${Colors.ENDC}\n`);
+                console.log(`Enable developer mode with: ${Colors.CYAN}ghost dev enable${Colors.ENDC}`);
+                console.log(`Or use --force to reload anyway\n`);
+                process.exit(1);
+            }
+
+            try {
+                console.log(`${Colors.CYAN}Reloading extension ${extensionId}...${Colors.ENDC}`);
+                
+                await this.runtime.reloadExtension(extensionId);
+                
+                console.log(`${Colors.GREEN}✓${Colors.ENDC} Extension ${Colors.BOLD}${extensionId}${Colors.ENDC} reloaded successfully\n`);
+            } catch (error) {
+                console.error(`${Colors.FAIL}Error: Failed to reload extension${Colors.ENDC}`);
+                console.error(`${Colors.DIM}${error.message}${Colors.ENDC}\n`);
+                process.exit(1);
+            }
         } else {
             console.error(`${Colors.FAIL}Error: Unknown gateway subcommand '${subcommand}'${Colors.ENDC}\n`);
             
             // Suggest similar subcommands
-            const validSubcommands = ['status', 'extensions', 'health', 'logs', 'metrics', 'spans'];
+            const validSubcommands = ['status', 'extensions', 'health', 'reload', 'logs', 'metrics', 'spans'];
             const suggestions = this._findSimilarCommands(subcommand, validSubcommands);
             
             if (suggestions.length > 0) {
@@ -1358,12 +1545,13 @@ class GatewayLauncher {
     async handleCompletionCommand(parsedArgs) {
         const shell = parsedArgs.subcommand || 'bash';
         const commands = [
-            'setup', 'doctor', 'completion', 'extension', 'gateway', 'audit-log', 'console', 'logs', 'webhook'
+            'setup', 'doctor', 'completion', 'extension', 'gateway', 'audit-log', 'console', 'logs', 'webhook', 'dev'
         ];
         const extensionSubcommands = ['list', 'install', 'remove', 'info', 'deps', 'init', 'validate', 'migrate'];
-        const gatewaySubcommands = ['status', 'extensions', 'health', 'logs', 'metrics', 'spans'];
+        const gatewaySubcommands = ['status', 'extensions', 'health', 'reload', 'logs', 'metrics', 'spans'];
         const logsSubcommands = ['prune', 'info'];
         const webhookSubcommands = ['start', 'stop', 'status', 'events', 'deliveries', 'replay', 'queue-stats', 'prune'];
+        const devSubcommands = ['enable', 'disable', 'status'];
         
         // Get extension commands dynamically
         const extensionCommands = this._getAllAvailableCommands();
@@ -3314,6 +3502,7 @@ ${Colors.BOLD}GATEWAY & MONITORING:${Colors.ENDC}
   ${Colors.CYAN}gateway status${Colors.ENDC}                Gateway status and pipeline statistics
   ${Colors.CYAN}gateway extensions${Colors.ENDC}            Show loaded extensions with runtime state
   ${Colors.CYAN}gateway health${Colors.ENDC}                Extension health status
+  ${Colors.CYAN}gateway reload${Colors.ENDC} <ext-id>       Manually reload an extension (dev mode)
   ${Colors.CYAN}gateway logs${Colors.ENDC} [options]        View audit logs with filtering
   ${Colors.CYAN}gateway metrics${Colors.ENDC} [ext-id]      Telemetry metrics for extensions
   ${Colors.CYAN}gateway spans${Colors.ENDC} [limit]         Recent telemetry spans
@@ -3321,6 +3510,11 @@ ${Colors.BOLD}GATEWAY & MONITORING:${Colors.ENDC}
   ${Colors.CYAN}console${Colors.ENDC} [start|stop]          Telemetry HTTP/WebSocket server
   ${Colors.CYAN}logs prune${Colors.ENDC} [days]             Cleanup old telemetry/audit logs
   ${Colors.CYAN}logs info${Colors.ENDC}                     Show log directory information
+
+${Colors.BOLD}DEVELOPER MODE:${Colors.ENDC}
+  ${Colors.CYAN}dev enable${Colors.ENDC}                    Enable developer mode (hot reload, relaxed validation)
+  ${Colors.CYAN}dev disable${Colors.ENDC}                   Disable developer mode
+  ${Colors.CYAN}dev status${Colors.ENDC}                    Show developer mode status
 
 ${Colors.BOLD}WEBHOOK AUTOMATION:${Colors.ENDC}
   ${Colors.CYAN}webhook start${Colors.ENDC}                 Start webhook receiver server

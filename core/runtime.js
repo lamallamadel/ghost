@@ -1736,12 +1736,19 @@ class ExtensionRuntime extends EventEmitter {
         this.healthCheckInterval = null;
         this.healthCheckFrequency = options.healthCheckFrequency || 60000;
         this.executionMode = options.executionMode || 'process';
+        this.hotReloadManager = null;
+        this.loader = null;
+        this.extensionPaths = new Map();
+        this.extensionManifests = new Map();
     }
 
     async startExtension(extensionId, extensionPath, manifest, processOptions = {}) {
         if (this.extensions.has(extensionId)) {
             throw new Error(`Extension ${extensionId} is already registered`);
         }
+
+        this.extensionPaths.set(extensionId, extensionPath);
+        this.extensionManifests.set(extensionId, manifest);
 
         const mode = processOptions.executionMode || this.executionMode;
         let extension;
@@ -1843,12 +1850,18 @@ class ExtensionRuntime extends EventEmitter {
 
         this.extensions.set(extensionId, extension);
 
+        extension.extensionPath = extensionPath;
+        extension.manifest = manifest;
+        extension.options = processOptions;
+
         try {
             await extension.start();
             this._ensureHealthMonitoring();
             return extension;
         } catch (error) {
             this.extensions.delete(extensionId);
+            this.extensionPaths.delete(extensionId);
+            this.extensionManifests.delete(extensionId);
             throw error;
         }
     }
@@ -1866,6 +1879,26 @@ class ExtensionRuntime extends EventEmitter {
         if (this.extensions.size === 0) {
             this._stopHealthMonitoring();
         }
+    }
+
+    async reloadExtension(extensionId) {
+        const extensionProcess = this.extensions.get(extensionId);
+        
+        if (!extensionProcess) {
+            throw new Error(`Extension ${extensionId} is not registered`);
+        }
+
+        if (!this.hotReloadManager) {
+            throw new Error('Hot reload manager not initialized');
+        }
+
+        const extensionPath = this.extensionPaths.get(extensionId);
+        const manifest = this.extensionManifests.get(extensionId);
+
+        await this.hotReloadManager.triggerReload(extensionId, 'manual-reload', {
+            extensionPath,
+            manifest
+        });
     }
 
     async restartExtension(extensionId) {
@@ -1948,6 +1981,10 @@ class ExtensionRuntime extends EventEmitter {
     async shutdown() {
         this._stopHealthMonitoring();
 
+        if (this.hotReloadManager) {
+            this.hotReloadManager.shutdown();
+        }
+
         const stopPromises = [];
         
         for (const [extensionId, extensionProcess] of this.extensions) {
@@ -1963,6 +2000,89 @@ class ExtensionRuntime extends EventEmitter {
 
         await Promise.all(stopPromises);
         this.extensions.clear();
+        this.extensionPaths.clear();
+        this.extensionManifests.clear();
+    }
+
+    enableHotReload(extensionLoader) {
+        if (this.hotReloadManager) {
+            return;
+        }
+
+        const { HotReloadManager } = require('./dev-mode');
+        this.loader = extensionLoader;
+        this.hotReloadManager = new HotReloadManager(this, this.options);
+
+        this.hotReloadManager.on('reload-started', (info) => {
+            this.emit('extension-reload-started', info);
+        });
+
+        this.hotReloadManager.on('reload-completed', (info) => {
+            this.emit('extension-reload-completed', info);
+        });
+
+        this.hotReloadManager.on('reload-failed', (info) => {
+            this.emit('extension-reload-failed', info);
+        });
+
+        this.hotReloadManager.on('rollback-completed', (info) => {
+            this.emit('extension-rollback-completed', info);
+        });
+
+        this.hotReloadManager.on('rollback-failed', (info) => {
+            this.emit('extension-rollback-failed', info);
+        });
+
+        this.hotReloadManager.on('queue-timeout-warning', (info) => {
+            this.emit('extension-reload-timeout-warning', info);
+        });
+
+        this.hotReloadManager.on('requests-replayed', (info) => {
+            this.emit('extension-requests-replayed', info);
+        });
+
+        this.hotReloadManager.on('requests-rejected', (info) => {
+            this.emit('extension-requests-rejected', info);
+        });
+
+        this.hotReloadManager.on('watcher-error', (info) => {
+            this.emit('extension-watcher-error', info);
+        });
+    }
+
+    async enableExtensionHotReload(extensionId) {
+        if (!this.hotReloadManager) {
+            throw new Error('Hot reload manager not initialized');
+        }
+
+        const extensionPath = this.extensionPaths.get(extensionId);
+        const manifest = this.extensionManifests.get(extensionId);
+
+        if (!extensionPath || !manifest) {
+            throw new Error(`Extension ${extensionId} not found`);
+        }
+
+        await this.hotReloadManager.enableHotReload(extensionId, extensionPath, manifest);
+    }
+
+    async disableExtensionHotReload(extensionId) {
+        if (!this.hotReloadManager) {
+            return;
+        }
+
+        await this.hotReloadManager.disableHotReload(extensionId);
+    }
+
+    registerWebSocketClient(client) {
+        if (this.hotReloadManager) {
+            this.hotReloadManager.registerWebSocketClient(client);
+        }
+    }
+
+    unregisterWebSocketClient(client) {
+        if (this.hotReloadManager) {
+            this.hotReloadManager.unregisterWebSocketClient(client);
+        }
     }
 
     _ensureHealthMonitoring() {
