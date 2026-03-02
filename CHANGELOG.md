@@ -5,43 +5,42 @@ All notable changes to Ghost CLI will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+---
+
 ## [1.0.0] - 2024-01-15
 
-### 🎉 Major Release: Production-Ready Gateway Architecture
+### 🎉 Major Release: Production-Ready Enterprise Platform
 
 Ghost CLI v1.0.0 represents a complete transformation from a simple Git CLI tool to an enterprise-grade, extensible gateway platform with comprehensive security, analytics, and operational maturity features.
 
 ---
 
-## 🚨 Breaking Changes from v0.4.0
+## 🚨 BREAKING CHANGES FROM v0.4.0
 
-### 1. **ExtensionWrapper Pattern Required** (BREAKING)
+### 1. ExtensionWrapper Pattern Required
 
-**What Changed:**
-- Extensions must now use the `ExtensionWrapper` pattern for subprocess communication
-- Direct stdio JSON-RPC communication is deprecated
-- All extensions must implement standard lifecycle methods (`init`, `cleanup`)
+**What Changed:** Extensions must use `ExtensionWrapper` pattern instead of direct `module.exports`.
 
-**Migration Required:**
-Previously (v0.4.0):
+**Migration:**
+
+v0.4.0 (OLD):
 ```javascript
-// Old direct communication
 class MyExtension {
     async myCommand(params) {
         return { success: true };
     }
 }
-
 module.exports = MyExtension;
 ```
 
-Now (v1.0.0):
+v1.0.0 (NEW - Required):
 ```javascript
-const ExtensionWrapper = require('./core/examples/extension-wrapper');
+const ExtensionWrapper = require('./wrapper');
 
 class MyExtension {
     async init(config) {
-        // Initialize extension
+        this.config = config;
+        return { success: true };
     }
 
     async myCommand(params) {
@@ -49,86 +48,29 @@ class MyExtension {
     }
 
     async cleanup() {
-        // Cleanup resources
+        // Clean up resources
+        return { success: true };
     }
 }
 
 const wrapper = new ExtensionWrapper(new MyExtension());
 wrapper.start();
-
 module.exports = MyExtension;
 ```
 
-**Why This Change:**
-- Standardizes extension lifecycle management
-- Improves process isolation and signal handling
-- Enables graceful shutdown and resource cleanup
-- Better error handling and JSON-RPC compliance
+**Why:** Standardized lifecycle, process isolation, graceful shutdown, better error handling.
 
-**Reference:**
-- See `core/examples/extension-wrapper.js` for implementation
-- See `core/examples/sample-subprocess-extension.js` for complete example
+**Reference:** `extensions/ghost-git-extension/index.js`
 
-### 2. **Extension SDK v1.0.0** (BREAKING)
+---
 
-**What Changed:**
-- `@ghost/extension-sdk` is now required for all extension development
-- Direct intent creation is discouraged; use SDK helper methods
-- Typed error classes replace generic errors
+### 2. Manifest Schema Changes
 
-**Migration Required:**
-```bash
-# Install SDK in your extension
-npm install @ghost/extension-sdk
-```
+**What Changed:** `commands` array and `dependencies` field now required.
 
-Previously (v0.4.0):
-```javascript
-// Manual intent creation
-const intent = {
-    type: 'filesystem',
-    operation: 'read',
-    params: { path: './file.txt' }
-};
-```
+**Migration:**
 
-Now (v1.0.0):
-```javascript
-const { ExtensionSDK } = require('@ghost/extension-sdk');
-
-class MyExtension {
-    constructor() {
-        this.sdk = new ExtensionSDK('my-extension-id');
-    }
-
-    async myCommand() {
-        const content = await this.sdk.requestFileRead({ path: './file.txt' });
-        return { success: true, content };
-    }
-}
-```
-
-**Benefits:**
-- Type-safe API with TypeScript definitions
-- Built-in error handling with typed error classes
-- Batch operations support
-- Timeout and retry strategies
-- Comprehensive documentation
-
-**SDK Documentation:**
-- See `packages/extension-sdk/README.md` for complete API reference
-- See `docs/extension-api.md` for I/O intent schema reference
-
-### 3. **Manifest Schema Changes** (BREAKING)
-
-**What Changed:**
-- `capabilities` field is now strictly enforced
-- Rate limiting configuration moved to `capabilities.network.rateLimit`
-- New `version` field format validation
-
-**Migration Required:**
-Update your `manifest.json`:
-
+v0.4.0 (OLD):
 ```json
 {
   "id": "my-extension",
@@ -136,785 +78,19 @@ Update your `manifest.json`:
   "version": "1.0.0",
   "main": "index.js",
   "capabilities": {
-    "filesystem": {
-      "read": ["**/*.js", "**/*.json"],
-      "write": ["output/**/*"]
-    },
-    "network": {
-      "allowlist": ["https://api.example.com"],
-      "rateLimit": {
-        "cir": 60,
-        "bc": 100
-      }
-    },
-    "git": {
-      "read": true,
-      "write": false
-    }
+    "filesystem": { "read": ["**/*.js"] }
   }
 }
 ```
 
-**Validation:**
-```bash
-ghost extension validate ./path/to/extension
-```
-
-**Reference:**
-- See `core/MANIFEST_REFERENCE.md` for complete schema
-
-### 4. **Configuration File Changes** (BREAKING)
-
-**What Changed:**
-- Configuration moved from `~/.ghostrc` to `~/.ghost/config/ghostrc.json`
-- New structured configuration with security sections
-- Environment variables follow new naming: `GHOST_*` prefix
-
-**Migration Required:**
-Old location: `~/.ghostrc`
-```json
-{
-  "prompt": "Custom prompt",
-  "provider": "anthropic"
-}
-```
-
-New location: `~/.ghost/config/ghostrc.json`
-```json
-{
-  "prompt": "Custom prompt",
-  "provider": "anthropic",
-  "model": "claude-3-5-sonnet-20240620",
-  "security": {
-    "telemetryAuth": {
-      "enabled": true,
-      "requireAuth": true
-    },
-    "codeSigning": {
-      "requireSigned": false
-    }
-  }
-}
-```
-
-**Automatic Migration:**
-Ghost CLI will automatically migrate your old config on first run.
-
-### 5. **API Endpoint Changes** (BREAKING)
-
-**What Changed:**
-- Telemetry server now requires authentication by default
-- New API endpoints added with versioned paths
-- WebSocket support deprecated in favor of HTTP/2
-
-**Migration Required:**
-```bash
-# Generate authentication token
-ghost telemetry generate-token --user admin
-
-# Use token in requests
-curl -H "Authorization: Bearer <token>" http://localhost:9876/api/metrics
-```
-
-**New Endpoints:**
-- `/api/debugger/*` - Extension debugging
-- `/api/profiling/*` - Performance profiling
-- `/api/playground/*` - Intent testing
-- `/api/devmode/*` - Developer mode control
-- `/api/operational-maturity/*` - Operational status
-- `/api/sla/*` - SLA monitoring
-- `/api/chaos/*` - Chaos engineering
-- `/api/compliance/*` - Compliance reporting
-
----
-
-## ✨ New Features
-
-### 🔐 Security Hardening
-
-#### 1. **Telemetry Server Authentication**
-- JWT token-based authentication with configurable expiry
-- API key authentication with usage tracking
-- Refresh token support for session management
-- Token revocation capabilities
-- Automatic secret generation and secure storage
-
-**Usage:**
-```bash
-# Generate JWT token
-ghost telemetry generate-token --user admin
-
-# Generate API key
-ghost telemetry generate-apikey --name monitoring --permissions read,write
-
-# List API keys
-ghost telemetry list-apikeys
-
-# Revoke API key
-ghost telemetry revoke-apikey <key>
-```
-
-**Location:** `core/telemetry-auth.js`
-
-#### 2. **Extension Code Signing**
-- RSA 4096-bit digital signatures for extensions
-- Certificate trust management
-- Certificate revocation list (CRL)
-- Extension tampering detection
-- Developer certificate lifecycle management
-
-**Usage:**
-```bash
-# Generate developer certificate
-ghost sign init --developer email@example.com
-
-# Sign extension
-ghost sign extension ./extension --cert ./cert.key
-
-# Verify extension
-ghost sign verify ./extension
-
-# Revoke certificate
-ghost sign revoke-cert <certId> --reason compromised
-```
-
-**Location:** `core/code-signing.js`
-
-#### 3. **Security Policy Engine**
-- Custom policy definition and enforcement
-- NIST SI-10 input validation
-- Request size limits
-- Network destination whitelisting
-- File access pattern control
-- Command injection prevention
-
-**Default Policies:**
-- Max request size: 10MB
-- Allowed network destinations (blocks private IPs)
-- File access patterns (restricts system directories)
-- Rate limit: 100 requests/min per extension
-- Concurrent connections: Max 10
-
-**Usage:**
-```bash
-# List policies
-ghost policy list
-
-# Add custom policy
-ghost policy add --file policy.json
-
-# Enable/disable policy
-ghost policy enable <policyId>
-ghost policy disable <policyId>
-```
-
-**Location:** `core/security-policy-engine.js`
-
-#### 4. **Intrusion Detection System (IDS)**
-- Behavioral baseline learning
-- Anomaly detection (CPU spikes, memory spikes, unusual network activity)
-- Real-time threat scoring with MITRE ATT&CK mapping
-- Pattern recognition
-- Alert generation with severity levels
-
-**Monitored Metrics:**
-- CPU usage patterns
-- Memory consumption
-- Network request frequency
-- Destination patterns
-- Validation failure rates
-
-**Usage:**
-```bash
-# Check IDS status
-ghost ids status
-
-# View alerts
-ghost ids alerts --extension <extensionId>
-
-# Reset baseline
-ghost ids reset-baseline --extension <extensionId>
-```
-
-**Location:** `core/intrusion-detection.js`
-
-#### 5. **Secrets Management**
-- AES-256-GCM encryption at rest
-- HashiCorp Vault integration
-- AWS Secrets Manager support
-- Per-extension secret isolation
-- Secret rotation with access tracking
-
-**Usage:**
-```bash
-# Store secret
-ghost secrets set <key> --value <value> --extension <extensionId>
-
-# Retrieve secret
-ghost secrets get <key> --extension <extensionId>
-
-# Rotate secret
-ghost secrets rotate <key> --extension <extensionId>
-```
-
-**Location:** `core/secrets-manager.js`
-
-#### 6. **Security Dashboard**
-- Real-time threat indicators
-- MITRE ATT&CK framework mapping (12 tactics)
-- Security metrics aggregation
-- Threat timeline visualization
-- Extension threat profiling
-- Policy violation tracking
-
-**Usage:**
-```bash
-# View security dashboard
-ghost security dashboard
-
-# View security metrics
-ghost security metrics
-
-# View extension threats
-ghost security threats --extension <extensionId>
-
-# View threat timeline
-ghost security timeline --hours 24
-```
-
-**Location:** `core/security-dashboard.js`
-
-**Documentation:** See `SECURITY_HARDENING_IMPLEMENTATION.md`
-
-### 📊 Analytics & Observability Platform
-
-#### 1. **Extension Analytics Collector**
-- Real-time invocation tracking
-- Resource usage monitoring (CPU, memory, I/O, network)
-- Success/failure rate calculation
-- Duration percentiles (p50, p95, p99)
-- Automatic data persistence with configurable retention (30 days default)
-
-**Metrics Collected:**
-- Invocation count, success/failure rates
-- Duration statistics
-- Resource consumption statistics
-- Historical trend analysis
-
-**Location:** `core/analytics/collector.js`
-
-#### 2. **Behavior Analytics**
-- User behavior pattern analysis
-- Command sequence tracking
-- Most used commands and extensions
-- Workflow pattern detection
-- Next command prediction with probability scores
-
-**Insights:**
-- Top 10 most used commands
-- Extension usage ranking
-- Common workflow patterns
-- Session-level analytics
-
-**Location:** `core/analytics/behavior-analytics.js`
-
-#### 3. **Cost Attribution System**
-- Multi-resource cost tracking (CPU, memory, I/O, network, storage)
-- Configurable billing rates per resource type
-- Billing period management
-- Cost projections based on historical usage
-- Cost alerts for threshold violations
-- Marketplace billing integration (per-invocation, tiered, subscription, usage-based)
-
-**Location:** `core/analytics/cost-attribution.js`
-
-#### 4. **Performance Regression Detection**
-- Version-based metric tracking
-- Baseline setting for reference versions
-- Automated regression detection (configurable thresholds)
-- Version comparison with percentage changes
-- Performance trend analysis
-- Alert generation for regressions
-
-**Thresholds:**
-- Duration regression: 20%
-- CPU usage regression: 30%
-- Memory usage regression: 30%
-- Error rate regression: 10%
-
-**Location:** `core/analytics/performance-regression.js`
-
-#### 5. **Distributed Tracing**
-- Full distributed tracing with trace/span hierarchy
-- Cross-extension call tracking
-- Call graph generation
-- Multiple visualization formats (Mermaid, DOT, JSON)
-- Span logging and tagging
-
-**Location:** `core/analytics/distributed-tracing.js`
-
-#### 6. **Recommendation Engine**
-- Repository analysis (languages, frameworks, commit patterns)
-- Intelligent extension recommendations
-- Multi-factor scoring system
-- User feedback integration
-- Category-based filtering
-
-**Analysis Factors:**
-- Programming languages used
-- Frameworks detected (React, Vue, Express, Django, etc.)
-- Commit patterns
-- Repository structure
-- Team size and activity level
-
-**Location:** `core/analytics/recommendation-engine.js`
-
-**Documentation:** See `ANALYTICS_IMPLEMENTATION.md`
-
-### 🏭 Operational Maturity Framework
-
-#### 1. **SLA Monitoring & Alerting**
-- SLA objectives tracking (availability, latency, error rate)
-- Error budget monitoring with automatic resets
-- Burn rate monitoring (fast/slow windows)
-- Alert generation for budget exhaustion
-- Prometheus metrics export
-
-**SLA Objectives:**
-- Availability: 99.9% (30-day window)
-- P95 Latency: <200ms (24-hour window)
-- Error Rate: <1% (24-hour window)
-
-**Usage:**
-```bash
-# View SLA status
-ghost sla status
-
-# View SLA alerts
-ghost sla alerts
-
-# Acknowledge alert
-ghost sla acknowledge <alertId>
-```
-
-**Location:** `core/sla-monitoring.js`
-
-#### 2. **Runbook Automation**
-- Pre-configured runbooks for common incidents
-- Auto-execution for safe operations
-- Manual approval for destructive operations
-- PagerDuty and Opsgenie integration
-- Execution history tracking
-
-**Pre-configured Runbooks:**
-- Restart failed extension (auto-execute)
-- Clear rate limit state (manual approval)
-- Reset circuit breaker (manual approval)
-- Scale rate limits (auto-execute)
-- Cleanup stuck requests (auto-execute)
-
-**Usage:**
-```bash
-# Execute runbook
-ghost runbook execute <runbookId> --context '{"extensionId":"ext-1"}'
-
-# View execution history
-ghost runbook history --limit 10
-```
-
-**Location:** `core/runbook-automation.js`
-
-#### 3. **Chaos Engineering**
-- 6 pre-defined failure types (crash, network latency, resource exhaustion, random errors, circuit breaker trip, rate limit exceed)
-- Pre-defined experiments with configurable probability
-- Resilience report generation
-- Active experiment tracking
-
-**Usage:**
-```bash
-# Create chaos experiment
-ghost chaos create --type extension_crash --probability 0.05 --duration 5m
-
-# Start experiment
-ghost chaos start <experimentId>
-
-# Stop experiment
-ghost chaos stop <experimentId>
-
-# Generate resilience report
-ghost chaos report
-```
-
-**Location:** `core/chaos-engineering.js`
-
-#### 4. **Capacity Forecasting**
-- Time-series analysis with trend calculation
-- 24-step ahead predictions (24 minutes)
-- Exhaustion time predictions
-- Growth rate analysis
-- Capacity recommendations
-
-**Tracked Metrics:**
-- Request rates (requests/min)
-- P95 latency (ms)
-- Memory usage (%)
-- CPU usage (%)
-- Error rate (%)
-
-**Usage:**
-```bash
-# View forecasts
-ghost capacity forecasts
-
-# View exhaustion warnings
-ghost capacity warnings
-
-# Export time-series data
-ghost capacity export --metric requests --start 1h
-```
-
-**Location:** `core/capacity-forecasting.js`
-
-#### 5. **Compliance Evidence Collection**
-- SOC 2 Type II compliance (5 controls)
-- ISO 27001:2013 compliance (4 controls)
-- Evidence collection with SHA-256 hashing
-- Audit trail generation
-- Compliance status tracking
-
-**Supported Frameworks:**
-- SOC 2 Type II (CC6.1, CC6.7, CC7.2, CC7.3, CC8.1)
-- ISO 27001:2013 (A.5.1.2, A.8.1.1, A.12.1.1, A.12.4.1)
-- HIPAA (extensible)
-- GDPR (extensible)
-
-**Usage:**
-```bash
-# Generate SOC 2 report
-ghost compliance report soc2 --start 30d
-
-# Generate ISO 27001 report
-ghost compliance report iso27001 --start 30d
-
-# View compliance status
-ghost compliance status
-```
-
-**Location:** `core/compliance-evidence.js`
-
-#### 6. **Grafana Dashboard**
-- Pre-configured SLO dashboard
-- 11 panels including error budget, burn rates, and alerts
-- Prometheus integration
-- Real-time metrics visualization
-
-**Location:** `core/grafana-dashboard-slo.json`
-
-#### 7. **Operational Maturity Scoring**
-- Automated maturity score calculation (0-100)
-- Readiness level assessment (Production Ready, Near Production, Development, Early Stage, Initial)
-- Component health tracking
-- Recommendations for improvement
-
-**Scoring Factors:**
-- SLA Health (25%)
-- Capacity Management (20%)
-- Resilience (20%)
-- Automation (20%)
-- Compliance (15%)
-
-**Usage:**
-```bash
-# View operational status
-ghost operational-maturity status
-
-# Generate maturity report
-ghost operational-maturity report
-```
-
-**Location:** `core/operational-maturity.js`
-
-**Documentation:** See `OPERATIONAL_MATURITY_IMPLEMENTATION.md`
-
-### 🛠️ Developer Experience Enhancements
-
-#### 1. **Hot Module Reloading**
-- Automatic detection of manifest.json changes
-- Automatic detection of code changes (.js files)
-- File system watchers with configurable paths
-- Graceful runtime restart
-- Excludes node_modules and .git directories
-
-**Location:** `core/dev-mode.js`
-
-#### 2. **Extension Debugger**
-- Attach Node.js debugger to running extensions
-- Support for breakpoints with conditions
-- Chrome DevTools integration
-- Debug state tracking per extension
-- Graceful detach
-
-**Desktop UI:** `desktop/src/components/ExtensionDebugger.tsx`
-**API Endpoints:**
-- `POST /api/debugger/:extensionId/attach`
-- `POST /api/debugger/:extensionId/detach`
-- `POST /api/debugger/:extensionId/breakpoint`
-
-**Location:** `core/debugger-adapter.js`
-
-#### 3. **Intent Playground**
-- Interactive intent builder with templates
-- Real-time JSON validation
-- Execute intents against running extensions
-- Template library (filesystem, network, git operations)
-- Performance timing measurement
-
-**Desktop UI:** `desktop/src/components/IntentPlayground.tsx`
-**API Endpoints:**
-- `POST /api/playground/validate`
-- `POST /api/playground/execute`
-
-#### 4. **Profiling Dashboard**
-- CPU usage tracking
-- Memory usage monitoring (heap, RSS, external)
-- Execution statistics (duration, calls, max duration)
-- Bottleneck detection (>500ms operations)
-- Flamegraph generation
-
-**Desktop UI:** `desktop/src/components/ProfilingDashboard.tsx`
-**API Endpoints:**
-- `GET /api/profiling/metrics`
-- `GET /api/profiling/flamegraph/:extensionId`
-- `POST /api/profiling/reset`
-
-**Location:** `core/profiler.js`
-
-#### 5. **Developer Mode**
-- Disable rate limiting for extensions
-- Relax validation rules
-- Enable hot reload by default
-- Enable debug mode logging
-- Configurable per-feature flags
-
-**Usage:**
-```bash
-# Enable developer mode
-ghost devmode enable
-
-# Disable developer mode
-ghost devmode disable
-
-# View status
-ghost devmode status
-```
-
-**API Endpoints:**
-- `GET /api/devmode/status`
-- `POST /api/devmode/enable`
-- `POST /api/devmode/disable`
-
-**Location:** `core/dev-mode.js`
-
-#### 6. **Extension Template Wizard**
-- Interactive extension scaffolding
-- 3 templates: Basic (JavaScript), TypeScript, Advanced (with tests)
-- Generates complete extension structure
-- README, .gitignore, and package.json included
-
-**Usage:**
-```bash
-# Start wizard
-ghost extension init
-
-# Follow prompts to create extension
-```
-
-**Templates:**
-- **Basic:** manifest.json, index.js, README.md
-- **TypeScript:** + tsconfig.json, src/index.ts, build scripts
-- **Advanced:** + test framework (Mocha), complete structure
-
-**Location:** `core/template-wizard.js`
-
-**Documentation:** See `DEVELOPER_EXPERIENCE_IMPLEMENTATION.md`
-
-### 🌐 Marketplace & Distribution
-
-#### 1. **Marketplace Service**
-- Extension discovery and browsing
-- Installation from marketplace
-- Version management
-- Rating and review system
-- Extension statistics
-
-**Location:** `core/marketplace.js`
-
-#### 2. **Webhook System**
-- Event-driven webhooks for extension lifecycle
-- HTTP/HTTPS delivery with retries
-- Signature verification (HMAC-SHA256)
-- Webhook management API
-- Event filtering and routing
-
-**Supported Events:**
-- extension.installed
-- extension.uninstalled
-- extension.updated
-- extension.failed
-- extension.metrics
-
-**Location:** `core/webhooks/`
-
-**Documentation:** See `WEBHOOK_IMPLEMENTATION.md`
-
-### 🔄 Extension Mesh (Multi-Node)
-
-#### 1. **Distributed Extension Mesh**
-- Multi-node extension discovery and routing
-- Load balancing across mesh nodes
-- Health monitoring and automatic failover
-- gRPC-based inter-node communication
-- Consistent hash routing
-
-**Location:** `core/mesh/`
-
-**Documentation:** See `MESH_IMPLEMENTATION.md`, `MESH_SUMMARY.md`
-
----
-
-## 🔧 Improvements
-
-### Performance Optimizations
-
-#### Sprint 9 Performance Enhancements
-- **Throughput:** 1,247 req/s (59% improvement from baseline)
-- **p95 Latency:** 28ms (<50ms target)
-- **CPU Usage:** 78% (17% reduction)
-- **Memory Growth:** 39% over 60s (<50% target)
-
-**Key Optimizations:**
-1. O(1) Set lookups (replaced array scans)
-2. Memoization with >95% hit rate
-3. Object pooling (60% GC reduction)
-4. Regex caching for path validation
-5. Pre-computation of rate constants
-
-**Documentation:** See `PERFORMANCE.md`, `core/SPRINT9_PERFORMANCE.md`
-
-### Extension Runtime Improvements
-- Circuit breaker enhancements with half-open state
-- Advanced rate limiting with token bucket (RFC 2698)
-- Subprocess lifecycle improvements
-- Heartbeat monitoring
-- Auto-restart on crashes
-
-### Pipeline Architecture Enhancements
-- Enhanced validation with NIST SI-10 compliance
-- Improved authorization layer with capability caching
-- Audit layer with entropy scanning
-- Execution layer with circuit breakers and timeouts
-
-### Desktop Console Improvements
-- React 18 upgrade with modern hooks
-- TypeScript strict mode
-- TailwindCSS 3.x styling
-- Zustand state management
-- Real-time telemetry updates
-- Developer tab with debugging tools
-
----
-
-## 📚 Documentation
-
-### New Documentation Files
-- `SECURITY_HARDENING_IMPLEMENTATION.md` - Complete security features guide
-- `ANALYTICS_IMPLEMENTATION.md` - Analytics platform documentation
-- `OPERATIONAL_MATURITY_IMPLEMENTATION.md` - Operational maturity guide
-- `DEVELOPER_EXPERIENCE_IMPLEMENTATION.md` - Developer tools documentation
-- `WEBHOOK_IMPLEMENTATION.md` - Webhook system guide
-- `MESH_IMPLEMENTATION.md` - Extension mesh architecture
-- `PERFORMANCE.md` - Performance optimization guide
-- `docs/DEVELOPER_TOOLKIT.md` - Complete extension development guide
-- `docs/extension-api.md` - I/O intent schema reference
-- `docs/extension-examples.md` - Working extension examples
-- `docs/QUICK_REFERENCE.md` - Quick reference card
-- `core/MANIFEST_REFERENCE.md` - Manifest schema reference
-- `packages/extension-sdk/README.md` - SDK documentation
-
-### Updated Documentation
-- `README.md` - Updated with v1.0.0 features
-- `AGENTS.md` - Updated build/test/lint commands
-- `INSTALL.md` - Updated installation instructions
-
----
-
-## 🔄 Migration Guide
-
-### Step-by-Step Migration from v0.4.0
-
-#### 1. Update Extension Code
-
-**Install Dependencies:**
-```bash
-cd your-extension
-npm install @ghost/extension-sdk
-```
-
-**Update Extension Entry Point:**
-```javascript
-// Before (v0.4.0)
-class MyExtension {
-    async myCommand(params) {
-        return { success: true };
-    }
-}
-module.exports = MyExtension;
-
-// After (v1.0.0)
-const { ExtensionSDK } = require('@ghost/extension-sdk');
-const ExtensionWrapper = require('../../core/examples/extension-wrapper');
-
-class MyExtension {
-    constructor() {
-        this.sdk = new ExtensionSDK('my-extension-id');
-    }
-
-    async init(config) {
-        // Initialize extension
-    }
-
-    async myCommand(params) {
-        // Use SDK for I/O operations
-        const content = await this.sdk.requestFileRead({ path: './file.txt' });
-        return { success: true, content };
-    }
-
-    async cleanup() {
-        // Cleanup resources
-    }
-}
-
-// Wrap and start
-const wrapper = new ExtensionWrapper(new MyExtension());
-wrapper.start();
-
-module.exports = MyExtension;
-```
-
-#### 2. Update Manifest
-
-**Validate and update your manifest.json:**
-```bash
-ghost extension validate ./your-extension
-```
-
-**Ensure required fields:**
+v1.0.0 (NEW - Required):
 ```json
 {
   "id": "my-extension",
   "name": "My Extension",
   "version": "1.0.0",
   "main": "index.js",
+  "commands": ["mycommand", "status"],
   "capabilities": {
     "filesystem": {
       "read": ["**/*.js"],
@@ -922,315 +98,753 @@ ghost extension validate ./your-extension
     },
     "network": {
       "allowlist": ["https://api.example.com"],
-      "rateLimit": {
-        "cir": 60,
-        "bc": 100
-      }
-    },
-    "git": {
-      "read": true,
-      "write": false
+      "rateLimit": { "cir": 60, "bc": 100 }
     }
+  },
+  "dependencies": {
+    "@ghost/extension-sdk": "^1.0.0"
+  },
+  "permissions": ["filesystem:read", "network:https"]
+}
+```
+
+**New Required Fields:**
+- `commands`: Array of command names handled by extension
+- `dependencies`: NPM dependencies (package.json format)
+
+**Reference:** `core/manifest-schema.json`, `extensions/ghost-git-extension/manifest.json`
+
+---
+
+### 3. Extension SDK Required
+
+**What Changed:** Direct intent creation deprecated. Use `@ghost/extension-sdk`.
+
+**Installation:**
+```bash
+npm install @ghost/extension-sdk
+```
+
+**Migration:**
+
+v0.4.0 (OLD - Manual Intents):
+```javascript
+const intent = {
+    type: 'filesystem',
+    operation: 'read',
+    params: { path: './file.txt' },
+    extensionId: 'my-extension'
+};
+process.stdout.write(JSON.stringify(intent) + '\n');
+```
+
+v1.0.0 (NEW - SDK):
+```javascript
+const { ExtensionSDK } = require('@ghost/extension-sdk');
+
+class MyExtension {
+    constructor() {
+        this.sdk = new ExtensionSDK('my-extension');
+    }
+
+    async myCommand(params) {
+        const content = await this.sdk.requestFileRead({ path: './file.txt' });
+        const response = await this.sdk.requestNetworkCall({
+            url: 'https://api.example.com/data',
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ data: 'value' })
+        });
+        return { success: true, content, response };
+    }
+}
+```
+
+**Benefits:** Type safety, error handling, batch operations, timeout management, rate limit handling.
+
+**Reference:** `packages/extension-sdk/README.md`, `docs/extension-api.md`
+
+---
+
+### 4. RPC Protocol Updates
+
+**What Changed:** Standardized error response format with new error codes.
+
+**New Error Response:**
+```javascript
+{
+    success: false,
+    error: "Human-readable message",
+    code: "MACHINE_READABLE_CODE",
+    stage: "AUTHORIZATION",
+    requestId: "unique-id",
+    data: { /* context */ }
+}
+```
+
+**New Error Codes:**
+- Authorization: `AUTH_NOT_REGISTERED`, `AUTH_PERMISSION_DENIED`, `AUTH_RATE_LIMIT`, `PATH_NOT_ALLOWED`, `URL_NOT_ALLOWED`
+- Audit: `AUDIT_VALIDATION_FAILED`, `SI-10-PATH-TRAVERSAL`, `SI-10-COMMAND-INJECTION`, `SI-10-SSRF-LOCALHOST`, `SI-10-CONTENT-SECRETS`
+- Execution: `PIPELINE_EXECUTION_ERROR`, `TIMEOUT_EXCEEDED`, `CIRCUIT_BREAKER_OPEN`
+
+---
+
+### 5. Configuration Location Changed
+
+**What Changed:** Config moved from `~/.ghostrc` to `~/.ghost/config/ghostrc.json`.
+
+**Migration:**
+
+v0.4.0: `~/.ghostrc`
+```json
+{
+  "prompt": "Custom prompt",
+  "provider": "anthropic"
+}
+```
+
+v1.0.0: `~/.ghost/config/ghostrc.json`
+```json
+{
+  "prompt": "Custom prompt",
+  "provider": "anthropic",
+  "model": "claude-3-5-sonnet-20240620",
+  "security": {
+    "telemetryAuth": { "enabled": true },
+    "codeSigning": { "requireSigned": false }
   }
 }
 ```
 
-#### 3. Update Configuration
+**Auto-migration:** Runs automatically on first execution.
 
-**Backup old config:**
+**Environment Variables:**
+- v0.4.0: `GIT_COMMIT_PROMPT`, `ANTHROPIC_API_KEY`
+- v1.0.0: `GHOST_PROMPT`, `GHOST_ANTHROPIC_API_KEY`, `GHOST_PROVIDER`
+
+---
+
+### 6. Telemetry Authentication Required
+
+**What Changed:** Telemetry server requires JWT/API key authentication.
+
+**Migration:**
+
+v0.4.0:
 ```bash
-cp ~/.ghostrc ~/.ghostrc.backup
+curl http://localhost:9876/api/metrics
 ```
 
-**Ghost CLI will auto-migrate config on first run to:**
-```
-~/.ghost/config/ghostrc.json
-```
-
-**Or manually create:**
-```json
-{
-  "prompt": "Your custom prompt",
-  "provider": "anthropic",
-  "model": "claude-3-5-sonnet-20240620"
-}
-```
-
-#### 4. Update Environment Variables
-
-**Rename environment variables with GHOST_ prefix:**
-```bash
-# Before
-export GIT_COMMIT_PROMPT="..."
-export ANTHROPIC_API_KEY="..."
-
-# After
-export GHOST_PROMPT="..."
-export GHOST_ANTHROPIC_API_KEY="..."
-```
-
-#### 5. Update API Integrations
-
-**If you integrate with telemetry server, add authentication:**
+v1.0.0:
 ```bash
 # Generate token
 ghost telemetry generate-token --user admin
 
-# Use in requests
+# Use token
 curl -H "Authorization: Bearer <token>" http://localhost:9876/api/metrics
 ```
 
-#### 6. Test Extension
-
+**Commands:**
 ```bash
-# Validate extension
-ghost extension validate ./your-extension
-
-# Install extension
-ghost extension install ./your-extension
-
-# Test command
-ghost your-command --verbose
+ghost telemetry generate-token --user <username>
+ghost telemetry generate-apikey --name <name> --permissions read
+ghost telemetry list-apikeys
+ghost telemetry revoke-apikey <key-id>
 ```
 
-#### 7. Enable Optional Features
+---
 
-**Enable developer mode (development only):**
+## 📋 VERSION COMPATIBILITY MATRIX
+
+### Extension Compatibility
+| Extension | Ghost CLI | SDK | Status |
+|-----------|-----------|-----|--------|
+| 0.x.x | 0.4.0 | N/A | ❌ Not Compatible |
+| 1.0.0+ | 1.0.0+ | ^1.0.0 | ✅ Compatible |
+
+### Node.js Compatibility
+| Node.js | v0.4.0 | v1.0.0 |
+|---------|--------|--------|
+| 12.x | ⚠️ Deprecated | ❌ Not Supported |
+| 14.x | ✅ Supported | ✅ Supported |
+| 16.x | ✅ Supported | ✅ Supported |
+| 18.x | ✅ Supported | ✅ Recommended |
+| 20.x | N/A | ✅ Recommended |
+
+### Platform Compatibility
+| Platform | v0.4.0 | v1.0.0 |
+|----------|--------|--------|
+| Linux | ✅ | ✅ |
+| macOS | ✅ | ✅ |
+| Windows | ⚠️ Partial | ✅ Full |
+| WSL2 | ✅ | ✅ |
+
+---
+
+## 🔄 MIGRATION GUIDE
+
+### Step 1: Update Ghost CLI
+```bash
+npm update -g atlasia-ghost
+ghost --version  # Verify 1.0.0+
+```
+
+### Step 2: Update Extension Code
+```bash
+cd your-extension
+npm install @ghost/extension-sdk --save
+```
+
+Update `index.js`:
+```javascript
+const { ExtensionSDK } = require('@ghost/extension-sdk');
+
+class YourExtension {
+    constructor() {
+        this.sdk = new ExtensionSDK('your-extension-id');
+    }
+    async init(config) { return { success: true }; }
+    async yourCommand(params) { /* ... */ }
+    async cleanup() { return { success: true }; }
+}
+module.exports = YourExtension;
+```
+
+### Step 3: Update Manifest
+Add required fields:
+```json
+{
+  "commands": ["yourcommand"],
+  "dependencies": { "@ghost/extension-sdk": "^1.0.0" },
+  "permissions": ["filesystem:read"]
+}
+```
+
+### Step 4: Validate & Reinstall
+```bash
+ghost extension validate ./your-extension
+ghost extension remove your-extension-id
+ghost extension install ./your-extension
+```
+
+---
+
+## ✨ NEW FEATURES
+
+### 🔐 Security Hardening (6 Subsystems)
+
+#### 1. Telemetry Authentication
+- JWT token-based authentication
+- API key support with permissions
+- Token revocation and refresh
+**Impl:** `core/telemetry-auth.js`
+
+#### 2. Extension Code Signing
+- RSA 4096-bit signatures
+- Certificate management
+- Tamper detection
+- CRL support
+```bash
+ghost sign init --developer email@example.com
+ghost sign extension ./ext --cert ./cert.key
+ghost sign verify ./ext
+```
+**Impl:** `core/code-signing.js`
+
+#### 3. Security Policy Engine
+- NIST SI-10 validation
+- Custom policy definitions
+- Request size limits
+- Network whitelisting
+```bash
+ghost policy list
+ghost policy add --file policy.json
+```
+**Impl:** `core/security-policy-engine.js`
+
+#### 4. Intrusion Detection (IDS)
+- Behavioral baseline learning
+- Anomaly detection
+- MITRE ATT&CK mapping
+- Threat scoring (0-10)
+```bash
+ghost ids status
+ghost ids alerts --extension <id>
+```
+**Impl:** `core/intrusion-detection.js`
+
+#### 5. Secrets Management
+- AES-256-GCM encryption
+- Vault/AWS/Azure integration
+- Per-extension isolation
+- Automatic rotation
+```bash
+ghost secrets set <key> --value <val> --extension <id>
+ghost secrets get <key>
+```
+**Impl:** `core/secrets-manager.js`
+
+#### 6. Security Dashboard
+- Real-time threat indicators
+- MITRE ATT&CK visualization
+- Security metrics
+```bash
+ghost security dashboard
+ghost security metrics
+```
+**Impl:** `core/security-dashboard.js`
+
+**Doc:** `SECURITY_HARDENING_IMPLEMENTATION.md`
+
+---
+
+### 📊 Analytics Platform (6 Subsystems)
+
+#### 1. Extension Analytics Collector
+- Invocation tracking
+- Resource monitoring (CPU, memory, I/O, network)
+- Success/failure rates
+- Duration percentiles (p50, p95, p99)
+- 30-day retention
+**Impl:** `core/analytics/collector.js`
+
+#### 2. Behavior Analytics
+- Command sequence tracking
+- Usage patterns
+- Workflow detection
+- Next command prediction
+**Impl:** `core/analytics/behavior-analytics.js`
+
+#### 3. Cost Attribution
+- Multi-resource cost tracking
+- Billing models (per-invocation, tiered, subscription)
+- Cost projections
+- Marketplace integration
+**Impl:** `core/analytics/cost-attribution.js`
+
+#### 4. Performance Regression Detection
+- Version-based tracking
+- Automated regression detection (20% threshold)
+- Baseline comparison
+- Alert generation
+**Impl:** `core/analytics/performance-regression.js`
+
+#### 5. Distributed Tracing
+- Trace/span hierarchy
+- Cross-extension tracking
+- Call graph generation
+- Mermaid/DOT/JSON export
+**Impl:** `core/analytics/distributed-tracing.js`
+
+#### 6. Recommendation Engine
+- Repository analysis
+- Language/framework detection
+- Multi-factor scoring
+- Smart extension suggestions
+**Impl:** `core/analytics/recommendation-engine.js`
+
+**Doc:** `ANALYTICS_IMPLEMENTATION.md`
+
+---
+
+### 🏭 Operational Maturity (7 Subsystems)
+
+#### 1. SLA Monitoring
+- SLA objectives (99.9% availability, <200ms p95, <1% error)
+- Error budget tracking
+- Burn rate monitoring
+- Prometheus export
+```bash
+ghost sla status
+ghost sla alerts
+```
+**Impl:** `core/sla-monitoring.js`
+
+#### 2. Runbook Automation
+- Pre-configured runbooks
+- Auto-execution/manual approval
+- PagerDuty/Opsgenie integration
+```bash
+ghost runbook execute <id>
+ghost runbook history
+```
+**Impl:** `core/runbook-automation.js`
+
+#### 3. Chaos Engineering
+- 6 failure types (crash, latency, resource exhaustion, errors, circuit breaker, rate limit)
+- Experiment tracking
+- Resilience reports
+```bash
+ghost chaos create --type extension_crash --probability 0.05
+ghost chaos start <id>
+ghost chaos report
+```
+**Impl:** `core/chaos-engineering.js`
+
+#### 4. Capacity Forecasting
+- Time-series prediction (24-step ahead)
+- Exhaustion warnings
+- Growth rate analysis
+```bash
+ghost capacity forecasts
+ghost capacity warnings
+```
+**Impl:** `core/capacity-forecasting.js`
+
+#### 5. Compliance Evidence
+- SOC 2 Type II (5 controls)
+- ISO 27001:2013 (4 controls)
+- Evidence collection (SHA-256)
+```bash
+ghost compliance report soc2 --start 30d
+ghost compliance status
+```
+**Impl:** `core/compliance-evidence.js`
+
+#### 6. Grafana Dashboard
+- 11-panel SLO dashboard
+- Prometheus integration
+**Impl:** `core/grafana-dashboard-slo.json`
+
+#### 7. Maturity Scoring
+- 0-100 score (SLA 25%, Capacity 20%, Resilience 20%, Automation 20%, Compliance 15%)
+- Readiness levels (Production Ready, Near Production, Development, Early Stage, Initial)
+```bash
+ghost operational-maturity status
+ghost operational-maturity report
+```
+**Impl:** `core/operational-maturity.js`
+
+**Doc:** `OPERATIONAL_MATURITY_IMPLEMENTATION.md`
+
+---
+
+### 🛒 Marketplace Infrastructure
+- Extension discovery/installation
+- Version management
+- Rating/review system
+- Statistics tracking
+```bash
+ghost marketplace search <query>
+ghost marketplace install <id>
+ghost marketplace rate <id> --rating 5
+```
+**Impl:** `core/marketplace.js` | **Doc:** `MARKETPLACE_IMPLEMENTATION.md`
+
+---
+
+### 📦 Sandbox Execution
+- Process-level isolation
+- Resource limits (CPU, memory)
+- Filesystem/network sandboxing
+- Docker/VM support
+**Impl:** `core/sandbox.js` | **Doc:** `SANDBOX_IMPLEMENTATION.md`
+
+---
+
+### 🌐 Distributed Mesh Collaboration
+- Multi-node extension mesh
+- Load balancing
+- Health monitoring/failover
+- gRPC communication
+- Consistent hash routing
+```bash
+ghost mesh join --node <address>
+ghost mesh status
+```
+**Impl:** `core/mesh/` | **Doc:** `MESH_IMPLEMENTATION.md`
+
+---
+
+### 🔔 Webhook Automation
+- Event-driven webhooks
+- HTTP/HTTPS delivery with retry
+- HMAC-SHA256 signatures
+- Event filtering
+**Events:** extension.installed, extension.uninstalled, extension.updated, extension.failed, extension.metrics
+```bash
+ghost webhook register --url https://example.com/hook
+ghost webhook list
+```
+**Impl:** `core/webhooks/` | **Doc:** `WEBHOOK_IMPLEMENTATION.md`
+
+---
+
+### 🛠️ Developer Experience
+
+#### 1. Hot Module Reloading
+- Auto-detect manifest/code changes
+- Graceful restart
+**Impl:** `core/dev-mode.js`
+
+#### 2. Extension Debugger
+- Node.js debugger attachment
+- Chrome DevTools integration
+**Impl:** `core/debugger-adapter.js` | **UI:** `desktop/src/components/ExtensionDebugger.tsx`
+
+#### 3. Intent Playground
+- Interactive intent builder
+- Real-time validation
+- Template library
+**UI:** `desktop/src/components/IntentPlayground.tsx`
+
+#### 4. Profiling Dashboard
+- CPU/memory profiling
+- Bottleneck detection
+- Flamegraph generation
+**Impl:** `core/profiler.js` | **UI:** `desktop/src/components/ProfilingDashboard.tsx`
+
+#### 5. Developer Mode
+- Disable rate limiting
+- Relax validation
+- Debug logging
 ```bash
 ghost devmode enable
+ghost devmode status
 ```
+**Impl:** `core/dev-mode.js`
 
-**Configure security features (production):**
+#### 6. Template Wizard
+- Interactive scaffolding
+- 3 templates (Basic, TypeScript, Advanced)
 ```bash
-# Enable code signing
-ghost sign init --developer your@email.com
-
-# Configure policies
-ghost policy list
+ghost extension init
 ```
+**Impl:** `core/template-wizard.js`
+
+**Doc:** `DEVELOPER_EXPERIENCE_IMPLEMENTATION.md`
 
 ---
 
-## 🐛 Bug Fixes
+## 🔧 IMPROVEMENTS
 
-- Fixed subprocess cleanup on extension crash
-- Fixed memory leak in telemetry collector
-- Fixed race condition in circuit breaker state transitions
-- Fixed validation bypass in network operations
-- Fixed audit log rotation issues
-- Fixed extension discovery on Windows
-- Fixed JSON-RPC error code consistency
-- Fixed rate limiter token bucket edge cases
-- Fixed hot reload file watcher memory leaks
-- Fixed distributed tracing span correlation
+### Performance (Sprint 9)
+- **Throughput:** 1,247 req/s (+59%)
+- **P95 Latency:** 28ms (<50ms target)
+- **CPU:** 78% (-17%)
+- **Memory Growth:** 39% over 60s (<50%)
 
----
+**Optimizations:**
+- O(1) Set lookups
+- Memoization (>95% hit rate)
+- Object pooling (60% GC reduction)
+- Regex caching
+- Pre-computed rate constants
 
-## 🔒 Security
+**Doc:** `PERFORMANCE.md`, `core/SPRINT9_PERFORMANCE.md`
 
-### Security Advisories
-- **GHSA-2024-001:** Rate limit bypass via batch operations (Fixed)
-- **GHSA-2024-002:** Command injection in git operations (Fixed via policy engine)
-- **GHSA-2024-003:** SSRF vulnerability in network validation (Fixed)
-- **GHSA-2024-004:** Secrets exposure in audit logs (Fixed via entropy scanning)
+### Extension Runtime
+- Circuit breaker with half-open state
+- RFC 2698 trTCM rate limiting
+- Heartbeat monitoring
+- Auto-restart on crash
 
-### Security Enhancements
-- JWT token authentication for telemetry server
-- RSA 4096-bit code signing for extensions
-- NIST SI-10 input/output validation
-- AES-256-GCM encryption for secrets at rest
-- HMAC-SHA256 webhook signatures
-- MITRE ATT&CK framework threat mapping
-- Intrusion detection with behavioral baselines
-- Security dashboard with real-time threat indicators
-
-**Documentation:** See `SECURITY_HARDENING_IMPLEMENTATION.md`, `SECURITY_AUDIT_SUMMARY.md`
-
----
-
-## 📦 Package Updates
-
-### Ghost CLI (Root)
-- Version: 0.4.0 → 1.0.0
-- Node.js requirement: >=14.0.0 (unchanged)
-- Zero dependencies maintained (pure Node.js)
-
-### @ghost/extension-sdk
-- Version: 1.0.0 (new package)
-- Published to npm: `npm install @ghost/extension-sdk`
-- TypeScript definitions included
-- Complete API documentation
+### Pipeline Architecture
+- NIST SI-10 validation
+- Capability caching
+- Entropy scanning
+- Timeout/circuit breaker integration
 
 ### Desktop Console
-- Electron updated to latest stable
-- React 18 with concurrent features
-- TypeScript 5.x strict mode
-- Vite 5.x for faster builds
-- TailwindCSS 3.x for styling
+- React 18
+- TypeScript strict mode
+- TailwindCSS 3.x
+- Zustand state management
 
 ---
 
-## 🧪 Testing
+## 🐛 BUG FIXES
+- Subprocess cleanup on crash
+- Telemetry collector memory leak
+- Circuit breaker race condition
+- Network validation bypass
+- Audit log rotation
+- Windows extension discovery
+- JSON-RPC error consistency
+- Rate limiter edge cases
+- Hot reload watcher leaks
+- Distributed tracing correlation
 
-### New Test Suites
-- Security hardening tests (code signing, policies, IDS)
-- Analytics platform tests (collector, behavior, cost attribution)
-- Operational maturity tests (SLA, chaos, capacity forecasting)
-- Developer experience tests (hot reload, debugger, profiler)
-- Extension SDK tests (all API methods)
-- Performance regression tests
-- E2E tests with Playwright
+---
 
-### Test Commands
+## 🔒 SECURITY
+
+### Fixed Advisories
+- **GHSA-2024-001:** Rate limit bypass
+- **GHSA-2024-002:** Command injection
+- **GHSA-2024-003:** SSRF vulnerability
+- **GHSA-2024-004:** Secrets exposure
+
+### Enhancements
+- JWT authentication
+- RSA 4096-bit signing
+- NIST SI-10 validation
+- AES-256-GCM encryption
+- HMAC-SHA256 signatures
+- MITRE ATT&CK mapping
+- Behavioral IDS
+- Real-time dashboard
+
+**Doc:** `SECURITY_HARDENING_IMPLEMENTATION.md`
+
+---
+
+## 📦 PACKAGES
+
+### Ghost CLI
+- 0.4.0 → 1.0.0
+- Node.js >=14.0.0
+- Zero dependencies
+
+### @ghost/extension-sdk (NEW)
+- v1.0.0
+- npm: `@ghost/extension-sdk`
+- TypeScript definitions
+
+### Desktop
+- Electron: Latest
+- React 18
+- TypeScript 5.x
+- Vite 5.x
+- TailwindCSS 3.x
+
+---
+
+## 🧪 TESTING
+
+**New Suites:** Security, Analytics, Operational, DevEx, SDK, Performance, E2E
+
+**Commands:**
 ```bash
-# Root tests
-npm test
-
-# Desktop tests
-cd desktop && npm test
-
-# SDK tests
-cd packages/extension-sdk && npm test
-
-# Integration tests
-node test.js
-
-# Performance tests
-node scripts/profile-load-test.js
-
-# E2E tests
-cd desktop && npm run test:e2e
+npm test                              # Root
+cd desktop && npm test                # Desktop
+cd packages/extension-sdk && npm test # SDK
+node test.js                          # Integration
+node scripts/profile-load-test.js    # Performance
+cd desktop && npm run test:e2e        # E2E
 ```
 
 ---
 
-## 📊 Metrics & Telemetry
+## 📊 METRICS
 
-### New Metrics
-- Extension invocation count and success rate
-- Resource usage (CPU, memory, I/O, network)
-- Duration percentiles (p50, p95, p99)
-- Cost attribution per extension
-- SLA compliance metrics
-- Security threat indicators
-- Operational maturity score
+**Prometheus:**
+- `ghost_requests_total`
+- `ghost_request_latency_milliseconds`
+- `ghost_rate_limit_violations_total`
+- `ghost_validation_failures_total`
+- `ghost_auth_failures_total`
+- `ghost_error_budget_consumed`
+- `ghost_error_budget_total`
 
-### Prometheus Metrics
-```
-ghost_requests_total
-ghost_request_latency_milliseconds
-ghost_rate_limit_violations_total
-ghost_validation_failures_total
-ghost_auth_failures_total
-ghost_error_budget_consumed
-ghost_error_budget_total
-```
-
-**Integration:** See `core/exporters/prometheus-exporter.js`
+**Integration:** `core/exporters/prometheus-exporter.js`
 
 ---
 
-## 🎯 Roadmap (Future Versions)
+## 📚 DOCUMENTATION
 
-### Planned for v1.1.0
-- Multi-factor authentication (MFA) for telemetry
-- Hardware security module (HSM) integration
-- Certificate transparency logging
-- Machine learning-based anomaly detection
+**New:**
+- `SECURITY_HARDENING_IMPLEMENTATION.md`
+- `ANALYTICS_IMPLEMENTATION.md`
+- `OPERATIONAL_MATURITY_IMPLEMENTATION.md`
+- `DEVELOPER_EXPERIENCE_IMPLEMENTATION.md`
+- `WEBHOOK_IMPLEMENTATION.md`
+- `MESH_IMPLEMENTATION.md`
+- `SANDBOX_IMPLEMENTATION.md`
+- `MARKETPLACE_IMPLEMENTATION.md`
+- `PERFORMANCE.md`
+- `docs/DEVELOPER_TOOLKIT.md`
+- `docs/extension-api.md`
+- `docs/extension-examples.md`
+- `docs/QUICK_REFERENCE.md`
+- `core/MANIFEST_REFERENCE.md`
+- `packages/extension-sdk/README.md`
+
+**Updated:**
+- `README.md`
+- `AGENTS.md`
+- `INSTALL.md`
+
+---
+
+## 🎯 DEPRECATIONS
+
+**Deprecated in v1.0.0 (Removed in v2.0.0):**
+1. Direct stdio JSON-RPC → Use ExtensionWrapper
+2. Manual intent creation → Use @ghost/extension-sdk
+3. `~/.ghostrc` → Use `~/.ghost/config/ghostrc.json`
+4. Old env vars → Use `GHOST_*` prefix
+5. Anonymous telemetry → Authentication required
+6. WebSocket telemetry → Use HTTP/2
+
+**Timeline:**
+- v1.0.0: Deprecated (warnings)
+- v1.5.0 (Q2 2024): Errors
+- v2.0.0 (Q4 2024): Removed
+
+---
+
+## 🎯 ROADMAP
+
+### v1.1.0 (Q1 2024)
+- MFA for telemetry
+- HSM integration
+- Certificate transparency
+- ML anomaly detection
 - SIEM integration
-- Blockchain-based audit trails
+- Blockchain audit trails
 
-### Planned for v1.2.0
-- Real-time streaming analytics
-- Multi-repository aggregation
-- Team collaboration analytics
-- Advanced visualization dashboards
-- Automated performance optimization
-- VSCode extension integration
+### v1.2.0 (Q2 2024)
+- Streaming analytics
+- Multi-repo aggregation
+- Team collaboration
+- Advanced visualizations
+- Auto-optimization
+- VSCode extension
 
-### Planned for v2.0.0
+### v2.0.0 (Q4 2024)
 - GraphQL API
-- Plugin marketplace with payments
-- Enterprise license management
-- Multi-tenancy support
+- Marketplace payments
+- Enterprise licensing
+- Multi-tenancy
 - Kubernetes operator
 - Cloud-native deployment
 
 ---
 
-## 🙏 Acknowledgments
+## 🔗 LINKS
 
-Special thanks to all contributors who made this major release possible. This release represents months of development across security, analytics, operational maturity, and developer experience improvements.
-
----
-
-## 📝 Upgrade Instructions
-
-### For Extension Developers
-
-1. **Read the breaking changes** section above carefully
-2. **Install @ghost/extension-sdk** in your extension: `npm install @ghost/extension-sdk`
-3. **Update extension code** to use ExtensionWrapper pattern
-4. **Validate manifest** with new schema: `ghost extension validate`
-5. **Test thoroughly** with `ghost devmode enable` before deploying
-6. **Update documentation** to reference SDK instead of raw intents
-7. **Review security features** and enable code signing if distributing publicly
-
-### For Ghost CLI Users
-
-1. **Backup configuration:** `cp -r ~/.ghost ~/.ghost.backup`
-2. **Update Ghost CLI:** `npm update -g atlasia-ghost`
-3. **Verify version:** `ghost --version` (should show 1.0.0)
-4. **Run automatic migration:** Ghost will auto-migrate config on first run
-5. **Update extensions:** Reinstall extensions to v1.0.0 compatible versions
-6. **Test commands:** Run `ghost gateway status` to verify installation
-
-### For Enterprise Deployments
-
-1. **Review security features** in `SECURITY_HARDENING_IMPLEMENTATION.md`
-2. **Configure authentication** for telemetry server
-3. **Enable code signing** for marketplace extensions
-4. **Set up SLA monitoring** with Grafana dashboards
-5. **Configure compliance evidence** collection for your framework
-6. **Enable chaos engineering** in staging environments first
-7. **Review operational maturity** metrics and set baselines
-
----
-
-## 🔗 Links
-
-- **Repository:** https://github.com/lamallamadel/ghost
-- **Documentation:** https://github.com/lamallamadel/ghost/tree/main/docs
-- **Extension SDK:** https://www.npmjs.com/package/@ghost/extension-sdk
+- **Repo:** https://github.com/lamallamadel/ghost
+- **Docs:** https://github.com/lamallamadel/ghost/tree/main/docs
+- **SDK:** https://www.npmjs.com/package/@ghost/extension-sdk
 - **Issues:** https://github.com/lamallamadel/ghost/issues
-- **Changelog:** https://github.com/lamallamadel/ghost/blob/main/CHANGELOG.md
 
 ---
 
 ## [0.4.0] - 2023-12-15
 
 ### Added
-- Gateway architecture with JSON-RPC protocol
-- Extension discovery and lifecycle management
-- Security pipeline (intercept, auth, audit, execute layers)
-- Bundled ghost-git-extension
-- AI-powered commit generation
-- Version management with semver
+- Gateway architecture with JSON-RPC
+- Extension discovery/lifecycle
+- Security pipeline (intercept, auth, audit, execute)
+- ghost-git-extension
+- AI commit generation
+- Version management
 - Merge conflict resolution
-- Monitoring console (desktop app)
-- Audit logging system
-- Circuit breaker implementation
-- Rate limiting with token bucket
+- Monitoring console
+- Audit logging
+- Circuit breaker
+- Rate limiting
 
 ### Changed
-- Refactored from monolithic to gateway architecture
-- Moved Git operations to extension
+- Monolithic → Gateway architecture
+- Git ops → Extension
 - Improved subprocess management
 
 ### Fixed
-- Memory leaks in subprocess communication
-- Race conditions in extension startup
-- Audit log corruption issues
+- Memory leaks in subprocess
+- Race conditions in startup
+- Audit log corruption
 
 ---
 
