@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  registry:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - DB_PATH=/data/registry.db
+    volumes:
+      - registry-data:/data
+      - registry-packages:/app/packages
+    restart: unless-stopped
+
+volumes:
+  registry-data:
+  registry-packages:
