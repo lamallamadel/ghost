@@ -16,6 +16,7 @@ The Ghost Extension Developer Toolkit provides everything you need to build, val
 - [Installation](#installation)
 - [CLI Commands](#cli-commands)
 - [Extension SDK](#extension-sdk)
+- [Migration Tool](#migration-tool)
 - [Workflow](#workflow)
 - [Architecture](#architecture)
 - [Publishing](#publishing)
@@ -143,6 +144,77 @@ Simulating permission requests:
 
 Ready to install with: ghost extension install ./my-extension
 ```
+
+### `ghost extension migrate [path]`
+
+Migrates v0.x extensions to v1.0.0 SDK.
+
+**What it does:**
+
+1. **Analyzes** - Detects legacy code patterns (module.exports, direct I/O)
+2. **Validates** - Checks manifest compatibility with v1.0.0
+3. **Generates** - Creates ExtensionWrapper boilerplate with ExtensionSDK
+4. **Updates** - Modifies manifest.json and package.json
+5. **Documents** - Creates detailed MIGRATION_GUIDE.md
+
+**Usage:**
+
+```bash
+# Analyze without changes
+ghost extension migrate
+
+# Analyze specific path
+ghost extension migrate ./my-extension
+
+# Apply migration changes
+ghost extension migrate --apply
+
+# Apply without backup
+ghost extension migrate --apply --no-backup
+```
+
+**Output Example:**
+
+```
+Ghost Extension Migration Tool v1.0.0
+────────────────────────────────────────────────────────
+
+Analyzing extension at: /path/to/my-extension
+
+✓ Loaded manifest for: My Extension
+✓ Loaded main file: index.js
+
+Step 1: Analyzing code patterns
+Code Pattern Analysis:
+  • Export pattern: class
+  • Uses ExtensionRPCClient (legacy)
+  ⚠ Missing coreHandler injection
+  ⚠ Direct fs module usage detected
+
+Step 2: Validating manifest compatibility
+  ✓ Manifest is v1.0.0 compatible
+
+Required upgrades:
+  1. capabilities.network.rateLimit.be
+     Current: undefined
+     Suggested: 50
+     Reason: v1.0.0 requires "be" (excess burst) parameter
+
+Step 3: Generating migration plan
+Migration steps:
+  1. ● Add @ghost/extension-sdk dependency to package.json
+  2. ● Update manifest.json for v1.0.0 compatibility
+  3. ● Generate ExtensionWrapper with ExtensionSDK
+  4. ● Update RPC client to accept coreHandler injection
+
+Manual changes required: 2
+  1. [critical] index.js: RPC client without coreHandler injection
+  2. [high] index.js: Direct I/O operations detected
+
+Run with --apply flag to apply migration changes
+```
+
+See [EXTENSION_MIGRATION.md](./EXTENSION_MIGRATION.md) for complete migration guide.
 
 ### Other Commands
 

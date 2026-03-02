@@ -646,6 +646,7 @@ class GatewayLauncher {
   ghost extension info <id>               Show extension information
   ghost extension init <name>             Scaffold a new extension project
   ghost extension validate [path]         Validate extension manifest and permissions
+  ghost extension migrate [path]          Migrate v0.x extension to v1.0.0 SDK
 `);
             return;
         }
@@ -788,11 +789,17 @@ class GatewayLauncher {
             // VIOLATION: Delegates to _validateExtension which has direct fs operations
             const extPath = parsedArgs.args[0] || '.';
             await this._validateExtension(extPath);
+        } else if (subcommand === 'migrate') {
+            // Delegate to migration tool
+            const ExtensionMigrator = require('./core/extension-migrator');
+            const migrator = new ExtensionMigrator();
+            const extPath = parsedArgs.args[0] || '.';
+            await migrator.migrate(extPath, parsedArgs.flags);
         } else {
             console.error(`${Colors.FAIL}Error: Unknown extension subcommand '${subcommand}'${Colors.ENDC}\n`);
             
             // Suggest similar subcommands
-            const validSubcommands = ['list', 'install', 'remove', 'info', 'init', 'validate'];
+            const validSubcommands = ['list', 'install', 'remove', 'info', 'init', 'validate', 'migrate'];
             const suggestions = this._findSimilarCommands(subcommand, validSubcommands);
             
             if (suggestions.length > 0) {
@@ -1328,7 +1335,7 @@ class GatewayLauncher {
         const commands = [
             'setup', 'doctor', 'completion', 'extension', 'gateway', 'audit-log', 'console', 'logs', 'webhook'
         ];
-        const extensionSubcommands = ['list', 'install', 'remove', 'info', 'init', 'validate'];
+        const extensionSubcommands = ['list', 'install', 'remove', 'info', 'init', 'validate', 'migrate'];
         const gatewaySubcommands = ['status', 'extensions', 'health', 'logs', 'metrics', 'spans'];
         const logsSubcommands = ['prune', 'info'];
         const webhookSubcommands = ['start', 'stop', 'status', 'events', 'deliveries', 'replay', 'queue-stats', 'prune'];
@@ -3276,6 +3283,7 @@ ${Colors.BOLD}EXTENSION MANAGEMENT:${Colors.ENDC}
   ${Colors.CYAN}extension info${Colors.ENDC} <id>           Show detailed extension information
   ${Colors.CYAN}extension init${Colors.ENDC} <name>         Scaffold new extension project with boilerplate
   ${Colors.CYAN}extension validate${Colors.ENDC} [path]     Validate extension manifest and permissions
+  ${Colors.CYAN}extension migrate${Colors.ENDC} [path]      Migrate v0.x extension to v1.0.0 SDK
 
 ${Colors.BOLD}GATEWAY & MONITORING:${Colors.ENDC}
   ${Colors.CYAN}gateway status${Colors.ENDC}                Gateway status and pipeline statistics
@@ -3329,6 +3337,7 @@ ${Colors.BOLD}EXAMPLES:${Colors.ENDC}
   ghost extension list
   ghost extension init my-extension
   ghost extension validate
+  ghost extension migrate --apply
   ghost completion bash
   ghost gateway status --verbose --json
   ghost commit --dry-run --no-color

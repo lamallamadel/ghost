@@ -204,6 +204,8 @@ class AnalyticsPlatform extends EventEmitter {
     }
 }
 
+const AnalyticsAPIServer = require('./api-server');
+
 module.exports = {
     AnalyticsPlatform,
     AnalyticsCollector,
@@ -211,5 +213,6 @@ module.exports = {
     CostAttribution,
     PerformanceRegression,
     DistributedTracing,
-    RecommendationEngine
+    RecommendationEngine,
+    AnalyticsAPIServer
 };

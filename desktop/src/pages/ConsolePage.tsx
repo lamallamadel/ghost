@@ -14,6 +14,7 @@ import { ExtensionsTab } from '@/tabs/ExtensionsTab'
 import { ExtensionManagerTab } from '@/tabs/ExtensionManagerTab'
 import { MarketplaceTab } from '@/tabs/MarketplaceTab'
 import { DeveloperTab } from '@/tabs/DeveloperTab'
+import { AnalyticsTab } from '@/tabs/AnalyticsTab'
 import { useToastsStore } from '@/stores/useToastsStore'
 import { OnboardingWalkthrough } from '@/components/OnboardingWalkthrough'
 
@@ -178,6 +179,7 @@ export default function ConsolePage() {
             {activeTab.kind === 'extensions' ? <ExtensionsTab /> : null}
             {activeTab.kind === 'extension-manager' ? <ExtensionManagerTab /> : null}
             {activeTab.kind === 'marketplace' ? <MarketplaceTab /> : null}
+            {activeTab.kind === 'analytics' ? <AnalyticsTab /> : null}
             {activeTab.kind === 'history' ? <HistoryTab /> : null}
             {activeTab.kind === 'git' ? <GitTab /> : null}
             {activeTab.kind === 'logs' ? <LogsTab /> : null}
