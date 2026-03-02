@@ -180,3 +180,11 @@ create-exporters.js
 .ghost/ids/baselines.json
 .ghost/ids/alerts-*.log
 .ghost/policies/custom.json
+
+# Extension Registry
+registry/data/
+registry/packages/
+registry/uploads/
+registry/temp/
+registry/*.db
+registry/*.db-*

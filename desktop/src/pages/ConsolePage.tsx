@@ -15,6 +15,7 @@ import { ExtensionManagerTab } from '@/tabs/ExtensionManagerTab'
 import { MarketplaceTab } from '@/tabs/MarketplaceTab'
 import { DeveloperTab } from '@/tabs/DeveloperTab'
 import { AnalyticsTab } from '@/tabs/AnalyticsTab'
+import { PlaygroundTab } from '@/tabs/PlaygroundTab'
 import { useToastsStore } from '@/stores/useToastsStore'
 import { OnboardingWalkthrough } from '@/components/OnboardingWalkthrough'
 
@@ -175,6 +176,7 @@ export default function ConsolePage() {
 
           <div className="min-h-0 flex-1 overflow-hidden">
             {activeTab.kind === 'commands' ? <CommandsTab tabId={activeTab.id} /> : null}
+            {activeTab.kind === 'playground' ? <PlaygroundTab /> : null}
             {activeTab.kind === 'gateway' ? <GatewayTab /> : null}
             {activeTab.kind === 'extensions' ? <ExtensionsTab /> : null}
             {activeTab.kind === 'extension-manager' ? <ExtensionManagerTab /> : null}

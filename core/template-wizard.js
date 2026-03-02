@@ -8,6 +8,10 @@ class TemplateWizard {
             input: process.stdin,
             output: process.stdout
         });
+        
+        // Load template gallery
+        const TemplateGallery = require('./templates/gallery');
+        this.gallery = new TemplateGallery();
     }
 
     async prompt(question) {
@@ -34,29 +38,102 @@ class TemplateWizard {
 
     async run() {
         console.log('\n🔧 Ghost Extension Template Generator\n');
+        console.log('Choose from our template gallery or create a custom extension:\n');
 
-        // Extension name
-        const name = await this.prompt('Extension name: ');
-        if (!name) {
-            console.log('Error: Extension name is required');
-            this.rl.close();
-            return;
+        // Show template gallery
+        const templates = this.gallery.listTemplates();
+        console.log('📚 Template Gallery:\n');
+        templates.forEach((t, idx) => {
+            console.log(`  ${idx + 1}. ${t.name} - ${t.description}`);
+            console.log(`     ${t.category} | Features: ${t.features.join(', ')}`);
+            console.log('');
+        });
+        console.log(`  ${templates.length + 1}. Custom - Create from scratch`);
+        console.log('');
+
+        const templateChoice = await this.prompt(`Choose template (1-${templates.length + 1}): `);
+        const templateIndex = parseInt(templateChoice) - 1;
+
+        let extensionData;
+
+        if (templateIndex >= 0 && templateIndex < templates.length) {
+            // Use pre-built template
+            const template = templates[templateIndex];
+            console.log(`\n✨ Selected: ${template.name}\n`);
+            
+            extensionData = await this.gatherTemplateData(template);
+            
+            console.log('\nGenerating extension from template...\n');
+            const outputDir = await this.gallery.generateFromTemplate(template.id, extensionData);
+            
+            this.showSuccessMessage(outputDir, template);
+        } else {
+            // Custom extension flow
+            extensionData = await this.gatherCustomData();
+            
+            console.log('\nGenerating extension...\n');
+            const outputDir = await this.generateExtension(extensionData);
+            
+            console.log(`✓ Extension generated at: ${outputDir}`);
+            console.log('\nNext steps:');
+            console.log(`  cd ${outputDir}`);
+            if (extensionData.template === 'typescript') {
+                console.log('  npm install');
+                console.log('  npm run build');
+            }
+            console.log('  ghost extension validate');
+            console.log('  ghost extension install .\n');
         }
 
-        // Extension ID (derived from name)
+        this.rl.close();
+    }
+
+    async gatherTemplateData(template) {
+        const name = await this.prompt('Extension name: ');
+        if (!name) {
+            throw new Error('Extension name is required');
+        }
+
         const defaultId = name.toLowerCase().replace(/\s+/g, '-');
         const id = await this.prompt(`Extension ID (${defaultId}): `) || defaultId;
 
-        // Description
-        const description = await this.prompt('Description: ');
-
-        // Author
+        const description = await this.prompt(`Description (${template.description}): `) || template.description;
         const author = await this.prompt('Author: ');
-
-        // Version
         const version = await this.prompt('Version (1.0.0): ') || '1.0.0';
 
-        // Capabilities
+        const data = {
+            name,
+            id,
+            description,
+            author,
+            version,
+            template
+        };
+
+        // Template-specific prompts
+        if (template.prompts) {
+            for (const prompt of template.prompts) {
+                const answer = await this.prompt(prompt.question);
+                data[prompt.key] = answer || prompt.default;
+            }
+        }
+
+        return data;
+    }
+
+    async gatherCustomData() {
+        const name = await this.prompt('Extension name: ');
+        if (!name) {
+            throw new Error('Extension name is required');
+        }
+
+        const defaultId = name.toLowerCase().replace(/\s+/g, '-');
+        const id = await this.prompt(`Extension ID (${defaultId}): `) || defaultId;
+
+        const description = await this.prompt('Description: ');
+        const author = await this.prompt('Author: ');
+        const version = await this.prompt('Version (1.0.0): ') || '1.0.0';
+
         console.log('\nSelect capabilities:');
         const capabilities = await this.promptMultiSelect('', [
             { name: 'Filesystem access', value: 'filesystem', description: 'Read/write files' },
@@ -65,11 +142,9 @@ class TemplateWizard {
             { name: 'Process execution', value: 'process', description: 'Run shell commands' }
         ]);
 
-        // Commands
         const commandsStr = await this.prompt('Commands (comma-separated, e.g., build,test): ');
         const commands = commandsStr ? commandsStr.split(',').map(c => c.trim()) : [];
 
-        // Template type
         console.log('\nSelect template:');
         const templates = [
             { name: 'Basic', value: 'basic', description: 'Simple extension structure' },
@@ -82,9 +157,7 @@ class TemplateWizard {
         const templateChoice = await this.prompt('Choose template (1-3): ');
         const template = templates[parseInt(templateChoice) - 1]?.value || 'basic';
 
-        console.log('\nGenerating extension...\n');
-
-        const extensionData = {
+        return {
             name,
             id,
             description,
@@ -94,20 +167,25 @@ class TemplateWizard {
             commands,
             template
         };
+    }
 
-        const outputDir = await this.generateExtension(extensionData);
-        
-        console.log(`✓ Extension generated at: ${outputDir}`);
-        console.log('\nNext steps:');
+    showSuccessMessage(outputDir, template) {
+        console.log(`✓ Extension generated at: ${outputDir}\n`);
+        console.log('Next steps:');
         console.log(`  cd ${outputDir}`);
-        if (template === 'typescript') {
-            console.log('  npm install');
-            console.log('  npm run build');
+        
+        if (template.setup) {
+            template.setup.forEach(step => console.log(`  ${step}`));
         }
+        
         console.log('  ghost extension validate');
         console.log('  ghost extension install .\n');
-
-        this.rl.close();
+        
+        if (template.usage) {
+            console.log('Example usage:');
+            template.usage.forEach(example => console.log(`  ${example}`));
+            console.log('');
+        }
     }
 
     async generateExtension(data) {
@@ -119,14 +197,12 @@ class TemplateWizard {
 
         fs.mkdirSync(outputDir, { recursive: true });
 
-        // Generate manifest.json
         const manifest = this._generateManifest(data);
         fs.writeFileSync(
             path.join(outputDir, 'manifest.json'),
             JSON.stringify(manifest, null, 2)
         );
 
-        // Generate main file
         if (data.template === 'typescript') {
             this._generateTypeScriptExtension(outputDir, data);
         } else if (data.template === 'advanced') {
@@ -135,11 +211,9 @@ class TemplateWizard {
             this._generateBasicExtension(outputDir, data);
         }
 
-        // Generate README
         const readme = this._generateReadme(data);
         fs.writeFileSync(path.join(outputDir, 'README.md'), readme);
 
-        // Generate .gitignore
         const gitignore = this._generateGitignore();
         fs.writeFileSync(path.join(outputDir, '.gitignore'), gitignore);
 
@@ -158,7 +232,6 @@ class TemplateWizard {
             commands: data.commands
         };
 
-        // Build capabilities object
         if (data.capabilities.includes('filesystem')) {
             manifest.capabilities.filesystem = {
                 read: ['**/*'],
@@ -221,11 +294,9 @@ module.exports = ${this._toPascalCase(data.id)}Extension;
     }
 
     _generateTypeScriptExtension(outputDir, data) {
-        // Create src directory
         const srcDir = path.join(outputDir, 'src');
         fs.mkdirSync(srcDir);
 
-        // Generate TypeScript source
         const tsContent = `// ${data.name}
 // ${data.description}
 
@@ -266,7 +337,6 @@ ${data.commands.map(cmd => `    async ${cmd}(params: CommandParams): Promise<any
 
         fs.writeFileSync(path.join(srcDir, 'index.ts'), tsContent);
 
-        // Generate tsconfig.json
         const tsconfig = {
             compilerOptions: {
                 target: 'ES2020',
@@ -289,7 +359,6 @@ ${data.commands.map(cmd => `    async ${cmd}(params: CommandParams): Promise<any
             JSON.stringify(tsconfig, null, 2)
         );
 
-        // Generate package.json
         const packageJson = {
             name: data.id,
             version: data.version,
@@ -313,10 +382,8 @@ ${data.commands.map(cmd => `    async ${cmd}(params: CommandParams): Promise<any
     }
 
     _generateAdvancedExtension(outputDir, data) {
-        // Generate basic structure first
         this._generateBasicExtension(outputDir, data);
 
-        // Add test directory
         const testDir = path.join(outputDir, 'test');
         fs.mkdirSync(testDir);
 
@@ -350,7 +417,6 @@ ${data.commands.map(cmd => `    it('should execute ${cmd}', async () => {
 
         fs.writeFileSync(path.join(testDir, 'index.test.js'), testContent);
 
-        // Add package.json for tests
         const packageJson = {
             name: data.id,
             version: data.version,

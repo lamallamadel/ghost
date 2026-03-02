@@ -565,6 +565,46 @@
         }
       ]
     },
+    "extensionDependencies": {
+      "type": "object",
+      "description": "Inter-extension dependencies with version constraints. Specifies other Ghost extensions required by this extension. The dependency resolver performs topological sorting to determine correct load order, validates version constraints (semver ranges), detects circular dependencies, and prevents capability conflicts. Extensions are loaded in dependency order (dependencies before dependents). Fail-closed: missing dependencies, circular dependencies, version mismatches, and capability conflicts cause load failure.",
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[\\^~><=]?[\\d\\.\\*xX\\s-]+$"
+      },
+      "examples": [
+        {
+          "core-utils": "^1.0.0",
+          "auth-provider": "~2.1.0"
+        },
+        {},
+        {
+          "logging-extension": ">=1.0.0",
+          "metrics-collector": "^2.0.0"
+        },
+        {
+          "base-extension": "1.x",
+          "shared-components": "*"
+        },
+        {
+          "api-client": "1.0.0 - 2.0.0"
+        }
+      ]
+    },
+    "provides": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Explicit capability declarations that this extension provides. Used for conflict detection - multiple extensions providing the same capability will cause load failure. Capabilities can be any string identifier (e.g., 'auth', 'logging', 'storage'). Commands and hooks are automatically treated as capabilities. Use this to declare semantic capabilities beyond commands/hooks.",
+      "examples": [
+        ["auth", "oauth2"],
+        [],
+        ["logging", "telemetry"],
+        ["storage", "cache"],
+        ["api-client", "rest"]
+      ]
+    },
     "config": {
       "type": "object",
       "description": "Default configuration values for the extension. These values can be overridden by user configuration in ~/.ghostrc or project-level .ghostrc files. Use this for sensible defaults that users may want to customize.",

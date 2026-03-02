@@ -2,28 +2,36 @@ const fs = require('fs');
 const path = require('path');
 
 const MANIFEST_SCHEMA = require('./manifest-schema.json');
+const ExtensionDependencyResolver = require('./extension-dependency-resolver');
 
 /**
  * ExtensionLoader - Extension Discovery and Loading
  * 
- * RESPONSIBILITY: Filesystem discovery, manifest validation, and module instantiation
+ * RESPONSIBILITY: Filesystem discovery, manifest validation, module instantiation,
+ * and dependency resolution with topological sorting
  * 
  * FAIL-CLOSED SECURITY MODEL:
  * - Manifest validation failures prevent extension loading (security-first approach)
  * - Invalid JSON manifests are rejected (parse errors are failures)
  * - Missing required fields cause load failure (strict validation)
  * - Malformed capability declarations are rejected (no assumptions)
+ * - Missing dependencies cause load failure (fail-closed on dependencies)
+ * - Circular dependencies cause load failure (fail-closed)
+ * - Version constraint violations cause load failure (fail-closed)
+ * - Capability conflicts cause load failure (fail-closed)
  * 
  * GRACEFUL DEGRADATION:
- * - Individual extension failures do not stop batch loading
+ * - Individual extension failures do not stop batch loading (during discovery)
  * - Extension instantiation failures are logged but not fatal (allows metadata-only extensions)
  * - Missing main file is fatal (fail-closed on required resources)
  */
 
 class ExtensionLoader {
-    constructor(extensionsDir) {
+    constructor(extensionsDir, options = {}) {
         this.extensionsDir = extensionsDir;
         this.loadedExtensions = [];
+        this.options = options;
+        this.dependencyResolver = new ExtensionDependencyResolver();
     }
 
     /**
@@ -35,8 +43,9 @@ class ExtensionLoader {
      * - Skips directories without manifest.json (fail-closed: manifest required)
      * - Catches individual extension failures to enable batch loading
      * - Logs errors for failed extensions (visibility without blocking)
+     * - Resolves dependencies and orders extensions (fail-closed on dep resolution)
      * 
-     * @returns {Promise<Array>} Array of successfully loaded extension metadata
+     * @returns {Promise<Array>} Array of successfully loaded extension metadata in load order
      */
     async discoverAndLoad() {
         if (!fs.existsSync(this.extensionsDir)) {
@@ -51,6 +60,7 @@ class ExtensionLoader {
         const entries = fs.readdirSync(this.extensionsDir, { withFileTypes: true });
         const extensions = [];
 
+        // Phase 1: Discover and validate all extensions
         for (const entry of entries) {
             // Deterministic filtering: only process directories
             if (!entry.isDirectory()) {
@@ -70,14 +80,67 @@ class ExtensionLoader {
                 // Delegate to loadExtension (fail-closed validation inside)
                 const extension = await this.loadExtension(extPath, manifestPath);
                 extensions.push(extension);
-                this.loadedExtensions.push(extension);
             } catch (error) {
                 // Graceful degradation: log but continue loading other extensions
                 console.error(`[ExtensionLoader] Failed to load ${entry.name}:`, error.message);
             }
         }
 
-        return extensions;
+        // Phase 2: Resolve dependencies and determine load order
+        try {
+            const orderedExtensions = await this.resolveDependencies(extensions);
+            
+            // Update loaded extensions list with ordered extensions
+            this.loadedExtensions = orderedExtensions;
+            
+            return orderedExtensions;
+        } catch (error) {
+            // Dependency resolution failure is fatal for the entire batch
+            console.error(`[ExtensionLoader] Dependency resolution failed:`, error.message);
+            throw error;
+        }
+    }
+
+    /**
+     * Resolve extension dependencies and return extensions in load order
+     * 
+     * @param {Array<Object>} extensions - Array of extension objects
+     * @returns {Promise<Array<Object>>} Extensions in dependency-resolved load order
+     * @throws {Error} If dependency resolution fails
+     */
+    async resolveDependencies(extensions) {
+        // Clear resolver state
+        this.dependencyResolver.clear();
+        
+        // Register all extensions
+        for (const extension of extensions) {
+            try {
+                this.dependencyResolver.register(extension);
+            } catch (error) {
+                console.error(
+                    `[ExtensionLoader] Failed to register ${extension.manifest.id}:`,
+                    error.message
+                );
+                throw error;
+            }
+        }
+        
+        // Resolve dependencies and get load order
+        try {
+            const orderedExtensions = this.dependencyResolver.resolve();
+            
+            if (this.options.verbose) {
+                console.log('[ExtensionLoader] Extension load order:');
+                for (let i = 0; i < orderedExtensions.length; i++) {
+                    console.log(`  ${i + 1}. ${orderedExtensions[i].manifest.id}@${orderedExtensions[i].manifest.version}`);
+                }
+            }
+            
+            return orderedExtensions;
+        } catch (error) {
+            console.error('[ExtensionLoader] Dependency resolution error:', error.message);
+            throw error;
+        }
     }
 
     /**
@@ -350,6 +413,65 @@ class ExtensionLoader {
         // Remove from loaded extensions list (deterministic state transition)
         this.loadedExtensions.splice(index, 1);
         return true;
+    }
+
+    /**
+     * Get dependency graph for loaded extensions
+     * 
+     * @returns {Object} Dependency graph as adjacency list
+     */
+    getDependencyGraph() {
+        return this.dependencyResolver.getDependencyGraph();
+    }
+
+    /**
+     * Get reverse dependency graph (dependents) for loaded extensions
+     * 
+     * @returns {Object} Reverse dependency graph
+     */
+    getReverseDependencyGraph() {
+        return this.dependencyResolver.getReverseDependencyGraph();
+    }
+
+    /**
+     * Get extension dependencies for a specific extension
+     * 
+     * @param {string} extensionId - Extension ID
+     * @returns {Array<{id: string, version: string}>} Array of dependencies
+     */
+    getExtensionDependencies(extensionId) {
+        const extension = this.loadedExtensions.find(ext => ext.manifest.id === extensionId);
+        
+        if (!extension) {
+            return [];
+        }
+        
+        const manifest = extension.manifest;
+        
+        if (!manifest.extensionDependencies || typeof manifest.extensionDependencies !== 'object') {
+            return [];
+        }
+        
+        return Object.entries(manifest.extensionDependencies).map(([id, version]) => ({
+            id,
+            version
+        }));
+    }
+
+    /**
+     * Check if an extension can be safely unloaded (no dependents)
+     * 
+     * @param {string} extensionId - Extension ID
+     * @returns {Object} { canUnload: boolean, dependents: Array<string> }
+     */
+    canUnload(extensionId) {
+        const reverseDeps = this.getReverseDependencyGraph();
+        const dependents = reverseDeps[extensionId] || [];
+        
+        return {
+            canUnload: dependents.length === 0,
+            dependents
+        };
     }
 }
 
