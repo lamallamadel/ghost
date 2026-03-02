@@ -647,6 +647,10 @@ class GatewayLauncher {
   ghost extension init <name>             Scaffold a new extension project
   ghost extension validate [path]         Validate extension manifest and permissions
   ghost extension migrate [path]          Migrate v0.x extension to v1.0.0 SDK
+    Options:
+      --auto                                Apply migration automatically (creates backups)
+      --no-backup                           Skip backup creation during migration
+      --validate                            Run basic validation after migration (requires --auto)
 `);
             return;
         }
