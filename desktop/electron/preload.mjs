@@ -13,5 +13,9 @@ contextBridge.exposeInMainWorld('ghost', {
   gatewayState: () => ipcRenderer.invoke('gateway.state'),
   manualOverride: (req) => ipcRenderer.invoke('gateway.manualOverride', req),
   reloadExtension: (extensionId) => ipcRenderer.invoke('gateway.reloadExtension', { extensionId }),
+  analyticsGetMetrics: (req) => ipcRenderer.invoke('analytics.getMetrics', req),
+  analyticsGetDashboard: (req) => ipcRenderer.invoke('analytics.getDashboard', req),
+  analyticsGetExtensionCallGraph: (req) => ipcRenderer.invoke('analytics.getExtensionCallGraph', req),
+  analyticsGetRecommendations: () => ipcRenderer.invoke('analytics.getRecommendations'),
 })
 

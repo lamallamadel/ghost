@@ -372,6 +372,185 @@ app.whenReady().then(() => {
       }
     }
   })
+
+  ipcMain.handle('analytics.getMetrics', async (_, { timeRange = '6h' } = {}) => {
+    try {
+      const { createRequire } = await import('module')
+      const require = createRequire(import.meta.url)
+      
+      const { AnalyticsPlatform } = require('../../core/analytics/index.js')
+      
+      const analytics = new AnalyticsPlatform({
+        persistenceDir: path.join(app.getPath('userData'), 'analytics')
+      })
+      
+      await analytics.initialize()
+      
+      const allMetrics = analytics.collector.getAllMetrics()
+      
+      store.addLog({ 
+        ts: nowIso(), 
+        level: 'info', 
+        scope: 'analytics', 
+        message: 'analytics.getMetrics', 
+        data: { timeRange, extensionCount: Object.keys(allMetrics).length } 
+      })
+      
+      return {
+        metrics: allMetrics,
+        timestamp: Date.now()
+      }
+    } catch (error) {
+      store.addLog({ 
+        ts: nowIso(), 
+        level: 'error', 
+        scope: 'analytics', 
+        message: 'analytics.getMetrics.error', 
+        data: { error: error.message } 
+      })
+      
+      return {
+        metrics: {},
+        timestamp: Date.now(),
+        error: error.message
+      }
+    }
+  })
+
+  ipcMain.handle('analytics.getDashboard', async (_, { timeRange = '6h' } = {}) => {
+    try {
+      const { createRequire } = await import('module')
+      const require = createRequire(import.meta.url)
+      
+      const { AnalyticsPlatform } = require('../../core/analytics/index.js')
+      
+      const analytics = new AnalyticsPlatform({
+        persistenceDir: path.join(app.getPath('userData'), 'analytics')
+      })
+      
+      await analytics.initialize()
+      
+      const dashboard = await analytics.generateDashboard()
+      
+      store.addLog({ 
+        ts: nowIso(), 
+        level: 'info', 
+        scope: 'analytics', 
+        message: 'analytics.getDashboard', 
+        data: { timeRange } 
+      })
+      
+      return dashboard
+    } catch (error) {
+      store.addLog({ 
+        ts: nowIso(), 
+        level: 'error', 
+        scope: 'analytics', 
+        message: 'analytics.getDashboard.error', 
+        data: { error: error.message } 
+      })
+      
+      return {
+        timestamp: Date.now(),
+        metrics: {},
+        behavior: null,
+        cost: null,
+        performance: { alerts: [] },
+        tracing: null,
+        error: error.message
+      }
+    }
+  })
+
+  ipcMain.handle('analytics.getExtensionCallGraph', async (_, { extensionId }) => {
+    try {
+      const { createRequire } = await import('module')
+      const require = createRequire(import.meta.url)
+      
+      const { AnalyticsPlatform } = require('../../core/analytics/index.js')
+      
+      const analytics = new AnalyticsPlatform({
+        persistenceDir: path.join(app.getPath('userData'), 'analytics')
+      })
+      
+      await analytics.initialize()
+      
+      const callGraph = analytics.getExtensionCallGraph(extensionId)
+      
+      store.addLog({ 
+        ts: nowIso(), 
+        level: 'info', 
+        scope: 'analytics', 
+        message: 'analytics.getExtensionCallGraph', 
+        data: { extensionId } 
+      })
+      
+      return {
+        extensionId,
+        callGraph,
+        timestamp: Date.now()
+      }
+    } catch (error) {
+      store.addLog({ 
+        ts: nowIso(), 
+        level: 'error', 
+        scope: 'analytics', 
+        message: 'analytics.getExtensionCallGraph.error', 
+        data: { extensionId, error: error.message } 
+      })
+      
+      return {
+        extensionId,
+        callGraph: null,
+        timestamp: Date.now(),
+        error: error.message
+      }
+    }
+  })
+
+  ipcMain.handle('analytics.getRecommendations', async () => {
+    try {
+      const { createRequire } = await import('module')
+      const require = createRequire(import.meta.url)
+      
+      const { AnalyticsPlatform } = require('../../core/analytics/index.js')
+      
+      const analytics = new AnalyticsPlatform({
+        persistenceDir: path.join(app.getPath('userData'), 'analytics')
+      })
+      
+      await analytics.initialize()
+      
+      const recommendations = await analytics.getRecommendations()
+      
+      store.addLog({ 
+        ts: nowIso(), 
+        level: 'info', 
+        scope: 'analytics', 
+        message: 'analytics.getRecommendations', 
+        data: { count: recommendations.length } 
+      })
+      
+      return {
+        recommendations,
+        timestamp: Date.now()
+      }
+    } catch (error) {
+      store.addLog({ 
+        ts: nowIso(), 
+        level: 'error', 
+        scope: 'analytics', 
+        message: 'analytics.getRecommendations.error', 
+        data: { error: error.message } 
+      })
+      
+      return {
+        recommendations: [],
+        timestamp: Date.now(),
+        error: error.message
+      }
+    }
+  })
 })
 
 app.on('window-all-closed', () => {
