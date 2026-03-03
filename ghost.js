@@ -792,6 +792,11 @@ class GatewayLauncher {
   ghost extension remove <id>             Remove an extension by ID
   ghost extension info <id>               Show extension information
   ghost extension deps [id]               Show dependency tree for extension(s)
+  ghost extension doctor                  Diagnose dependency conflicts with resolution strategies
+    Options for doctor:
+      --tree                                Show full dependency trees
+      --json                                Output report in JSON format
+      --versions <json>                     Provide available versions map for resolution
   ghost extension init <name>             Scaffold a new extension project
     Options for init:
       --template <name>                     Use specific template from gallery
@@ -974,11 +979,14 @@ class GatewayLauncher {
             const ExtensionDepsCommands = require('./core/extension-deps-commands');
             const depsHandler = new ExtensionDepsCommands(Colors);
             await depsHandler.handleDepsCommand(parsedArgs);
+        } else if (subcommand === 'doctor') {
+            // Run dependency conflict diagnosis
+            await this._handleExtensionDoctorCommand(parsedArgs);
         } else {
             console.error(`${Colors.FAIL}Error: Unknown extension subcommand '${subcommand}'${Colors.ENDC}\n`);
             
             // Suggest similar subcommands
-            const validSubcommands = ['list', 'install', 'remove', 'info', 'deps', 'init', 'validate', 'migrate'];
+            const validSubcommands = ['list', 'install', 'remove', 'info', 'deps', 'init', 'validate', 'migrate', 'doctor'];
             const suggestions = this._findSimilarCommands(subcommand, validSubcommands);
             
             if (suggestions.length > 0) {
@@ -1924,7 +1932,7 @@ class GatewayLauncher {
         const commands = [
             'setup', 'doctor', 'completion', 'extension', 'gateway', 'audit-log', 'console', 'logs', 'webhook', 'dev'
         ];
-        const extensionSubcommands = ['list', 'install', 'remove', 'info', 'deps', 'init', 'validate', 'migrate'];
+        const extensionSubcommands = ['list', 'install', 'remove', 'info', 'deps', 'doctor', 'init', 'validate', 'migrate'];
         const gatewaySubcommands = ['status', 'extensions', 'health', 'reload', 'logs', 'metrics', 'spans'];
         const logsSubcommands = ['prune', 'info'];
         const webhookSubcommands = ['start', 'stop', 'status', 'events', 'deliveries', 'replay', 'queue-stats', 'prune'];
@@ -3841,6 +3849,227 @@ See [Extension API Documentation](https://github.com/lamallamadel/ghost/blob/mai
         } else {
             console.log(`${Colors.GREEN}${Colors.BOLD}✓ Extension is valid!${Colors.ENDC}\n`);
             console.log(`${Colors.DIM}Ready to install with: ghost extension install ${extPath}${Colors.ENDC}`);
+        }
+    }
+
+    /**
+     * Handle extension doctor command - diagnose dependency conflicts
+     * 
+     * ORCHESTRATION ROLE:
+     * - Collect extension manifests from Gateway
+     * - Delegate to DependencyResolver.diagnoseConflicts()
+     * - Format and display diagnostic report
+     * - No direct business logic, only presentation
+     */
+    async _handleExtensionDoctorCommand(parsedArgs) {
+        const DependencyResolver = require('./core/dependency-resolver');
+        
+        console.log(`${Colors.CYAN}${Colors.BOLD}Extension Dependency Doctor${Colors.ENDC}\n`);
+        console.log(`${Colors.DIM}Analyzing extension dependencies...${Colors.ENDC}\n`);
+
+        // Collect extension manifests
+        const manifests = new Map();
+        const extensions = this.gateway.listExtensions();
+
+        for (const ext of extensions) {
+            const fullExt = this.gateway.getExtension(ext.id);
+            if (fullExt && fullExt.manifest) {
+                manifests.set(ext.id, fullExt);
+            }
+        }
+
+        if (manifests.size === 0) {
+            console.log(`${Colors.WARNING}No extensions installed${Colors.ENDC}\n`);
+            return;
+        }
+
+        // Run diagnosis
+        const availableVersions = parsedArgs.flags.versions ? 
+            JSON.parse(parsedArgs.flags.versions) : {};
+        
+        const report = DependencyResolver.diagnoseConflicts(manifests, {
+            availableVersions
+        });
+
+        // Output format
+        if (parsedArgs.flags.json) {
+            console.log(JSON.stringify(report, null, 2));
+            return;
+        }
+
+        // Display health status
+        if (report.healthy) {
+            console.log(`${Colors.GREEN}${Colors.BOLD}✓ All dependencies are healthy!${Colors.ENDC}\n`);
+        } else {
+            console.log(`${Colors.FAIL}${Colors.BOLD}✗ Dependency issues detected${Colors.ENDC}\n`);
+        }
+
+        // Display summary
+        if (report.summary) {
+            console.log(`${Colors.BOLD}Summary:${Colors.ENDC}`);
+            console.log(`  Total conflicts: ${report.summary.totalConflicts || 0}`);
+            console.log(`  Resolvable: ${report.summary.resolvableConflicts || 0}`);
+            console.log(`  Requires manual intervention: ${report.summary.requiresManualIntervention || 0}`);
+            console.log(`  Affected extensions: ${report.summary.affectedExtensions || 0}`);
+            console.log('');
+        }
+
+        // Display version conflicts
+        if (report.versionConflicts && report.versionConflicts.length > 0) {
+            console.log(`${Colors.FAIL}${Colors.BOLD}Version Conflicts (${report.versionConflicts.length}):${Colors.ENDC}`);
+            console.log(`${Colors.DIM}${'─'.repeat(80)}${Colors.ENDC}\n`);
+
+            for (const conflict of report.versionConflicts) {
+                console.log(`  ${Colors.BOLD}${conflict.dependency}${Colors.ENDC} ${Colors.DIM}(installed: ${conflict.installedVersion || 'not installed'})${Colors.ENDC}`);
+                
+                for (const req of conflict.requirements) {
+                    const statusIcon = req.satisfied ? Colors.GREEN + '✓' : Colors.FAIL + '✗';
+                    console.log(`    ${statusIcon}${Colors.ENDC} ${req.extension} requires ${Colors.CYAN}${req.constraint}${Colors.ENDC}`);
+                }
+
+                if (conflict.incompatiblePairs && conflict.incompatiblePairs.length > 0) {
+                    console.log(`    ${Colors.WARNING}⚠ Incompatible requirements:${Colors.ENDC}`);
+                    for (const pair of conflict.incompatiblePairs) {
+                        console.log(`      ${pair.req1.extensionId} (${pair.req1.constraint}) ↔ ${pair.req2.extensionId} (${pair.req2.constraint})`);
+                    }
+                }
+                console.log('');
+            }
+        }
+
+        // Display version issues
+        if (report.versionIssues && report.versionIssues.length > 0) {
+            console.log(`${Colors.WARNING}${Colors.BOLD}Version Issues (${report.versionIssues.length}):${Colors.ENDC}`);
+            console.log(`${Colors.DIM}${'─'.repeat(80)}${Colors.ENDC}\n`);
+
+            for (const issue of report.versionIssues) {
+                const icon = issue.installed ? Colors.WARNING + '⚠' : Colors.FAIL + '✗';
+                console.log(`  ${icon}${Colors.ENDC} ${issue.extension} → ${issue.dependency}`);
+                console.log(`    ${Colors.DIM}${issue.message}${Colors.ENDC}`);
+            }
+            console.log('');
+        }
+
+        // Display circular dependencies
+        if (report.circularDependencies && report.circularDependencies.length > 0) {
+            console.log(`${Colors.FAIL}${Colors.BOLD}Circular Dependencies (${report.circularDependencies.length}):${Colors.ENDC}`);
+            console.log(`${Colors.DIM}${'─'.repeat(80)}${Colors.ENDC}\n`);
+
+            for (const cycle of report.circularDependencies) {
+                console.log(`  ${Colors.FAIL}↺${Colors.ENDC} ${cycle.join(' → ')}`);
+            }
+            console.log('');
+        }
+
+        // Display capability conflicts
+        if (report.capabilityConflicts && report.capabilityConflicts.length > 0) {
+            console.log(`${Colors.WARNING}${Colors.BOLD}Capability Conflicts (${report.capabilityConflicts.length}):${Colors.ENDC}`);
+            console.log(`${Colors.DIM}${'─'.repeat(80)}${Colors.ENDC}\n`);
+
+            for (const conflict of report.capabilityConflicts) {
+                console.log(`  ${Colors.WARNING}⚠${Colors.ENDC} ${conflict.type}: ${Colors.CYAN}${conflict.capability}${Colors.ENDC}`);
+                console.log(`    Extensions: ${conflict.extensions.join(', ')}`);
+                console.log(`    Resolution: ${conflict.resolution}`);
+                if (conflict.winner) {
+                    console.log(`    Winner: ${Colors.GREEN}${conflict.winner}${Colors.ENDC}`);
+                }
+            }
+            console.log('');
+        }
+
+        // Display resolution strategies
+        if (report.resolutionStrategies && report.resolutionStrategies.length > 0) {
+            console.log(`${Colors.CYAN}${Colors.BOLD}Resolution Strategies:${Colors.ENDC}`);
+            console.log(`${Colors.DIM}${'─'.repeat(80)}${Colors.ENDC}\n`);
+
+            for (const strategy of report.resolutionStrategies) {
+                console.log(`  ${Colors.BOLD}${strategy.dependency}${Colors.ENDC} - ${strategy.strategy}`);
+                
+                if (strategy.strategy === 'common-version') {
+                    console.log(`    ${Colors.GREEN}✓${Colors.ENDC} Install version: ${Colors.CYAN}${strategy.resolution}${Colors.ENDC}`);
+                    if (strategy.impact.upgrades && strategy.impact.upgrades.length > 0) {
+                        console.log(`    ${Colors.DIM}Upgrades: ${strategy.impact.upgrades.join(', ')}${Colors.ENDC}`);
+                    }
+                    if (strategy.impact.downgrades && strategy.impact.downgrades.length > 0) {
+                        console.log(`    ${Colors.WARNING}Downgrades: ${strategy.impact.downgrades.join(', ')}${Colors.ENDC}`);
+                    }
+                } else if (strategy.strategy === 'favor-extension') {
+                    console.log(`    Favor: ${Colors.CYAN}${strategy.favoring}${Colors.ENDC} with version ${strategy.resolution}`);
+                    if (strategy.impact.breaking && strategy.impact.breaking.length > 0) {
+                        console.log(`    ${Colors.FAIL}✗ Breaking:${Colors.ENDC}`);
+                        for (const broken of strategy.impact.breaking) {
+                            console.log(`      ${broken.extension}: requires ${broken.required}, would get ${broken.actual}`);
+                        }
+                    }
+                } else if (strategy.strategy === 'duplicate') {
+                    console.log(`    ${Colors.WARNING}⚠ Install multiple versions${Colors.ENDC}`);
+                    if (strategy.impact.installations) {
+                        for (const install of strategy.impact.installations) {
+                            console.log(`      ${install.extension} → ${install.version}`);
+                        }
+                    }
+                }
+                
+                console.log(`    ${Colors.DIM}Recommendation: ${strategy.recommendation}${Colors.ENDC}`);
+                console.log('');
+            }
+        }
+
+        // Display dependency trees
+        if (parsedArgs.flags.tree && report.dependencyTrees && report.dependencyTrees.length > 0) {
+            console.log(`${Colors.CYAN}${Colors.BOLD}Dependency Trees:${Colors.ENDC}`);
+            console.log(`${Colors.DIM}${'─'.repeat(80)}${Colors.ENDC}\n`);
+
+            for (const treeInfo of report.dependencyTrees) {
+                console.log(treeInfo.tree);
+            }
+        }
+
+        // Display recommendations
+        if (report.recommendations && report.recommendations.length > 0) {
+            console.log(`${Colors.CYAN}${Colors.BOLD}Recommendations:${Colors.ENDC}`);
+            console.log(`${Colors.DIM}${'─'.repeat(80)}${Colors.ENDC}\n`);
+
+            const bySeverity = {
+                critical: [],
+                high: [],
+                medium: [],
+                low: []
+            };
+
+            for (const rec of report.recommendations) {
+                bySeverity[rec.severity || 'medium'].push(rec);
+            }
+
+            for (const severity of ['critical', 'high', 'medium', 'low']) {
+                const recs = bySeverity[severity];
+                if (recs.length === 0) continue;
+
+                const severityColor = severity === 'critical' ? Colors.FAIL : 
+                                     severity === 'high' ? Colors.WARNING :
+                                     severity === 'medium' ? Colors.CYAN : Colors.DIM;
+                
+                console.log(`  ${severityColor}${severity.toUpperCase()} (${recs.length}):${Colors.ENDC}`);
+
+                for (const rec of recs) {
+                    if (rec.command) {
+                        console.log(`    ${rec.action}: ${Colors.CYAN}${rec.command}${Colors.ENDC}`);
+                    } else {
+                        console.log(`    ${rec.action}: ${rec.reason || rec.suggestion || ''}`);
+                    }
+                    if (rec.affected && rec.affected.length > 0) {
+                        console.log(`      ${Colors.DIM}Affected: ${rec.affected.join(', ')}${Colors.ENDC}`);
+                    }
+                }
+                console.log('');
+            }
+        }
+
+        // Final status message
+        if (!report.healthy) {
+            console.log(`${Colors.WARNING}Run with --tree flag to see full dependency trees${Colors.ENDC}`);
+            console.log(`${Colors.WARNING}Run with --json flag to export report in JSON format${Colors.ENDC}\n`);
+            process.exit(1);
         }
     }
 
