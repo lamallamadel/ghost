@@ -67,7 +67,7 @@ class MarketplaceService {
     }
 
     async installExtension(extensionId, options = {}) {
-        const { version, targetDir, codeSigningManager, requireSigning = false } = options;
+        const { version, targetDir, codeSigningManager, requireSigning = false, autoInstallDeps = false } = options;
         
         const extension = await this.fetchExtensionById(extensionId);
         const versionData = version 
@@ -76,6 +76,28 @@ class MarketplaceService {
 
         if (!versionData) {
             throw new Error(`Version ${version || 'latest'} not found for ${extensionId}`);
+        }
+
+        const manifest = JSON.parse(versionData.manifest || '{}');
+        const dependencies = manifest.dependencies || {};
+        
+        // Auto-install dependencies if requested
+        if (autoInstallDeps && Object.keys(dependencies).length > 0) {
+            console.log(`[Marketplace] Installing ${Object.keys(dependencies).length} dependencies...`);
+            const installed = [];
+            
+            for (const [depId, constraint] of Object.entries(dependencies)) {
+                try {
+                    const depResult = await this.installExtension(depId, { 
+                        version: constraint.replace(/^[\^~]/, ''), 
+                        autoInstallDeps: true 
+                    });
+                    installed.push(depResult);
+                    console.log(`[Marketplace] ✓ Installed dependency: ${depId}@${depResult.version}`);
+                } catch (error) {
+                    console.warn(`[Marketplace] Warning: Failed to install dependency ${depId}: ${error.message}`);
+                }
+            }
         }
 
         const extensionData = await this._downloadExtension(versionData.downloadUrl);
@@ -102,14 +124,14 @@ class MarketplaceService {
             }
         }
 
-        const dependencies = await this._resolveDependencies(versionData.dependencies || {});
+        const resolvedDeps = await this._resolveDependencies(dependencies);
         
         return {
             success: true,
             extensionId,
             version: versionData.version,
             installPath,
-            dependencies,
+            dependencies: resolvedDeps,
             signed: versionData.signature ? true : false
         };
     }

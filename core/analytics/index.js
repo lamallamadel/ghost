@@ -4,6 +4,7 @@ const CostAttribution = require('./cost-attribution');
 const PerformanceRegression = require('./performance-regression');
 const DistributedTracing = require('./distributed-tracing');
 const RecommendationEngine = require('./recommendation-engine');
+const TelemetryWebSocketServer = require('./telemetry-ws-server');
 const { EventEmitter } = require('events');
 
 class AnalyticsPlatform extends EventEmitter {
@@ -17,6 +18,14 @@ class AnalyticsPlatform extends EventEmitter {
         this.performance = new PerformanceRegression(options);
         this.tracing = new DistributedTracing(options);
         this.recommendations = new RecommendationEngine(options);
+        
+        this.wsServer = null;
+        if (options.enableWebSocket !== false) {
+            this.wsServer = new TelemetryWebSocketServer({
+                port: options.wsPort || 9877,
+                host: options.wsHost || 'localhost'
+            });
+        }
 
         this._setupEventForwarding();
     }
@@ -27,6 +36,14 @@ class AnalyticsPlatform extends EventEmitter {
         await this.performance.load();
         await this.tracing.load();
         await this.recommendations.load();
+
+        if (this.wsServer) {
+            try {
+                await this.wsServer.start();
+            } catch (error) {
+                console.error('[AnalyticsPlatform] Failed to start WebSocket server:', error.message);
+            }
+        }
 
         this.emit('initialized');
     }
@@ -51,6 +68,17 @@ class AnalyticsPlatform extends EventEmitter {
         
         this.collector.recordSuccess(trackingContext.invocationId, result, duration);
         this.tracing.endSpan(trackingContext.spanId, 'success', { resultSize: JSON.stringify(result).length });
+        
+        if (this.wsServer) {
+            this.wsServer.broadcastToExtension(trackingContext.extensionId || this._getExtensionIdFromInvocation(trackingContext.invocationId), {
+                type: 'invocation-completed',
+                extensionId: trackingContext.extensionId || this._getExtensionIdFromInvocation(trackingContext.invocationId),
+                invocationId: trackingContext.invocationId,
+                status: 'success',
+                duration,
+                timestamp: Date.now()
+            });
+        }
     }
 
     trackExtensionFailure(trackingContext, error) {
@@ -58,6 +86,18 @@ class AnalyticsPlatform extends EventEmitter {
         
         this.collector.recordFailure(trackingContext.invocationId, error, duration);
         this.tracing.endSpan(trackingContext.spanId, 'error', { error: error.message });
+        
+        if (this.wsServer) {
+            this.wsServer.broadcastToExtension(trackingContext.extensionId || this._getExtensionIdFromInvocation(trackingContext.invocationId), {
+                type: 'invocation-completed',
+                extensionId: trackingContext.extensionId || this._getExtensionIdFromInvocation(trackingContext.invocationId),
+                invocationId: trackingContext.invocationId,
+                status: 'failure',
+                duration,
+                error: error.message,
+                timestamp: Date.now()
+            });
+        }
     }
 
     trackResourceUsage(trackingContext, resources) {
@@ -169,6 +209,15 @@ class AnalyticsPlatform extends EventEmitter {
     async shutdown() {
         await this.persist();
         this.collector.shutdown();
+        
+        if (this.wsServer) {
+            try {
+                await this.wsServer.stop();
+            } catch (error) {
+                console.error('[AnalyticsPlatform] Failed to stop WebSocket server:', error.message);
+            }
+        }
+        
         this.emit('shutdown');
     }
 
@@ -214,5 +263,6 @@ module.exports = {
     PerformanceRegression,
     DistributedTracing,
     RecommendationEngine,
-    AnalyticsAPIServer
+    AnalyticsAPIServer,
+    TelemetryWebSocketServer
 };

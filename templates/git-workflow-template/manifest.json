@@ -1,0 +1,19 @@
+{
+  "id": "git-workflow-template",
+  "name": "Git Workflow Template",
+  "version": "1.0.0",
+  "description": "Template for Git workflow automation with commit hooks, branch validation, and conventional commits enforcement",
+  "author": "Ghost CLI Team",
+  "main": "index.js",
+  "capabilities": {
+    "git": {
+      "read": true,
+      "write": true
+    },
+    "filesystem": {
+      "read": [".git/**", "**/*"],
+      "write": [".git/hooks/**"]
+    }
+  },
+  "commands": ["install-hooks", "validate-branch", "validate-commit", "enforce-conventional"]
+}

@@ -299,6 +299,37 @@ ghost version bump --from-commits --tag --output json
 
 ### Creating Extensions
 
+#### 🎨 Quick Start with Template Gallery
+
+Ghost CLI includes a comprehensive template gallery with pre-built patterns:
+
+```bash
+# Interactive template selector
+ghost extension init
+
+# Or use specific template
+ghost extension init my-api --template api-integration
+```
+
+**Available Templates:**
+- `api-integration` - REST/GraphQL client with auth, retry, caching
+- `file-processor` - Batch file operations with streaming
+- `git-workflow` - Git hooks and conventional commits
+- `testing` - Test infrastructure with mock RPC client
+- `basic` - Simple minimal structure
+- `typescript` - Type-safe development
+- `advanced` - Production-ready with tests
+
+Each template includes:
+- ✅ Fully-implemented, commented code
+- ✅ Complete test suite
+- ✅ Comprehensive README with examples
+- ✅ Best practices built-in
+
+[📚 View Template Gallery →](./templates/README.md)
+
+#### Manual Extension Creation
+
 1. Create extension directory structure:
 ```
 my-extension/

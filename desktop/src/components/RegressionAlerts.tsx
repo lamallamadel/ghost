@@ -1,15 +1,24 @@
 import { AlertTriangle, TrendingUp, Info } from 'lucide-react';
 
 interface RegressionAlert {
-  id: string;
+  id?: string;
+  alertId?: string;
   extensionId: string;
   version: string;
+  baselineVersion?: string;
   severity: 'critical' | 'high' | 'medium' | 'low';
-  metric: string;
-  baselineValue: number;
-  currentValue: number;
-  percentChange: number;
-  threshold: number;
+  metric?: string;
+  regressions?: Array<{
+    metric: string;
+    baseline: number;
+    current: number;
+    threshold: number;
+    exceeded: number;
+  }>;
+  baselineValue?: number;
+  currentValue?: number;
+  percentChange?: number;
+  threshold?: number;
   timestamp: number;
 }
 
@@ -78,13 +87,21 @@ export function RegressionAlerts({ alerts }: RegressionAlertsProps) {
       </h4>
 
       <div className="space-y-2 max-h-96 overflow-y-auto">
-        {sortedAlerts.map((alert) => {
+        {sortedAlerts.map((alert, idx) => {
           const colors = getSeverityColor(alert.severity);
           const Icon = getSeverityIcon(alert.severity);
+          const alertId = alert.alertId || alert.id || `alert-${idx}`;
+          
+          const firstRegression = alert.regressions?.[0];
+          const metric = firstRegression?.metric || alert.metric || 'performance';
+          const baselineValue = firstRegression?.baseline || alert.baselineValue || 0;
+          const currentValue = firstRegression?.current || alert.currentValue || 0;
+          const threshold = firstRegression?.threshold || alert.threshold || 0;
+          const percentChange = firstRegression?.exceeded || alert.percentChange || 0;
           
           return (
             <div
-              key={alert.id}
+              key={alertId}
               className={`${colors.bg} ${colors.border} border rounded-lg p-3`}
             >
               <div className="flex items-start gap-3">
@@ -105,34 +122,52 @@ export function RegressionAlerts({ alerts }: RegressionAlertsProps) {
                   </div>
 
                   <div className="text-sm text-gray-300 mb-2">
-                    <span className="font-semibold">{alert.metric}</span> regression detected
+                    <span className="font-semibold">{metric}</span> regression detected
+                    {alert.baselineVersion && (
+                      <span className="text-xs text-gray-500 ml-2">
+                        (baseline: v{alert.baselineVersion})
+                      </span>
+                    )}
                   </div>
 
                   <div className="grid grid-cols-3 gap-3 text-xs">
                     <div>
                       <div className="text-gray-500">Baseline</div>
                       <div className="text-white font-mono mt-1">
-                        {formatMetricValue(alert.metric, alert.baselineValue)}
+                        {formatMetricValue(metric, baselineValue)}
                       </div>
                     </div>
                     <div>
                       <div className="text-gray-500">Current</div>
                       <div className={`font-mono mt-1 ${colors.text}`}>
-                        {formatMetricValue(alert.metric, alert.currentValue)}
+                        {formatMetricValue(metric, currentValue)}
                       </div>
                     </div>
                     <div>
                       <div className="text-gray-500">Change</div>
                       <div className={`font-mono mt-1 font-bold ${colors.text}`}>
-                        +{alert.percentChange.toFixed(1)}%
+                        +{percentChange.toFixed(1)}%
                       </div>
                     </div>
                   </div>
 
+                  {alert.regressions && alert.regressions.length > 1 && (
+                    <div className="mt-2 pt-2 border-t border-gray-700/50">
+                      <div className="text-xs text-gray-400 mb-1">Additional regressions:</div>
+                      <div className="flex flex-wrap gap-2">
+                        {alert.regressions.slice(1).map((reg, regIdx) => (
+                          <span key={regIdx} className="px-2 py-1 bg-gray-800 border border-gray-600 text-gray-300 rounded text-xs">
+                            {reg.metric}: +{reg.exceeded.toFixed(1)}%
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   <div className="mt-2 pt-2 border-t border-gray-700/50">
                     <div className="text-xs text-gray-400">
-                      Threshold: {(alert.threshold * 100).toFixed(0)}% • 
-                      Exceeded by: {((alert.percentChange / 100 / alert.threshold) * 100).toFixed(1)}%
+                      Threshold: {(threshold * 100).toFixed(0)}% • 
+                      Exceeded by: {((percentChange / 100 / (threshold || 1)) * 100).toFixed(1)}%
                     </div>
                   </div>
                 </div>

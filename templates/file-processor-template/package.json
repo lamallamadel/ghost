@@ -1,0 +1,21 @@
+{
+  "name": "file-processor-template",
+  "version": "1.0.0",
+  "description": "Template for batch file operations with progress tracking",
+  "main": "index.js",
+  "scripts": {
+    "test": "mocha test/**/*.test.js",
+    "test:watch": "mocha test/**/*.test.js --watch"
+  },
+  "keywords": [
+    "ghost-cli",
+    "extension",
+    "file-processing",
+    "batch",
+    "streaming",
+    "template"
+  ],
+  "devDependencies": {
+    "mocha": "^10.2.0"
+  }
+}

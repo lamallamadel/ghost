@@ -1,0 +1,15 @@
+{
+  "id": "testing-template",
+  "name": "Testing Template",
+  "version": "1.0.0",
+  "description": "Template with Vitest configuration, mock RPC client, integration test examples, and coverage reporting",
+  "author": "Ghost CLI Team",
+  "main": "index.js",
+  "capabilities": {
+    "filesystem": {
+      "read": ["**/*"],
+      "write": ["coverage/**", "test-results/**"]
+    }
+  },
+  "commands": ["run-tests", "generate-coverage", "mock-test"]
+}

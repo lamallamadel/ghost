@@ -1,0 +1,18 @@
+{
+  "id": "api-integration-template",
+  "name": "API Integration Template",
+  "version": "1.0.0",
+  "description": "Template for building REST/GraphQL API integrations with authentication, rate limiting, and response caching",
+  "author": "Ghost CLI Team",
+  "main": "index.js",
+  "capabilities": {
+    "network": {
+      "allowlist": ["*"]
+    },
+    "filesystem": {
+      "read": [".ghost/**"],
+      "write": [".ghost/**"]
+    }
+  },
+  "commands": ["api-call", "api-config"]
+}

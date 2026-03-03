@@ -1,0 +1,29 @@
+{
+  "name": "@ghost/marketplace-backend",
+  "version": "1.0.0",
+  "description": "REST API backend for Ghost CLI extension registry",
+  "main": "index.js",
+  "bin": {
+    "ghost-marketplace": "cli.js"
+  },
+  "scripts": {
+    "start": "node cli.js",
+    "dev": "node cli.js --port 3000"
+  },
+  "keywords": [
+    "ghost",
+    "marketplace",
+    "extension",
+    "registry",
+    "api"
+  ],
+  "author": "Adel Lamallam",
+  "license": "MIT",
+  "dependencies": {
+    "sqlite3": "^5.1.6",
+    "tar-stream": "^3.1.6"
+  },
+  "engines": {
+    "node": ">=14.0.0"
+  }
+}

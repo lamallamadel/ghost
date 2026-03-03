@@ -544,24 +544,24 @@
     },
     "dependencies": {
       "type": "object",
-      "description": "NPM dependencies required by the extension. Follows standard package.json format with package names as keys and version specifiers as values. Dependencies are installed during extension installation. Use semantic versioning ranges for flexibility.",
+      "description": "Extension dependencies required by this extension. Maps extension IDs to semver version constraints. The dependency resolution system validates version compatibility, detects circular dependencies, and determines the correct load order using topological sort. Dependencies must be installed before the extension can load. Supports semver ranges: exact (1.0.0), caret (^1.0.0 = >=1.0.0 <2.0.0), tilde (~1.0.0 = >=1.0.0 <1.1.0), wildcard (*), and comparison operators (>=1.0.0 <2.0.0). The 'ghost extension deps' command shows the full dependency tree with conflicts and version issues.",
       "additionalProperties": {
         "type": "string"
       },
       "examples": [
         {
-          "@ghost/extension-sdk": "^1.0.0",
-          "axios": "^1.6.0"
+          "ghost-utils": "^1.0.0",
+          "ghost-logger": "~2.1.0"
         },
         {},
         {
-          "@ghost/extension-sdk": "^1.0.0",
-          "lodash": "^4.17.21",
-          "chalk": "^4.1.2"
+          "ghost-base": "^1.0.0",
+          "ghost-api": ">=2.0.0 <3.0.0",
+          "ghost-auth": "*"
         },
         {
-          "minimatch": "^9.0.0",
-          "glob": "^10.0.0"
+          "extension-framework": "^3.0.0",
+          "helper-utils": "1.5.2"
         }
       ]
     },

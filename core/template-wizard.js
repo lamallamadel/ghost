@@ -2,16 +2,121 @@ const fs = require('fs');
 const path = require('path');
 const readline = require('readline');
 
+/**
+ * Enhanced Template Wizard with Gallery System
+ * 
+ * Provides interactive template selection from a gallery of pre-built templates:
+ * - API Integration Template
+ * - File Processor Template
+ * - Git Workflow Template
+ * - Testing Template
+ * - Basic/TypeScript/Advanced templates
+ */
 class TemplateWizard {
     constructor() {
         this.rl = readline.createInterface({
             input: process.stdin,
             output: process.stdout
         });
-        
-        // Load template gallery
-        const TemplateGallery = require('./templates/gallery');
-        this.gallery = new TemplateGallery();
+
+        this.templateGallery = {
+            'api-integration': {
+                name: 'API Integration',
+                description: 'REST/GraphQL client with auth, rate limiting, retry logic, and caching',
+                path: path.join(__dirname, '..', 'templates', 'api-integration-template'),
+                capabilities: ['Network access', 'Authentication', 'Rate limiting', 'Caching'],
+                useCases: ['API clients', 'Third-party integrations', 'Webhook consumers'],
+                preview: `Features:
+  • Multiple auth types (Bearer, API Key, Basic)
+  • Automatic retry with exponential backoff
+  • Rate limit detection and handling
+  • Response caching with TTL
+  • GraphQL support
+
+Commands: api-call, api-config`
+            },
+            'file-processor': {
+                name: 'File Processor',
+                description: 'Batch file operations with progress tracking, streaming, and glob patterns',
+                path: path.join(__dirname, '..', 'templates', 'file-processor-template'),
+                capabilities: ['File I/O', 'Batch processing', 'Streaming', 'Progress events'],
+                useCases: ['Build tools', 'Code generators', 'File transformers'],
+                preview: `Features:
+  • Batch processing with concurrency control
+  • Progress tracking and events
+  • Streaming for large files
+  • Glob pattern matching
+  • Recursive directory traversal
+
+Commands: process-files, batch-transform, stream-large-file`
+            },
+            'git-workflow': {
+                name: 'Git Workflow',
+                description: 'Commit hooks, branch validation, and conventional commits enforcement',
+                path: path.join(__dirname, '..', 'templates', 'git-workflow-template'),
+                capabilities: ['Git hooks', 'Branch validation', 'Commit validation', 'Conventional commits'],
+                useCases: ['Workflow automation', 'Quality gates', 'Team standards'],
+                preview: `Features:
+  • Install and manage Git hooks
+  • Branch name validation
+  • Conventional commit format enforcement
+  • Protected branch prevention
+  • Pre-commit/pre-push checks
+
+Commands: install-hooks, validate-branch, validate-commit, enforce-conventional`
+            },
+            'testing': {
+                name: 'Testing Template',
+                description: 'Vitest config, mock RPC client, integration tests, and coverage reporting',
+                path: path.join(__dirname, '..', 'templates', 'testing-template'),
+                capabilities: ['Test runner', 'Mock RPC', 'Coverage', 'CI integration'],
+                useCases: ['Extension testing', 'TDD workflows', 'CI/CD pipelines'],
+                preview: `Features:
+  • Vitest test runner integration
+  • Mock RPC client for pipeline testing
+  • Coverage reporting (HTML, JSON, LCOV)
+  • Integration test examples
+  • Test scenarios (success, error, timeout)
+
+Commands: run-tests, generate-coverage, mock-test`
+            },
+            'basic': {
+                name: 'Basic',
+                description: 'Simple extension structure for quick prototyping',
+                path: null,
+                capabilities: ['Minimal setup', 'Quick start'],
+                useCases: ['Learning', 'Prototypes', 'Simple tools'],
+                preview: `Features:
+  • Minimal boilerplate
+  • Single file structure
+  • Easy to understand
+  • Fast to scaffold`
+            },
+            'typescript': {
+                name: 'TypeScript',
+                description: 'TypeScript extension with build configuration',
+                path: null,
+                capabilities: ['Type safety', 'Build pipeline', 'Modern JS'],
+                useCases: ['Type-safe extensions', 'Large projects', 'Team development'],
+                preview: `Features:
+  • TypeScript configuration
+  • Build scripts
+  • Type definitions
+  • Modern ES features`
+            },
+            'advanced': {
+                name: 'Advanced',
+                description: 'Full-featured extension with tests and documentation',
+                path: null,
+                capabilities: ['Testing', 'Documentation', 'CI ready'],
+                useCases: ['Production extensions', 'Open source', 'Enterprise'],
+                preview: `Features:
+  • Test suite included
+  • Comprehensive documentation
+  • CI configuration
+  • Best practices`
+            }
+        };
     }
 
     async prompt(question) {
@@ -36,126 +141,172 @@ class TemplateWizard {
         return selections.map(i => options[i].value);
     }
 
-    async run() {
-        console.log('\n🔧 Ghost Extension Template Generator\n');
-        console.log('Choose from our template gallery or create a custom extension:\n');
+    async run(options = {}) {
+        const { template: preselectedTemplate, name: extensionName } = options;
 
-        // Show template gallery
-        const templates = this.gallery.listTemplates();
-        console.log('📚 Template Gallery:\n');
-        templates.forEach((t, idx) => {
-            console.log(`  ${idx + 1}. ${t.name} - ${t.description}`);
-            console.log(`     ${t.category} | Features: ${t.features.join(', ')}`);
-            console.log('');
-        });
-        console.log(`  ${templates.length + 1}. Custom - Create from scratch`);
-        console.log('');
+        console.log('\n🎨 Ghost Extension Template Gallery\n');
 
-        const templateChoice = await this.prompt(`Choose template (1-${templates.length + 1}): `);
-        const templateIndex = parseInt(templateChoice) - 1;
+        let templateChoice = preselectedTemplate;
 
-        let extensionData;
-
-        if (templateIndex >= 0 && templateIndex < templates.length) {
-            // Use pre-built template
-            const template = templates[templateIndex];
-            console.log(`\n✨ Selected: ${template.name}\n`);
-            
-            extensionData = await this.gatherTemplateData(template);
-            
-            console.log('\nGenerating extension from template...\n');
-            const outputDir = await this.gallery.generateFromTemplate(template.id, extensionData);
-            
-            this.showSuccessMessage(outputDir, template);
-        } else {
-            // Custom extension flow
-            extensionData = await this.gatherCustomData();
-            
-            console.log('\nGenerating extension...\n');
-            const outputDir = await this.generateExtension(extensionData);
-            
-            console.log(`✓ Extension generated at: ${outputDir}`);
-            console.log('\nNext steps:');
-            console.log(`  cd ${outputDir}`);
-            if (extensionData.template === 'typescript') {
-                console.log('  npm install');
-                console.log('  npm run build');
+        // If template is pre-selected, validate it
+        if (preselectedTemplate) {
+            if (!this.templateGallery[preselectedTemplate]) {
+                console.error(`❌ Error: Unknown template '${preselectedTemplate}'`);
+                console.log('\nAvailable templates:');
+                Object.keys(this.templateGallery).forEach(key => {
+                    console.log(`  - ${key}`);
+                });
+                this.rl.close();
+                return;
             }
+
+            console.log(`Using template: ${this.templateGallery[preselectedTemplate].name}\n`);
+        } else {
+            // Interactive template selection
+            console.log('Choose from pre-built templates or create a custom extension\n');
+
+            // Show template gallery
+            await this.showTemplateGallery();
+
+            // Get template selection
+            templateChoice = await this.selectTemplate();
+
+            if (!templateChoice) {
+                console.log('Template selection cancelled');
+                this.rl.close();
+                return;
+            }
+        }
+
+        // Get extension details
+        const extensionData = await this.getExtensionDetails(templateChoice, extensionName);
+
+        if (!extensionData) {
+            console.log('Extension creation cancelled');
+            this.rl.close();
+            return;
+        }
+
+        console.log('\n📦 Generating extension...\n');
+
+        try {
+            const outputDir = await this.generateExtension(extensionData, templateChoice);
+
+            console.log(`✅ Extension generated at: ${outputDir}\n`);
+            console.log('Next steps:');
+            console.log(`  cd ${path.basename(outputDir)}`);
+
+            if (templateChoice === 'typescript' || this.requiresNpmInstall(templateChoice)) {
+                console.log('  npm install');
+            }
+
+            if (templateChoice === 'typescript') {
+                console.log('  npm run build');
+            } else if (this.hasTests(templateChoice)) {
+                console.log('  npm test');
+            }
+
             console.log('  ghost extension validate');
             console.log('  ghost extension install .\n');
+        } catch (error) {
+            console.error(`❌ Error: ${error.message}`);
         }
 
         this.rl.close();
     }
 
-    async gatherTemplateData(template) {
-        const name = await this.prompt('Extension name: ');
-        if (!name) {
-            throw new Error('Extension name is required');
+    async showTemplateGallery() {
+        console.log('📚 Available Templates:\n');
+
+        let index = 1;
+        for (const [key, template] of Object.entries(this.templateGallery)) {
+            console.log(`${index}. ${template.name}`);
+            console.log(`   ${template.description}`);
+            console.log(`   Use cases: ${template.useCases?.join(', ') || 'General purpose'}`);
+            console.log('');
+            index++;
         }
-
-        const defaultId = name.toLowerCase().replace(/\s+/g, '-');
-        const id = await this.prompt(`Extension ID (${defaultId}): `) || defaultId;
-
-        const description = await this.prompt(`Description (${template.description}): `) || template.description;
-        const author = await this.prompt('Author: ');
-        const version = await this.prompt('Version (1.0.0): ') || '1.0.0';
-
-        const data = {
-            name,
-            id,
-            description,
-            author,
-            version,
-            template
-        };
-
-        // Template-specific prompts
-        if (template.prompts) {
-            for (const prompt of template.prompts) {
-                const answer = await this.prompt(prompt.question);
-                data[prompt.key] = answer || prompt.default;
-            }
-        }
-
-        return data;
     }
 
-    async gatherCustomData() {
-        const name = await this.prompt('Extension name: ');
-        if (!name) {
-            throw new Error('Extension name is required');
+    async selectTemplate() {
+        const templates = Object.keys(this.templateGallery);
+        const answer = await this.prompt(`Select template (1-${templates.length}, or 'p' for preview): `);
+
+        if (answer.toLowerCase() === 'p') {
+            await this.showTemplatePreviews();
+            return this.selectTemplate();
         }
 
+        const choice = parseInt(answer);
+        if (choice < 1 || choice > templates.length) {
+            console.log('Invalid selection');
+            return null;
+        }
+
+        const templateKey = templates[choice - 1];
+
+        // Show preview
+        await this.showTemplatePreview(templateKey);
+
+        // Confirm
+        const confirm = await this.prompt(`\nUse this template? (y/n): `);
+        if (confirm.toLowerCase() !== 'y') {
+            return this.selectTemplate();
+        }
+
+        return templateKey;
+    }
+
+    async showTemplatePreviews() {
+        console.log('\n📖 Template Previews:\n');
+
+        for (const [key, template] of Object.entries(this.templateGallery)) {
+            console.log(`━━━ ${template.name} ━━━`);
+            console.log(template.preview);
+            console.log('');
+        }
+
+        await this.prompt('Press Enter to continue...');
+        console.log('');
+    }
+
+    async showTemplatePreview(templateKey) {
+        const template = this.templateGallery[templateKey];
+
+        console.log(`\n╔════════════════════════════════════════════════════════════╗`);
+        console.log(`║  ${template.name.padEnd(56)} ║`);
+        console.log(`╚════════════════════════════════════════════════════════════╝`);
+        console.log(`\n${template.description}\n`);
+        console.log(`Capabilities:`);
+        template.capabilities.forEach(cap => console.log(`  • ${cap}`));
+        console.log('');
+        console.log(template.preview);
+    }
+
+    async getExtensionDetails(templateKey, presetName) {
+        const template = this.templateGallery[templateKey];
+
+        // Extension name
+        const name = presetName || await this.prompt('Extension name: ');
+        if (!name) {
+            console.log('Error: Extension name is required');
+            return null;
+        }
+
+        // Extension ID (derived from name)
         const defaultId = name.toLowerCase().replace(/\s+/g, '-');
         const id = await this.prompt(`Extension ID (${defaultId}): `) || defaultId;
 
-        const description = await this.prompt('Description: ');
-        const author = await this.prompt('Author: ');
+        // Description
+        const defaultDescription = `${name} extension`;
+        const description = await this.prompt(`Description (${defaultDescription}): `) || defaultDescription;
+
+        // Author
+        const author = await this.prompt('Author (optional): ') || '';
+
+        // Version
         const version = await this.prompt('Version (1.0.0): ') || '1.0.0';
 
-        console.log('\nSelect capabilities:');
-        const capabilities = await this.promptMultiSelect('', [
-            { name: 'Filesystem access', value: 'filesystem', description: 'Read/write files' },
-            { name: 'Network access', value: 'network', description: 'HTTP requests' },
-            { name: 'Git operations', value: 'git', description: 'Git commands' },
-            { name: 'Process execution', value: 'process', description: 'Run shell commands' }
-        ]);
-
-        const commandsStr = await this.prompt('Commands (comma-separated, e.g., build,test): ');
-        const commands = commandsStr ? commandsStr.split(',').map(c => c.trim()) : [];
-
-        console.log('\nSelect template:');
-        const templates = [
-            { name: 'Basic', value: 'basic', description: 'Simple extension structure' },
-            { name: 'TypeScript', value: 'typescript', description: 'TypeScript with build setup' },
-            { name: 'Advanced', value: 'advanced', description: 'Full featured with tests' }
-        ];
-        templates.forEach((t, idx) => {
-            console.log(`  ${idx + 1}. ${t.name} - ${t.description}`);
-        });
-        const templateChoice = await this.prompt('Choose template (1-3): ');
-        const template = templates[parseInt(templateChoice) - 1]?.value || 'basic';
 
         return {
             name,
@@ -163,65 +314,93 @@ class TemplateWizard {
             description,
             author,
             version,
-            capabilities,
-            commands,
-            template
+            template: templateKey
         };
     }
 
-    showSuccessMessage(outputDir, template) {
-        console.log(`✓ Extension generated at: ${outputDir}\n`);
-        console.log('Next steps:');
-        console.log(`  cd ${outputDir}`);
-        
-        if (template.setup) {
-            template.setup.forEach(step => console.log(`  ${step}`));
-        }
-        
-        console.log('  ghost extension validate');
-        console.log('  ghost extension install .\n');
-        
-        if (template.usage) {
-            console.log('Example usage:');
-            template.usage.forEach(example => console.log(`  ${example}`));
-            console.log('');
-        }
-    }
-
-    async generateExtension(data) {
+    async generateExtension(data, templateKey) {
         const outputDir = path.join(process.cwd(), data.id);
 
         if (fs.existsSync(outputDir)) {
             throw new Error(`Directory ${outputDir} already exists`);
         }
 
-        fs.mkdirSync(outputDir, { recursive: true });
+        const template = this.templateGallery[templateKey];
 
-        const manifest = this._generateManifest(data);
-        fs.writeFileSync(
-            path.join(outputDir, 'manifest.json'),
-            JSON.stringify(manifest, null, 2)
-        );
-
-        if (data.template === 'typescript') {
-            this._generateTypeScriptExtension(outputDir, data);
-        } else if (data.template === 'advanced') {
-            this._generateAdvancedExtension(outputDir, data);
+        // If template has a path (pre-built template), copy it
+        if (template.path && fs.existsSync(template.path)) {
+            await this.copyTemplate(template.path, outputDir, data);
         } else {
-            this._generateBasicExtension(outputDir, data);
+            // Generate from scratch (basic, typescript, advanced)
+            fs.mkdirSync(outputDir, { recursive: true });
+            
+            if (templateKey === 'typescript') {
+                this._generateTypeScriptExtension(outputDir, data);
+            } else if (templateKey === 'advanced') {
+                this._generateAdvancedExtension(outputDir, data);
+            } else {
+                this._generateBasicExtension(outputDir, data);
+            }
+
+            // Generate common files
+            const manifest = this._generateManifest(data);
+            fs.writeFileSync(
+                path.join(outputDir, 'manifest.json'),
+                JSON.stringify(manifest, null, 2)
+            );
+
+            const readme = this._generateReadme(data);
+            fs.writeFileSync(path.join(outputDir, 'README.md'), readme);
+
+            const gitignore = this._generateGitignore();
+            fs.writeFileSync(path.join(outputDir, '.gitignore'), gitignore);
         }
-
-        const readme = this._generateReadme(data);
-        fs.writeFileSync(path.join(outputDir, 'README.md'), readme);
-
-        const gitignore = this._generateGitignore();
-        fs.writeFileSync(path.join(outputDir, '.gitignore'), gitignore);
 
         return outputDir;
     }
 
+    async copyTemplate(templatePath, outputDir, data) {
+        fs.mkdirSync(outputDir, { recursive: true });
+
+        const entries = fs.readdirSync(templatePath, { withFileTypes: true });
+
+        for (const entry of entries) {
+            const srcPath = path.join(templatePath, entry.name);
+            const destPath = path.join(outputDir, entry.name);
+
+            if (entry.isDirectory()) {
+                await this.copyTemplate(srcPath, destPath, data);
+            } else {
+                let content = fs.readFileSync(srcPath, 'utf8');
+
+                // Replace template variables in manifest.json
+                if (entry.name === 'manifest.json') {
+                    const manifest = JSON.parse(content);
+                    manifest.id = data.id;
+                    manifest.name = data.name;
+                    manifest.version = data.version;
+                    manifest.description = data.description;
+                    if (data.author) {
+                        manifest.author = data.author;
+                    }
+                    content = JSON.stringify(manifest, null, 2);
+                }
+
+                fs.writeFileSync(destPath, content);
+            }
+        }
+    }
+
+    requiresNpmInstall(templateKey) {
+        return ['api-integration', 'file-processor', 'git-workflow', 'testing', 'typescript', 'advanced'].includes(templateKey);
+    }
+
+    hasTests(templateKey) {
+        return ['api-integration', 'file-processor', 'git-workflow', 'testing', 'advanced'].includes(templateKey);
+    }
+
     _generateManifest(data) {
-        const manifest = {
+        return {
             id: data.id,
             name: data.name,
             version: data.version,
@@ -229,36 +408,8 @@ class TemplateWizard {
             author: data.author || '',
             main: data.template === 'typescript' ? 'dist/index.js' : 'index.js',
             capabilities: {},
-            commands: data.commands
+            commands: []
         };
-
-        if (data.capabilities.includes('filesystem')) {
-            manifest.capabilities.filesystem = {
-                read: ['**/*'],
-                write: ['**/*']
-            };
-        }
-
-        if (data.capabilities.includes('network')) {
-            manifest.capabilities.network = {
-                allowlist: ['*']
-            };
-        }
-
-        if (data.capabilities.includes('git')) {
-            manifest.capabilities.git = {
-                read: true,
-                write: true
-            };
-        }
-
-        if (data.capabilities.includes('process')) {
-            manifest.capabilities.process = {
-                allowlist: ['*']
-            };
-        }
-
-        return manifest;
     }
 
     _generateBasicExtension(outputDir, data) {
@@ -271,16 +422,7 @@ class ${this._toPascalCase(data.id)}Extension {
         this.context = context;
     }
 
-${data.commands.map(cmd => `    async ${cmd}(params) {
-        console.log('Executing ${cmd}', params);
-        
-        // TODO: Implement ${cmd} logic
-        
-        return {
-            success: true,
-            message: '${cmd} completed'
-        };
-    }`).join('\n\n')}
+    // Add your extension commands here
 
     async cleanup() {
         console.log('${data.name} cleanup');
@@ -304,12 +446,6 @@ interface Context {
     config: Record<string, any>;
 }
 
-interface CommandParams {
-    subcommand?: string;
-    args: string[];
-    flags: Record<string, any>;
-}
-
 export default class ${this._toPascalCase(data.id)}Extension {
     private context?: Context;
 
@@ -318,16 +454,7 @@ export default class ${this._toPascalCase(data.id)}Extension {
         this.context = context;
     }
 
-${data.commands.map(cmd => `    async ${cmd}(params: CommandParams): Promise<any> {
-        console.log('Executing ${cmd}', params);
-        
-        // TODO: Implement ${cmd} logic
-        
-        return {
-            success: true,
-            message: '${cmd} completed'
-        };
-    }`).join('\n\n')}
+    // Add your extension commands here
 
     async cleanup(): Promise<void> {
         console.log('${data.name} cleanup');
@@ -402,12 +529,6 @@ describe('${data.name}', () => {
         assert.ok(extension.context);
     });
 
-${data.commands.map(cmd => `    it('should execute ${cmd}', async () => {
-        await extension.init({});
-        const result = await extension.${cmd}({ args: [], flags: {} });
-        assert.strictEqual(result.success, true);
-    });`).join('\n\n')}
-
     it('should cleanup', async () => {
         await extension.init({});
         await extension.cleanup();
@@ -449,13 +570,9 @@ ghost extension install .
 
 ## Usage
 
-${data.commands.map(cmd => `\`\`\`bash
-ghost ${cmd}
-\`\`\``).join('\n\n')}
-
-## Capabilities
-
-${data.capabilities.map(cap => `- ${cap}`).join('\n')}
+\`\`\`bash
+# Add usage examples here
+\`\`\`
 
 ## Development
 
@@ -482,6 +599,7 @@ dist/
 *.log
 .DS_Store
 .env
+coverage/
 `;
     }
 

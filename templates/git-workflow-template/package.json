@@ -1,0 +1,21 @@
+{
+  "name": "git-workflow-template",
+  "version": "1.0.0",
+  "description": "Template for Git workflow automation with hooks and validation",
+  "main": "index.js",
+  "scripts": {
+    "test": "mocha test/**/*.test.js"
+  },
+  "keywords": [
+    "ghost-cli",
+    "extension",
+    "git",
+    "workflow",
+    "hooks",
+    "conventional-commits",
+    "template"
+  ],
+  "devDependencies": {
+    "mocha": "^10.2.0"
+  }
+}
