@@ -1,7 +1,7 @@
 const { spawn } = require('child_process');
 const { EventEmitter } = require('events');
 const readline = require('readline');
-const { PluginSandbox } = require('./sandbox');
+const { PluginSandbox, ResourceLimiter } = require('./sandbox');
 
 class ExtensionProcess extends EventEmitter {
     constructor(extensionId, extensionPath, manifest, options = {}) {
@@ -64,6 +64,17 @@ class ExtensionProcess extends EventEmitter {
             'DEGRADED': ['RUNNING', 'STOPPING', 'FAILED'],
             'STOPPING': ['STOPPED', 'FAILED'],
             'FAILED': ['STARTING', 'STOPPED']
+        };
+
+        this.resourceLimiter = null;
+        this.resourceMonitorInterval = null;
+        this.resourceMonitorFrequency = options.resourceMonitorFrequency || 5000;
+        this.enableResourceLimits = options.enableResourceLimits !== false;
+        this.resourceLimits = {
+            cpu: options.cpu || 50,
+            memory: options.memory || '512M',
+            pids: options.pids || 100,
+            networkBandwidth: options.networkBandwidth || null
         };
     }
 
@@ -140,6 +151,12 @@ class ExtensionProcess extends EventEmitter {
             this.consecutiveHeartbeatFailures = 0;
             this._startHeartbeatMonitoring();
             this.consecutiveRestarts = 0;
+            
+            if (this.enableResourceLimits && this.process && this.process.pid) {
+                await this._applyResourceLimits();
+                this._startResourceMonitoring();
+            }
+            
             this._transitionState('RUNNING', 'startup_success', {
                 startupDuration: Date.now() - this.lastHeartbeat
             });
@@ -163,6 +180,7 @@ class ExtensionProcess extends EventEmitter {
         this._transitionState('STOPPING', 'stop_requested');
 
         this._stopHeartbeatMonitoring();
+        this._stopResourceMonitoring();
         
         for (const [requestId, request] of this.pendingRequests) {
             clearTimeout(request.timeoutId);
@@ -175,6 +193,11 @@ class ExtensionProcess extends EventEmitter {
 
         if (this.process) {
             await this._gracefulShutdown();
+        }
+
+        if (this.resourceLimiter) {
+            await this.resourceLimiter.cleanup();
+            this.resourceLimiter = null;
         }
 
         this._transitionState('STOPPED', 'shutdown_complete');
@@ -1135,6 +1158,92 @@ class ExtensionProcess extends EventEmitter {
         this._clearPendingPing();
     }
 
+    async _applyResourceLimits() {
+        try {
+            this.resourceLimiter = new ResourceLimiter(this.extensionId, this.resourceLimits);
+            
+            this.resourceLimiter.on('limits-applied', (info) => {
+                this.emit('resource-limits-applied', info);
+            });
+
+            this.resourceLimiter.on('limits-updated', (info) => {
+                this.emit('resource-limits-updated', info);
+            });
+
+            this.resourceLimiter.on('violation', (info) => {
+                this.emit('resource-violation', info);
+            });
+
+            this.resourceLimiter.on('limits-error', (info) => {
+                this.emit('resource-limits-error', info);
+            });
+
+            await this.resourceLimiter.apply(this.process.pid);
+        } catch (error) {
+            console.warn(`[ExtensionProcess] Failed to apply resource limits for ${this.extensionId}: ${error.message}`);
+        }
+    }
+
+    async updateResourceLimits(newLimits) {
+        if (!this.resourceLimiter) {
+            this.resourceLimits = { ...this.resourceLimits, ...newLimits };
+            if (this.process && this.process.pid) {
+                await this._applyResourceLimits();
+            }
+            return;
+        }
+
+        await this.resourceLimiter.updateLimits(newLimits);
+        this.resourceLimits = { ...this.resourceLimits, ...newLimits };
+    }
+
+    _startResourceMonitoring() {
+        if (!this.resourceLimiter) return;
+
+        this.resourceMonitorInterval = setInterval(async () => {
+            try {
+                const usage = await this.resourceLimiter.getUsage();
+                
+                this.emit('resource-usage', {
+                    extensionId: this.extensionId,
+                    usage
+                });
+
+            } catch (error) {
+                console.error(`[ExtensionProcess] Resource monitoring error for ${this.extensionId}: ${error.message}`);
+            }
+        }, this.resourceMonitorFrequency);
+    }
+
+    _stopResourceMonitoring() {
+        if (this.resourceMonitorInterval) {
+            clearInterval(this.resourceMonitorInterval);
+            this.resourceMonitorInterval = null;
+        }
+    }
+
+    async getResourceUsage() {
+        if (!this.resourceLimiter) {
+            return {
+                cpu_percent: 0,
+                memory_bytes: 0,
+                io_bytes: 0,
+                network_bytes: 0,
+                timestamp: Date.now()
+            };
+        }
+
+        return await this.resourceLimiter.getUsage();
+    }
+
+    getResourceViolations(since = null) {
+        if (!this.resourceLimiter) {
+            return [];
+        }
+
+        return this.resourceLimiter.getViolations(since);
+    }
+
     async _handleUnresponsiveExtension() {
         this.emit('error', {
             extensionId: this.extensionId,
@@ -1740,6 +1849,8 @@ class ExtensionRuntime extends EventEmitter {
         this.loader = null;
         this.extensionPaths = new Map();
         this.extensionManifests = new Map();
+        this.telemetry = options.telemetry || null;
+        this.securityMonitor = options.securityMonitor || null;
     }
 
     async startExtension(extensionId, extensionPath, manifest, processOptions = {}) {
@@ -1846,6 +1957,39 @@ class ExtensionRuntime extends EventEmitter {
             extension.on('crash-recovery-success', (info) => {
                 this.emit('extension-crash-recovery-success', info);
             });
+
+            extension.on('resource-usage', (info) => {
+                this.emit('extension-resource-usage', info);
+                
+                if (this.telemetry && this.telemetry.metrics) {
+                    this.telemetry.metrics.recordResourceUsage(extensionId, info.usage);
+                }
+            });
+
+            extension.on('resource-violation', (info) => {
+                this.emit('extension-resource-violation', info);
+                
+                if (this.securityMonitor) {
+                    this.securityMonitor.recordResourceViolation(
+                        extensionId,
+                        info.type,
+                        info.usage,
+                        info.limit
+                    );
+                }
+            });
+
+            extension.on('resource-limits-applied', (info) => {
+                this.emit('extension-resource-limits-applied', info);
+            });
+
+            extension.on('resource-limits-updated', (info) => {
+                this.emit('extension-resource-limits-updated', info);
+            });
+
+            extension.on('resource-limits-error', (info) => {
+                this.emit('extension-resource-limits-error', info);
+            });
         }
 
         this.extensions.set(extensionId, extension);
@@ -1919,6 +2063,20 @@ class ExtensionRuntime extends EventEmitter {
         }
 
         return await extensionProcess.call(method, params);
+    }
+
+    async updateExtensionLimits(extensionId, limits) {
+        const extensionProcess = this.extensions.get(extensionId);
+        
+        if (!extensionProcess) {
+            throw new Error(`Extension ${extensionId} is not registered`);
+        }
+
+        if (typeof extensionProcess.updateResourceLimits === 'function') {
+            await extensionProcess.updateResourceLimits(limits);
+        } else {
+            throw new Error(`Extension ${extensionId} does not support resource limiting`);
+        }
     }
 
     getExtensionState(extensionId) {

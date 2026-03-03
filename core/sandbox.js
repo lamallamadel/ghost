@@ -1,5 +1,8 @@
 const vm = require('vm');
 const { EventEmitter } = require('events');
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
 
 class SandboxError extends Error {
     constructor(message, code, details = {}) {
@@ -7,6 +10,421 @@ class SandboxError extends Error {
         this.name = 'SandboxError';
         this.code = code;
         this.details = details;
+    }
+}
+
+class ResourceLimiter extends EventEmitter {
+    constructor(extensionId, options = {}) {
+        super();
+        this.extensionId = extensionId;
+        this.platform = os.platform();
+        this.pid = null;
+        this.limits = {
+            cpu: options.cpu || 50,
+            memory: this._parseMemoryLimit(options.memory || '512M'),
+            pids: options.pids || 100,
+            networkBandwidth: options.networkBandwidth || null
+        };
+        this.cgroupPath = null;
+        this.jobHandle = null;
+        this.isWindows = this.platform === 'win32';
+        this.isLinux = this.platform === 'linux';
+        this.violations = [];
+        this.metricsHistory = {
+            cpu: [],
+            memory: [],
+            io: [],
+            network: []
+        };
+    }
+
+    _parseMemoryLimit(memStr) {
+        if (typeof memStr === 'number') return memStr;
+        const match = memStr.match(/^(\d+)(K|M|G)?$/i);
+        if (!match) return 512 * 1024 * 1024;
+        const value = parseInt(match[1]);
+        const unit = (match[2] || 'M').toUpperCase();
+        const multipliers = { K: 1024, M: 1024 * 1024, G: 1024 * 1024 * 1024 };
+        return value * multipliers[unit];
+    }
+
+    async apply(pid) {
+        this.pid = pid;
+        
+        if (this.isLinux) {
+            await this._applyLinuxCgroups();
+        } else if (this.isWindows) {
+            await this._applyWindowsJobObject();
+        }
+        
+        this.emit('limits-applied', {
+            extensionId: this.extensionId,
+            pid,
+            limits: this.limits
+        });
+    }
+
+    async _applyLinuxCgroups() {
+        try {
+            const cgroupBase = '/sys/fs/cgroup';
+            if (!fs.existsSync(cgroupBase)) {
+                throw new Error('cgroup v2 not available on this system');
+            }
+
+            this.cgroupPath = path.join(cgroupBase, 'ghost', `ext-${this.extensionId}-${this.pid}`);
+            
+            if (!fs.existsSync(path.join(cgroupBase, 'ghost'))) {
+                fs.mkdirSync(path.join(cgroupBase, 'ghost'), { recursive: true });
+            }
+            
+            if (!fs.existsSync(this.cgroupPath)) {
+                fs.mkdirSync(this.cgroupPath, { recursive: true });
+            }
+
+            fs.writeFileSync(
+                path.join(this.cgroupPath, 'cgroup.procs'),
+                String(this.pid)
+            );
+
+            const cpuMaxValue = `${this.limits.cpu * 1000} 100000`;
+            fs.writeFileSync(
+                path.join(this.cgroupPath, 'cpu.max'),
+                cpuMaxValue
+            );
+
+            fs.writeFileSync(
+                path.join(this.cgroupPath, 'memory.max'),
+                String(this.limits.memory)
+            );
+
+            fs.writeFileSync(
+                path.join(this.cgroupPath, 'pids.max'),
+                String(this.limits.pids)
+            );
+
+            if (this.limits.networkBandwidth) {
+                const ioMaxValue = `${this.limits.networkBandwidth}\n`;
+                try {
+                    fs.writeFileSync(
+                        path.join(this.cgroupPath, 'io.max'),
+                        ioMaxValue
+                    );
+                } catch (error) {
+                }
+            }
+
+        } catch (error) {
+            this.emit('limits-error', {
+                extensionId: this.extensionId,
+                error: error.message
+            });
+            throw error;
+        }
+    }
+
+    async _applyWindowsJobObject() {
+        if (!this.isWindows) return;
+        
+        try {
+            const ffi = require('ffi-napi');
+            const ref = require('ref-napi');
+            
+            const kernel32 = ffi.Library('kernel32', {
+                'CreateJobObjectW': ['pointer', ['pointer', 'pointer']],
+                'AssignProcessToJobObject': ['bool', ['pointer', 'pointer']],
+                'SetInformationJobObject': ['bool', ['pointer', 'int', 'pointer', 'uint32']],
+                'OpenProcess': ['pointer', ['uint32', 'bool', 'uint32']],
+                'CloseHandle': ['bool', ['pointer']]
+            });
+
+            this.jobHandle = kernel32.CreateJobObjectW(null, null);
+            if (this.jobHandle.isNull()) {
+                throw new Error('Failed to create job object');
+            }
+
+            const processHandle = kernel32.OpenProcess(0x1F0FFF, false, this.pid);
+            if (processHandle.isNull()) {
+                throw new Error('Failed to open process');
+            }
+
+            const assigned = kernel32.AssignProcessToJobObject(this.jobHandle, processHandle);
+            if (!assigned) {
+                kernel32.CloseHandle(processHandle);
+                throw new Error('Failed to assign process to job object');
+            }
+
+            const JOBOBJECT_EXTENDED_LIMIT_INFORMATION = 9;
+            const limitInfo = Buffer.alloc(144);
+            
+            limitInfo.writeUInt32LE(0x00000100, 0);
+            limitInfo.writeBigUInt64LE(BigInt(this.limits.memory), 32);
+            limitInfo.writeUInt32LE(this.limits.cpu * 100, 48);
+
+            kernel32.SetInformationJobObject(
+                this.jobHandle,
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+                limitInfo,
+                144
+            );
+
+            kernel32.CloseHandle(processHandle);
+
+        } catch (error) {
+            this.emit('limits-error', {
+                extensionId: this.extensionId,
+                error: `Windows Job Object setup failed: ${error.message}`
+            });
+        }
+    }
+
+    async updateLimits(newLimits) {
+        if (newLimits.cpu !== undefined) {
+            this.limits.cpu = newLimits.cpu;
+        }
+        if (newLimits.memory !== undefined) {
+            this.limits.memory = this._parseMemoryLimit(newLimits.memory);
+        }
+        if (newLimits.pids !== undefined) {
+            this.limits.pids = newLimits.pids;
+        }
+        if (newLimits.networkBandwidth !== undefined) {
+            this.limits.networkBandwidth = newLimits.networkBandwidth;
+        }
+
+        if (this.pid) {
+            if (this.isLinux && this.cgroupPath) {
+                await this._updateLinuxLimits();
+            } else if (this.isWindows && this.jobHandle) {
+                await this._updateWindowsLimits();
+            }
+        }
+
+        this.emit('limits-updated', {
+            extensionId: this.extensionId,
+            limits: this.limits
+        });
+    }
+
+    async _updateLinuxLimits() {
+        try {
+            if (!this.cgroupPath || !fs.existsSync(this.cgroupPath)) {
+                return;
+            }
+
+            const cpuMaxValue = `${this.limits.cpu * 1000} 100000`;
+            fs.writeFileSync(
+                path.join(this.cgroupPath, 'cpu.max'),
+                cpuMaxValue
+            );
+
+            fs.writeFileSync(
+                path.join(this.cgroupPath, 'memory.max'),
+                String(this.limits.memory)
+            );
+
+            fs.writeFileSync(
+                path.join(this.cgroupPath, 'pids.max'),
+                String(this.limits.pids)
+            );
+
+        } catch (error) {
+            this.emit('limits-error', {
+                extensionId: this.extensionId,
+                error: error.message
+            });
+        }
+    }
+
+    async _updateWindowsLimits() {
+        if (!this.jobHandle) return;
+        
+        try {
+            const ffi = require('ffi-napi');
+            const kernel32 = ffi.Library('kernel32', {
+                'SetInformationJobObject': ['bool', ['pointer', 'int', 'pointer', 'uint32']]
+            });
+
+            const JOBOBJECT_EXTENDED_LIMIT_INFORMATION = 9;
+            const limitInfo = Buffer.alloc(144);
+            
+            limitInfo.writeUInt32LE(0x00000100, 0);
+            limitInfo.writeBigUInt64LE(BigInt(this.limits.memory), 32);
+            limitInfo.writeUInt32LE(this.limits.cpu * 100, 48);
+
+            kernel32.SetInformationJobObject(
+                this.jobHandle,
+                JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+                limitInfo,
+                144
+            );
+
+        } catch (error) {
+            this.emit('limits-error', {
+                extensionId: this.extensionId,
+                error: error.message
+            });
+        }
+    }
+
+    async getUsage() {
+        if (this.isLinux && this.cgroupPath) {
+            return await this._getLinuxUsage();
+        } else if (this.isWindows) {
+            return await this._getWindowsUsage();
+        }
+        return this._getDefaultUsage();
+    }
+
+    async _getLinuxUsage() {
+        try {
+            if (!this.cgroupPath || !fs.existsSync(this.cgroupPath)) {
+                return this._getDefaultUsage();
+            }
+
+            const cpuStatPath = path.join(this.cgroupPath, 'cpu.stat');
+            const memCurrentPath = path.join(this.cgroupPath, 'memory.current');
+            const ioStatPath = path.join(this.cgroupPath, 'io.stat');
+
+            const usage = {
+                cpu_percent: 0,
+                memory_bytes: 0,
+                io_bytes: 0,
+                network_bytes: 0,
+                timestamp: Date.now()
+            };
+
+            if (fs.existsSync(cpuStatPath)) {
+                const cpuStat = fs.readFileSync(cpuStatPath, 'utf8');
+                const usageMatch = cpuStat.match(/usage_usec (\d+)/);
+                if (usageMatch) {
+                    const usageUsec = parseInt(usageMatch[1]);
+                    const prevUsage = this.metricsHistory.cpu.length > 0 
+                        ? this.metricsHistory.cpu[this.metricsHistory.cpu.length - 1]
+                        : null;
+                    
+                    if (prevUsage) {
+                        const deltaTime = usage.timestamp - prevUsage.timestamp;
+                        const deltaUsage = usageUsec - prevUsage.value;
+                        usage.cpu_percent = Math.min(100, (deltaUsage / (deltaTime * 10)));
+                    }
+                    
+                    this.metricsHistory.cpu.push({
+                        value: usageUsec,
+                        timestamp: usage.timestamp
+                    });
+                    if (this.metricsHistory.cpu.length > 100) {
+                        this.metricsHistory.cpu.shift();
+                    }
+                }
+            }
+
+            if (fs.existsSync(memCurrentPath)) {
+                const memCurrent = fs.readFileSync(memCurrentPath, 'utf8').trim();
+                usage.memory_bytes = parseInt(memCurrent) || 0;
+            }
+
+            if (fs.existsSync(ioStatPath)) {
+                const ioStat = fs.readFileSync(ioStatPath, 'utf8');
+                const lines = ioStat.split('\n');
+                let totalBytes = 0;
+                for (const line of lines) {
+                    const rbytesMatch = line.match(/rbytes=(\d+)/);
+                    const wbytesMatch = line.match(/wbytes=(\d+)/);
+                    if (rbytesMatch) totalBytes += parseInt(rbytesMatch[1]);
+                    if (wbytesMatch) totalBytes += parseInt(wbytesMatch[1]);
+                }
+                usage.io_bytes = totalBytes;
+            }
+
+            this._checkViolations(usage);
+            return usage;
+
+        } catch (error) {
+            return this._getDefaultUsage();
+        }
+    }
+
+    async _getWindowsUsage() {
+        return this._getDefaultUsage();
+    }
+
+    _getDefaultUsage() {
+        return {
+            cpu_percent: 0,
+            memory_bytes: 0,
+            io_bytes: 0,
+            network_bytes: 0,
+            timestamp: Date.now()
+        };
+    }
+
+    _checkViolations(usage) {
+        const now = Date.now();
+        
+        if (usage.cpu_percent > (this.limits.cpu * 0.95)) {
+            this.violations.push({
+                type: 'cpu',
+                timestamp: now,
+                value: usage.cpu_percent,
+                limit: this.limits.cpu
+            });
+            this.emit('violation', {
+                extensionId: this.extensionId,
+                type: 'cpu',
+                usage: usage.cpu_percent,
+                limit: this.limits.cpu
+            });
+        }
+
+        if (usage.memory_bytes > (this.limits.memory * 0.95)) {
+            this.violations.push({
+                type: 'memory',
+                timestamp: now,
+                value: usage.memory_bytes,
+                limit: this.limits.memory
+            });
+            this.emit('violation', {
+                extensionId: this.extensionId,
+                type: 'memory',
+                usage: usage.memory_bytes,
+                limit: this.limits.memory
+            });
+        }
+
+        if (this.violations.length > 1000) {
+            this.violations = this.violations.slice(-1000);
+        }
+    }
+
+    getViolations(since = null) {
+        if (since) {
+            return this.violations.filter(v => v.timestamp > since);
+        }
+        return this.violations;
+    }
+
+    async cleanup() {
+        if (this.isLinux && this.cgroupPath) {
+            try {
+                if (fs.existsSync(this.cgroupPath)) {
+                    fs.rmdirSync(this.cgroupPath);
+                }
+            } catch (error) {
+            }
+        } else if (this.isWindows && this.jobHandle) {
+            try {
+                const ffi = require('ffi-napi');
+                const kernel32 = ffi.Library('kernel32', {
+                    'CloseHandle': ['bool', ['pointer']]
+                });
+                kernel32.CloseHandle(this.jobHandle);
+            } catch (error) {
+            }
+        }
+
+        this.emit('cleanup', {
+            extensionId: this.extensionId
+        });
     }
 }
 
@@ -659,5 +1077,6 @@ module.exports = {
     PluginSandbox,
     SandboxError,
     ResourceMonitor,
-    SandboxEscapeDetector
+    SandboxEscapeDetector,
+    ResourceLimiter
 };

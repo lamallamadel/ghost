@@ -344,4 +344,101 @@ class IntrusionDetectionSystem extends EventEmitter {
     }
 }
 
-module.exports = { IntrusionDetectionSystem };
+class SecurityMonitor extends EventEmitter {
+    constructor(ids, telemetry, options = {}) {
+        super();
+        this.ids = ids;
+        this.telemetry = telemetry;
+        this.resourceViolationThreshold = options.resourceViolationThreshold || 3;
+        this.violationWindow = options.violationWindow || 60000;
+        this.extensionViolations = new Map();
+    }
+
+    recordResourceViolation(extensionId, violationType, usage, limit) {
+        if (!this.extensionViolations.has(extensionId)) {
+            this.extensionViolations.set(extensionId, []);
+        }
+
+        const violations = this.extensionViolations.get(extensionId);
+        const now = Date.now();
+
+        violations.push({
+            type: violationType,
+            timestamp: now,
+            usage,
+            limit
+        });
+
+        const recentViolations = violations.filter(
+            v => now - v.timestamp < this.violationWindow
+        );
+        this.extensionViolations.set(extensionId, recentViolations);
+
+        if (recentViolations.length >= this.resourceViolationThreshold) {
+            this._triggerSecurityAlert(extensionId, recentViolations);
+        }
+
+        this.ids.recordEvent(extensionId, {
+            type: 'resource-violation',
+            subtype: violationType,
+            usage,
+            limit,
+            timestamp: now
+        });
+    }
+
+    _triggerSecurityAlert(extensionId, violations) {
+        const alert = {
+            extensionId,
+            timestamp: Date.now(),
+            severity: 'SECURITY_ALERT',
+            type: 'RESOURCE_EXHAUSTION',
+            violationCount: violations.length,
+            violations: violations.map(v => ({
+                type: v.type,
+                usage: v.usage,
+                limit: v.limit,
+                timestamp: v.timestamp
+            }))
+        };
+
+        if (this.telemetry && this.telemetry.logger) {
+            this.telemetry.logger.securityAlert(
+                `Extension ${extensionId} exceeded resource limits ${violations.length} times`,
+                alert
+            );
+        }
+
+        this.emit('security-alert', alert);
+
+        console.error(`[SECURITY_ALERT] Extension ${extensionId} resource exhaustion detected`);
+        console.error(`  Violations: ${violations.length} in last ${this.violationWindow}ms`);
+        for (const v of violations.slice(-5)) {
+            console.error(`    - ${v.type}: ${v.usage} (limit: ${v.limit})`);
+        }
+    }
+
+    getViolationStats(extensionId = null) {
+        if (extensionId) {
+            return {
+                [extensionId]: this.extensionViolations.get(extensionId) || []
+            };
+        }
+
+        const stats = {};
+        for (const [extId, violations] of this.extensionViolations.entries()) {
+            stats[extId] = violations;
+        }
+        return stats;
+    }
+
+    clearViolations(extensionId) {
+        if (extensionId) {
+            this.extensionViolations.delete(extensionId);
+        } else {
+            this.extensionViolations.clear();
+        }
+    }
+}
+
+module.exports = { IntrusionDetectionSystem, SecurityMonitor };

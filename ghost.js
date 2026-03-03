@@ -167,10 +167,17 @@ class GatewayLauncher {
         const { DevMode } = require('./core/dev-mode');
         const { ProfilingManager } = require('./core/profiler');
         const { DebuggerManager } = require('./core/debugger-adapter');
+        const { IntrusionDetectionSystem, SecurityMonitor } = require('./core/intrusion-detection');
         
         this.devMode = new DevMode({ enabled: false });
         this.profilingManager = new ProfilingManager();
         this.debuggerManager = new DebuggerManager();
+        this.ids = new IntrusionDetectionSystem();
+        this.securityMonitor = new SecurityMonitor(this.ids, this.telemetryInstance);
+
+        // Wire telemetry and security monitor to runtime
+        this.runtime.telemetry = this.telemetryInstance;
+        this.runtime.securityMonitor = this.securityMonitor;
 
         // Wire dev mode into pipeline for bypass capabilities
         this.pipeline.devMode = this.devMode;
@@ -1609,6 +1616,8 @@ class GatewayLauncher {
   ghost gateway logs [options]            View audit logs (alias for audit-log view)
   ghost gateway metrics [extension-id]    Show telemetry metrics
   ghost gateway spans [limit]             Show recent spans
+  ghost gateway limits set <extension-id> --cpu <percent> --memory <size> --pids <count>
+                                          Set resource limits for an extension
 `);
             return;
         }
@@ -1869,11 +1878,111 @@ class GatewayLauncher {
                 console.error(`${Colors.DIM}${error.message}${Colors.ENDC}\n`);
                 process.exit(1);
             }
+        } else if (subcommand === 'limits') {
+            const action = parsedArgs.args[0];
+            
+            if (!action || action === 'help') {
+                console.log(`${Colors.BOLD}Resource Limits Commands:${Colors.ENDC}
+  ghost gateway limits set <extension-id> --cpu <percent> --memory <size> --pids <count>
+                                          Set resource limits for an extension
+
+${Colors.BOLD}Options:${Colors.ENDC}
+  --cpu <percent>         CPU limit percentage (0-100, default: 50)
+  --memory <size>         Memory limit (e.g., 512M, 1G, default: 512M)
+  --pids <count>          Maximum process/thread count (default: 100)
+  --bandwidth <size>      Network bandwidth limit (optional)
+
+${Colors.BOLD}Examples:${Colors.ENDC}
+  ghost gateway limits set my-extension --cpu 75 --memory 1G
+  ghost gateway limits set my-extension --cpu 30 --memory 256M --pids 50
+`);
+                return;
+            }
+            
+            if (action === 'set') {
+                const extensionId = parsedArgs.args[1];
+                
+                if (!extensionId) {
+                    console.error(`${Colors.FAIL}Error: Extension ID is required${Colors.ENDC}\n`);
+                    console.log(`Usage: ${Colors.CYAN}ghost gateway limits set <extension-id> [options]${Colors.ENDC}\n`);
+                    process.exit(1);
+                }
+
+                const extension = this.gateway.getExtension(extensionId);
+                if (!extension) {
+                    console.error(`${Colors.FAIL}Error: Extension '${extensionId}' not found${Colors.ENDC}\n`);
+                    process.exit(1);
+                }
+
+                const limits = {};
+                
+                if (parsedArgs.flags.cpu !== undefined) {
+                    const cpu = parseInt(parsedArgs.flags.cpu);
+                    if (isNaN(cpu) || cpu < 0 || cpu > 100) {
+                        console.error(`${Colors.FAIL}Error: CPU limit must be between 0 and 100${Colors.ENDC}\n`);
+                        process.exit(1);
+                    }
+                    limits.cpu = cpu;
+                }
+                
+                if (parsedArgs.flags.memory) {
+                    limits.memory = parsedArgs.flags.memory;
+                }
+                
+                if (parsedArgs.flags.pids !== undefined) {
+                    const pids = parseInt(parsedArgs.flags.pids);
+                    if (isNaN(pids) || pids < 1) {
+                        console.error(`${Colors.FAIL}Error: PIDs limit must be a positive integer${Colors.ENDC}\n`);
+                        process.exit(1);
+                    }
+                    limits.pids = pids;
+                }
+                
+                if (parsedArgs.flags.bandwidth) {
+                    limits.networkBandwidth = parsedArgs.flags.bandwidth;
+                }
+
+                if (Object.keys(limits).length === 0) {
+                    console.error(`${Colors.FAIL}Error: At least one limit flag must be provided${Colors.ENDC}\n`);
+                    console.log(`Available flags: --cpu, --memory, --pids, --bandwidth\n`);
+                    process.exit(1);
+                }
+
+                try {
+                    console.log(`${Colors.CYAN}Updating resource limits for ${extensionId}...${Colors.ENDC}`);
+                    
+                    await this.runtime.updateExtensionLimits(extensionId, limits);
+                    
+                    console.log(`${Colors.GREEN}✓${Colors.ENDC} Resource limits updated successfully\n`);
+                    console.log(`${Colors.BOLD}New limits:${Colors.ENDC}`);
+                    if (limits.cpu !== undefined) {
+                        console.log(`  CPU:       ${limits.cpu}%`);
+                    }
+                    if (limits.memory) {
+                        console.log(`  Memory:    ${limits.memory}`);
+                    }
+                    if (limits.pids !== undefined) {
+                        console.log(`  PIDs:      ${limits.pids}`);
+                    }
+                    if (limits.networkBandwidth) {
+                        console.log(`  Bandwidth: ${limits.networkBandwidth}`);
+                    }
+                    console.log('');
+                } catch (error) {
+                    console.error(`${Colors.FAIL}Error: Failed to update resource limits${Colors.ENDC}`);
+                    console.error(`${Colors.DIM}${error.message}${Colors.ENDC}\n`);
+                    process.exit(1);
+                }
+            } else {
+                console.error(`${Colors.FAIL}Error: Unknown limits action '${action}'${Colors.ENDC}\n`);
+                console.log(`Run ${Colors.CYAN}ghost gateway limits help${Colors.ENDC} for usage information\n`);
+                process.exit(1);
+            }
         } else {
             console.error(`${Colors.FAIL}Error: Unknown gateway subcommand '${subcommand}'${Colors.ENDC}\n`);
             
             // Suggest similar subcommands
-            const validSubcommands = ['status', 'extensions', 'health', 'reload', 'logs', 'metrics', 'spans'];
+            const validSubcommands = ['status', 'extensions', 'health', 'reload', 'logs', 'metrics', 'spans', 'limits'];
             const suggestions = this._findSimilarCommands(subcommand, validSubcommands);
             
             if (suggestions.length > 0) {
@@ -1933,7 +2042,7 @@ class GatewayLauncher {
             'setup', 'doctor', 'completion', 'extension', 'gateway', 'audit-log', 'console', 'logs', 'webhook', 'dev'
         ];
         const extensionSubcommands = ['list', 'install', 'remove', 'info', 'deps', 'doctor', 'init', 'validate', 'migrate'];
-        const gatewaySubcommands = ['status', 'extensions', 'health', 'reload', 'logs', 'metrics', 'spans'];
+        const gatewaySubcommands = ['status', 'extensions', 'health', 'reload', 'logs', 'metrics', 'spans', 'limits'];
         const logsSubcommands = ['prune', 'info'];
         const webhookSubcommands = ['start', 'stop', 'status', 'events', 'deliveries', 'replay', 'queue-stats', 'prune'];
         const devSubcommands = ['enable', 'disable', 'status'];

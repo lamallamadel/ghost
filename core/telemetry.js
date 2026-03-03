@@ -944,7 +944,63 @@ class MetricsCollector {
             rateLimitViolations: new Map(),
             validationFailures: new Map(),
             authFailures: new Map(),
-            intentSizes: new Map()
+            intentSizes: new Map(),
+            resourceUsage: new Map()
+        };
+    }
+
+    recordResourceUsage(extensionId, usage) {
+        if (!this.metrics.resourceUsage.has(extensionId)) {
+            this.metrics.resourceUsage.set(extensionId, {
+                cpu_percent: [],
+                memory_bytes: [],
+                io_bytes: [],
+                network_bytes: []
+            });
+        }
+
+        const resources = this.metrics.resourceUsage.get(extensionId);
+        
+        resources.cpu_percent.push(usage.cpu_percent || 0);
+        resources.memory_bytes.push(usage.memory_bytes || 0);
+        resources.io_bytes.push(usage.io_bytes || 0);
+        resources.network_bytes.push(usage.network_bytes || 0);
+
+        if (resources.cpu_percent.length > 100) {
+            resources.cpu_percent.shift();
+        }
+        if (resources.memory_bytes.length > 100) {
+            resources.memory_bytes.shift();
+        }
+        if (resources.io_bytes.length > 100) {
+            resources.io_bytes.shift();
+        }
+        if (resources.network_bytes.length > 100) {
+            resources.network_bytes.shift();
+        }
+    }
+
+    getResourceMetrics(extensionId) {
+        const resources = this.metrics.resourceUsage.get(extensionId);
+        if (!resources) {
+            return {
+                cpu_percent: 0,
+                memory_bytes: 0,
+                io_bytes: 0,
+                network_bytes: 0
+            };
+        }
+
+        const avg = (arr) => arr.length > 0 ? arr.reduce((a, b) => a + b, 0) / arr.length : 0;
+        const max = (arr) => arr.length > 0 ? Math.max(...arr) : 0;
+
+        return {
+            cpu_percent: avg(resources.cpu_percent),
+            cpu_percent_max: max(resources.cpu_percent),
+            memory_bytes: avg(resources.memory_bytes),
+            memory_bytes_max: max(resources.memory_bytes),
+            io_bytes: max(resources.io_bytes),
+            network_bytes: max(resources.network_bytes)
         };
     }
 
@@ -1040,7 +1096,8 @@ class MetricsCollector {
             rateLimitViolations: {},
             validationFailures: {},
             authFailures: {},
-            intentSizes: {}
+            intentSizes: {},
+            resourceUsage: {}
         };
 
         for (const [key, count] of this.metrics.requestCount.entries()) {
@@ -1104,6 +1161,12 @@ class MetricsCollector {
                     totalRequests: sizes.requests.length,
                     totalResponses: sizes.responses.length
                 };
+            }
+        }
+
+        for (const [extId] of this.metrics.resourceUsage.entries()) {
+            if (!extensionId || extId === extensionId) {
+                result.resourceUsage[extId] = this.getResourceMetrics(extId);
             }
         }
 
