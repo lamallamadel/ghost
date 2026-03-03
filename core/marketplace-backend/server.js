@@ -33,6 +33,7 @@ class MarketplaceServer {
         this.uploadDir = options.uploadDir || path.join(__dirname, 'uploads');
         this.healthScoreCache = new Map();
         this.healthScoreCacheTTL = 3600000;
+        this.startTime = Date.now();
         this._ensureUploadDir();
     }
 
@@ -91,7 +92,9 @@ class MarketplaceServer {
                 return;
             }
 
-            if (pathname === '/api/extensions' && method === 'POST') {
+            if (pathname === '/api/health' && method === 'GET') {
+                await this._handleHealth(req, res);
+            } else if (pathname === '/api/extensions' && method === 'POST') {
                 await this._handlePublish(req, res, token);
             } else if (pathname === '/api/extensions' && method === 'GET') {
                 await this._handleSearch(req, res);
@@ -122,6 +125,19 @@ class MarketplaceServer {
             res.writeHead(500);
             res.end(JSON.stringify({ error: error.message }));
         }
+    }
+
+    async _handleHealth(req, res) {
+        const uptime = Date.now() - this.startTime;
+        const health = {
+            status: 'healthy',
+            timestamp: new Date().toISOString(),
+            uptime: Math.floor(uptime / 1000),
+            version: require('./package.json').version || '1.0.0'
+        };
+
+        res.writeHead(200);
+        res.end(JSON.stringify(health));
     }
 
     async _handlePublish(req, res, token) {

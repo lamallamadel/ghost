@@ -203,3 +203,22 @@ test/e2e/test-results/
 test/e2e/playwright-report/
 test/e2e/*.e2e.example.js
 e2e-test-report.json
+
+# Deployment - Docker and Kubernetes artifacts
+deployments/caddy_data/
+deployments/caddy_config/
+deployments/.env
+deployments/*.db
+deployments/*.log
+
+# Deployment - MinIO/S3 data
+deployments/minio_data/
+
+# Deployment - Build artifacts
+*.tar.gz
+*.tgz
+deployments/*.tar.gz
+
+# Migration exports and backups
+*.ghost-extensions-export-*.json
+.ghost/backups/

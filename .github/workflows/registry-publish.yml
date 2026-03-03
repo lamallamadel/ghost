@@ -1,0 +1,372 @@
+name: Registry Publish & Security Scan
+
+on:
+  push:
+    branches:
+      - registry/**
+      - marketplace/**
+    paths:
+      - 'extensions/**'
+      - 'core/marketplace-backend/**'
+  workflow_dispatch:
+    inputs:
+      extension_path:
+        description: 'Path to extension directory'
+        required: true
+        type: string
+      skip_security_scan:
+        description: 'Skip security scanning (dev only)'
+        required: false
+        type: boolean
+        default: false
+
+env:
+  REGISTRY_URL: ${{ secrets.REGISTRY_URL || 'https://registry.ghost.dev' }}
+  S3_ENDPOINT: ${{ secrets.S3_ENDPOINT }}
+  S3_ACCESS_KEY: ${{ secrets.S3_ACCESS_KEY }}
+  S3_SECRET_KEY: ${{ secrets.S3_SECRET_KEY }}
+  S3_BUCKET: ${{ secrets.S3_BUCKET || 'ghost-extensions' }}
+  S3_REGION: ${{ secrets.S3_REGION || 'us-east-1' }}
+
+jobs:
+  detect-changes:
+    name: Detect Changed Extensions
+    runs-on: ubuntu-latest
+    outputs:
+      extensions: ${{ steps.detect.outputs.extensions }}
+      matrix: ${{ steps.detect.outputs.matrix }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Detect changed extensions
+        id: detect
+        run: |
+          if [ -n "${{ github.event.inputs.extension_path }}" ]; then
+            echo "extensions=[\"${{ github.event.inputs.extension_path }}\"]" >> $GITHUB_OUTPUT
+            echo "matrix={\"extension\":[\"${{ github.event.inputs.extension_path }}\"]}" >> $GITHUB_OUTPUT
+          else
+            CHANGED_FILES=$(git diff --name-only HEAD~1 HEAD | grep '^extensions/' || true)
+            if [ -z "$CHANGED_FILES" ]; then
+              echo "extensions=[]" >> $GITHUB_OUTPUT
+              echo "matrix={\"extension\":[]}" >> $GITHUB_OUTPUT
+              exit 0
+            fi
+            
+            EXTENSIONS=$(echo "$CHANGED_FILES" | cut -d'/' -f2 | sort -u | jq -R -s -c 'split("\n")[:-1]')
+            echo "extensions=$EXTENSIONS" >> $GITHUB_OUTPUT
+            echo "matrix={\"extension\":$(echo $EXTENSIONS)}" >> $GITHUB_OUTPUT
+          fi
+
+  security-scan:
+    name: Security Scan
+    needs: detect-changes
+    if: needs.detect-changes.outputs.extensions != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.detect-changes.outputs.matrix) }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          cd core/marketplace-backend
+          npm ci
+
+      - name: Validate extension manifest
+        run: |
+          EXTENSION_PATH="extensions/${{ matrix.extension }}"
+          if [ ! -f "$EXTENSION_PATH/manifest.json" ]; then
+            echo "Error: No manifest.json found in $EXTENSION_PATH"
+            exit 1
+          fi
+          
+          node -e "
+            const { ManifestValidator } = require('./core/marketplace-backend/manifest-validator');
+            const fs = require('fs');
+            const manifest = JSON.parse(fs.readFileSync('$EXTENSION_PATH/manifest.json', 'utf8'));
+            const validator = new ManifestValidator();
+            const result = validator.validate(manifest);
+            if (!result.valid) {
+              console.error('Manifest validation failed:', result.errors);
+              process.exit(1);
+            }
+            console.log('Manifest validation passed');
+          "
+
+      - name: Run code signing verification
+        run: |
+          EXTENSION_PATH="extensions/${{ matrix.extension }}"
+          node -e "
+            const { CodeSigningManager } = require('./core/code-signing');
+            const codeSigning = new CodeSigningManager();
+            const result = codeSigning.verifyExtension('$EXTENSION_PATH');
+            
+            if (result.requiresSigning) {
+              console.warn('Warning: Extension is not signed');
+              console.log('To sign: ghost extension sign $EXTENSION_PATH');
+            } else if (!result.valid) {
+              console.error('Code signing verification failed:', result.error);
+              if (result.tampering) {
+                console.error('SECURITY ALERT: Extension may have been tampered with!');
+                process.exit(1);
+              }
+            } else {
+              console.log('Code signature verified:', result.certId);
+            }
+          "
+
+      - name: Run intrusion detection scan
+        if: github.event.inputs.skip_security_scan != 'true'
+        run: |
+          EXTENSION_PATH="extensions/${{ matrix.extension }}"
+          node -e "
+            const { IntrusionDetectionSystem } = require('./core/intrusion-detection');
+            const fs = require('fs');
+            const path = require('path');
+            
+            const ids = new IntrusionDetectionSystem();
+            const manifest = JSON.parse(fs.readFileSync('$EXTENSION_PATH/manifest.json', 'utf8'));
+            
+            const suspiciousPatterns = [
+              /eval\s*\(/gi,
+              /Function\s*\(/gi,
+              /child_process/gi,
+              /\\.exec\s*\(/gi,
+              /require\s*\(\s*['\\\"]fs['\\\"]\s*\)/gi
+            ];
+            
+            function scanFile(filePath) {
+              const content = fs.readFileSync(filePath, 'utf8');
+              const issues = [];
+              
+              for (const pattern of suspiciousPatterns) {
+                if (pattern.test(content)) {
+                  issues.push({
+                    file: filePath,
+                    pattern: pattern.source,
+                    message: 'Potentially dangerous pattern detected'
+                  });
+                }
+              }
+              
+              return issues;
+            }
+            
+            function scanDirectory(dir) {
+              const allIssues = [];
+              const entries = fs.readdirSync(dir, { withFileTypes: true });
+              
+              for (const entry of entries) {
+                const fullPath = path.join(dir, entry.name);
+                if (entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules') {
+                  allIssues.push(...scanDirectory(fullPath));
+                } else if (entry.isFile() && entry.name.endsWith('.js')) {
+                  allIssues.push(...scanFile(fullPath));
+                }
+              }
+              
+              return allIssues;
+            }
+            
+            const issues = scanDirectory('$EXTENSION_PATH');
+            
+            if (issues.length > 0) {
+              console.warn('Security scan found potential issues:');
+              issues.forEach(issue => {
+                console.warn(\`  - \${issue.file}: \${issue.message} (\${issue.pattern})\`);
+                ids.recordEvent(manifest.id, {
+                  type: 'security-scan',
+                  suspiciousPattern: issue.pattern,
+                  details: issue
+                });
+              });
+              
+              if (process.env.STRICT_SECURITY === 'true') {
+                process.exit(1);
+              }
+            } else {
+              console.log('Security scan passed - no issues found');
+            }
+          "
+
+      - name: Run static analysis
+        run: |
+          EXTENSION_PATH="extensions/${{ matrix.extension }}"
+          node -e "
+            const { SecurityScanner } = require('./core/marketplace-backend/security-scanner');
+            const fs = require('fs');
+            const path = require('path');
+            
+            const scanner = new SecurityScanner();
+            const manifest = JSON.parse(fs.readFileSync('$EXTENSION_PATH/manifest.json', 'utf8'));
+            
+            function createTarball() {
+              const tar = require('tar-stream');
+              const pack = tar.pack();
+              
+              function addFiles(dir) {
+                const entries = fs.readdirSync(dir, { withFileTypes: true });
+                for (const entry of entries) {
+                  const fullPath = path.join(dir, entry.name);
+                  if (entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules') {
+                    addFiles(fullPath);
+                  } else if (entry.isFile()) {
+                    const content = fs.readFileSync(fullPath);
+                    pack.entry({ name: path.relative('$EXTENSION_PATH', fullPath), size: content.length }, content);
+                  }
+                }
+              }
+              
+              addFiles('$EXTENSION_PATH');
+              pack.finalize();
+              
+              return pack;
+            }
+            
+            const tarStream = createTarball();
+            const chunks = [];
+            
+            tarStream.on('data', chunk => chunks.push(chunk));
+            tarStream.on('end', async () => {
+              const buffer = Buffer.concat(chunks);
+              const result = await scanner.scan(buffer, manifest);
+              
+              if (!result.safe) {
+                console.error('Security scan failed:');
+                result.issues.forEach(issue => {
+                  console.error(\`  - \${issue.type}: \${issue.message}\`);
+                });
+                process.exit(1);
+              }
+              
+              console.log('Static analysis passed');
+              console.log('Risk score:', result.riskScore);
+            });
+          "
+
+  build-and-publish:
+    name: Build and Publish
+    needs: [detect-changes, security-scan]
+    if: needs.detect-changes.outputs.extensions != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJson(needs.detect-changes.outputs.matrix) }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: |
+          npm ci
+          cd core/marketplace-backend
+          npm ci
+
+      - name: Create extension tarball
+        run: |
+          EXTENSION_PATH="extensions/${{ matrix.extension }}"
+          MANIFEST=$(cat $EXTENSION_PATH/manifest.json)
+          EXTENSION_ID=$(echo $MANIFEST | jq -r '.id')
+          VERSION=$(echo $MANIFEST | jq -r '.version')
+          
+          TARBALL="${EXTENSION_ID}-${VERSION}.tar.gz"
+          tar -czf "$TARBALL" -C "$EXTENSION_PATH" .
+          
+          echo "EXTENSION_ID=$EXTENSION_ID" >> $GITHUB_ENV
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          echo "TARBALL=$TARBALL" >> $GITHUB_ENV
+
+      - name: Upload to S3
+        run: |
+          node -e "
+            const { createStorageAdapter } = require('./core/marketplace-backend/storage');
+            const fs = require('fs');
+            
+            (async () => {
+              try {
+                const storage = createStorageAdapter({
+                  type: 's3',
+                  endpoint: process.env.S3_ENDPOINT,
+                  accessKey: process.env.S3_ACCESS_KEY,
+                  secretKey: process.env.S3_SECRET_KEY,
+                  bucket: process.env.S3_BUCKET,
+                  region: process.env.S3_REGION
+                });
+                
+                const buffer = fs.readFileSync(process.env.TARBALL);
+                const result = await storage.uploadExtension(
+                  process.env.EXTENSION_ID,
+                  process.env.VERSION,
+                  buffer
+                );
+                
+                if (result.success) {
+                  console.log('Upload successful!');
+                  console.log('URL:', result.url);
+                  console.log('Size:', result.size, 'bytes');
+                  console.log('ETag:', result.etag);
+                } else {
+                  console.error('Upload failed');
+                  process.exit(1);
+                }
+              } catch (error) {
+                console.error('Error:', error.message);
+                process.exit(1);
+              }
+            })();
+          "
+
+      - name: Publish to registry
+        run: |
+          MANIFEST=$(cat extensions/${{ matrix.extension }}/manifest.json)
+          
+          curl -X POST "$REGISTRY_URL/api/extensions" \
+            -H "Authorization: Bearer ${{ secrets.REGISTRY_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "{
+              \"id\": \"$EXTENSION_ID\",
+              \"version\": \"$VERSION\",
+              \"manifest\": $MANIFEST,
+              \"tarballUrl\": \"s3://$S3_BUCKET/extensions/$EXTENSION_ID/$VERSION/$EXTENSION_ID-$VERSION.tar.gz\"
+            }"
+
+      - name: Create release artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.EXTENSION_ID }}-${{ env.VERSION }}
+          path: ${{ env.TARBALL }}
+          retention-days: 90
+
+  notify:
+    name: Notify Results
+    needs: [detect-changes, security-scan, build-and-publish]
+    if: always() && needs.detect-changes.outputs.extensions != '[]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Send notification
+        run: |
+          STATUS="${{ needs.build-and-publish.result }}"
+          if [ "$STATUS" == "success" ]; then
+            echo "✅ Registry publish successful"
+          else
+            echo "❌ Registry publish failed"
+            exit 1
+          fi
