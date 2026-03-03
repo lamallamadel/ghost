@@ -89,7 +89,7 @@ export default function ConsolePage() {
 
   return (
     <div className="h-full">
-      {showWalkthrough && <OnboardingWalkthrough onClose={() => setShowWalkthrough(false)} />}
+      {showWalkthrough && <OnboardingWalkthrough onClose={() => setShowWalkthrough(false)} repoPath={repoPath || undefined} />}
       <div className="flex h-full">
         <div
           className={`shrink-0 border-r border-white/10 bg-black/20 backdrop-blur ${sidebarOpen ? 'w-72' : 'w-14'} transition-[width] duration-200`}

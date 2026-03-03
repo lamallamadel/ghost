@@ -234,3 +234,89 @@ export type ReloadExtensionResult = {
   success: boolean
   error?: string
 }
+
+export type RepositoryProfile = {
+  path: string
+  timestamp: number
+  languages: Array<{ language: string; count: number }>
+  frameworks: string[]
+  filePatterns: {
+    totalFiles: number
+    fileTypes: Record<string, number>
+    largeFiles: number
+    configFiles: number
+  }
+  gitComplexity: {
+    totalCommits: number
+    branches: number
+    contributors: number
+    ageInDays: number
+  }
+  commitPatterns: {
+    totalCommits: number
+    commitsByType: Record<string, number>
+    commitsByHour: number[]
+    avgCommitsPerDay: number
+  }
+  fileStructure: {
+    totalFiles: number
+    totalDirectories: number
+    depth: number
+    hasTests: boolean
+    hasDocs: boolean
+    hasCI: boolean
+  }
+  teamSize: number
+  activityLevel: string
+  characteristics: {
+    hasPackageJson: boolean
+    hasRequirementsTxt: boolean
+    hasGoMod: boolean
+    hasCICD: boolean
+    hasDocker: boolean
+    hasTests: boolean
+    projectType: string
+    buildSystem: string
+  }
+}
+
+export type ExtensionRecommendation = {
+  extensionId: string
+  reason: string
+  category: string
+  confidence: number
+  score: number
+  matchScore?: number
+}
+
+export type RecommendationAnalysisResult = {
+  profile: RepositoryProfile | null
+  recommendations: ExtensionRecommendation[]
+  timestamp: number
+  error?: string
+}
+
+export type ConversionRate = {
+  recommendations: number
+  conversions: number
+  conversion_rate: number
+}
+
+export type ConversionRatesResult = {
+  rates: Record<string, ConversionRate>
+  timestamp: number
+  error?: string
+}
+
+export type RecommendationFeedback = {
+  installed?: boolean
+  dismissed?: boolean
+  rating?: number
+  timestamp: number
+}
+
+export type RecordFeedbackResult = {
+  success: boolean
+  timestamp: number
+  error?: string
+}

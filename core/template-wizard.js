@@ -146,6 +146,8 @@ Commands: run-tests, generate-coverage, mock-test`
 
         console.log('\n🎨 Ghost Extension Template Gallery\n');
 
+        await this._showSmartRecommendations();
+
         let templateChoice = preselectedTemplate;
 
         // If template is pre-selected, validate it
@@ -608,6 +610,75 @@ coverage/
             .split('-')
             .map(word => word.charAt(0).toUpperCase() + word.slice(1))
             .join('');
+    }
+
+    async _showSmartRecommendations() {
+        try {
+            const RecommendationEngine = require('./analytics/recommendation-engine');
+            const engine = new RecommendationEngine();
+            
+            const currentDir = process.cwd();
+            
+            if (!fs.existsSync(path.join(currentDir, '.git'))) {
+                return;
+            }
+
+            await engine.load();
+            
+            const profile = await engine.analyzeRepository(currentDir);
+            const recommendations = await engine.generateRecommendations();
+            const topRecommendations = engine.getTopRecommendations(3);
+
+            if (topRecommendations.length === 0) {
+                return;
+            }
+
+            console.log('💡 Smart Suggestions Based on Your Repository:\n');
+
+            topRecommendations.forEach((rec, idx) => {
+                const confidence = Math.round(rec.confidence * 100);
+                const confidenceBar = '█'.repeat(Math.floor(confidence / 10)) + '░'.repeat(10 - Math.floor(confidence / 10));
+                
+                console.log(`${idx + 1}. ${rec.extensionId}`);
+                console.log(`   Category: ${rec.category}`);
+                console.log(`   Reason: ${rec.reason}`);
+                console.log(`   Confidence: ${confidenceBar} ${confidence}%`);
+                console.log('');
+            });
+
+            const repoInfo = this._formatRepositoryInfo(profile);
+            if (repoInfo) {
+                console.log('📊 Repository Analysis:');
+                console.log(repoInfo);
+                console.log('');
+            }
+        } catch (error) {
+        }
+    }
+
+    _formatRepositoryInfo(profile) {
+        if (!profile) return null;
+
+        const lines = [];
+        
+        if (profile.languages && profile.languages.length > 0) {
+            const topLangs = profile.languages.slice(0, 3).map(l => l.language).join(', ');
+            lines.push(`   Languages: ${topLangs}`);
+        }
+
+        if (profile.frameworks && profile.frameworks.length > 0) {
+            lines.push(`   Frameworks: ${profile.frameworks.join(', ')}`);
+        }
+
+        if (profile.gitComplexity) {
+            lines.push(`   Commits: ${profile.gitComplexity.totalCommits}, Contributors: ${profile.gitComplexity.contributors}`);
+        }
+
+        if (profile.activityLevel) {
+            lines.push(`   Activity: ${profile.activityLevel}`);
+        }
+
+        return lines.join('\n');
     }
 }
 

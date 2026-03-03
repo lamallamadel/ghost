@@ -19,3 +19,7 @@ contextBridge.exposeInMainWorld('ghost', {
   analyticsGetRecommendations: () => ipcRenderer.invoke('analytics.getRecommendations'),
 })
 
+contextBridge.exposeInMainWorld('electron', {
+  invoke: (channel, data) => ipcRenderer.invoke(channel, data),
+})
+

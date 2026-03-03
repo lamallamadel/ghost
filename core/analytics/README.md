@@ -15,6 +15,63 @@ The analytics platform consists of six integrated components:
 
 ## Components
 
+### Recommendation Engine
+
+**NEW: AI-powered extension marketplace recommendation system**
+
+Analyzes repository characteristics to suggest relevant extensions with confidence scores and conversion tracking.
+
+#### Features
+
+1. **Repository Analysis** (`analyzeRepository()`)
+   - Language detection from package.json, requirements.txt, go.mod
+   - Framework detection from dependency manifests
+   - File pattern analysis using `git ls-files`
+   - Git history complexity analysis (`git log --oneline | wc -l`)
+   - Commit pattern analysis
+   - Team size estimation
+   - Activity level calculation
+
+2. **Smart Recommendations** (`generateRecommendations()`)
+   - Confidence scores based on repository profile matching
+   - Category-based grouping (code-quality, testing, documentation, etc.)
+
+3. **Conversion Tracking** (`recordUserFeedback()`)
+   - Track installation conversions per recommendation
+   - Store conversion_rate for each extension
+
+4. **Desktop Integration**
+   - Display suggestions in OnboardingWalkthrough during first repo selection
+   - IPC handlers: `recommendations.analyzeRepo`, `recommendations.recordFeedback`
+
+5. **CLI Integration**
+   - Automatic recommendations in `ghost extension init` wizard
+
+#### Usage
+
+```javascript
+const RecommendationEngine = require('./core/analytics/recommendation-engine');
+
+// Analyze repository
+const engine = new RecommendationEngine();
+const profile = await engine.analyzeRepository('/path/to/repo');
+const recommendations = await engine.generateRecommendations();
+const top5 = engine.getTopRecommendations(5);
+
+// Record feedback
+engine.recordUserFeedback('eslint-integration', {
+  installed: true,
+  timestamp: Date.now()
+});
+
+// Get conversion rates
+const rates = engine.getAllConversionRates();
+console.log('Conversion rate:', rates['eslint-integration'].conversion_rate);
+
+// Static API
+const top5 = await RecommendationEngine.getTopRecommendations('/path/to/repo', 5);
+```
+
 ### Analytics Collector
 
 Tracks extension usage metrics in real-time:

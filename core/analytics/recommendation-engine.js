@@ -3,6 +3,32 @@ const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 
+/**
+ * RecommendationEngine - AI-powered extension marketplace recommendation system
+ * 
+ * Analyzes repository characteristics to suggest relevant extensions:
+ * - Detects languages from package.json, requirements.txt, go.mod
+ * - Identifies frameworks from dependency manifests
+ * - Analyzes file patterns using git ls-files
+ * - Evaluates Git history complexity (commit count, branches, contributors)
+ * - Generates confidence-scored recommendations with repository profile matching
+ * - Tracks installation conversion rates per recommendation
+ * 
+ * Usage:
+ *   const engine = new RecommendationEngine();
+ *   const profile = await engine.analyzeRepository('/path/to/repo');
+ *   const recommendations = await engine.generateRecommendations();
+ *   const top5 = engine.getTopRecommendations(5);
+ * 
+ * Static usage:
+ *   const top5 = await RecommendationEngine.getTopRecommendations('/path/to/repo', 5);
+ * 
+ * Desktop integration:
+ *   window.electron.invoke('recommendations.analyzeRepo', { repoPath })
+ * 
+ * CLI integration:
+ *   Called automatically in `ghost extension init` wizard
+ */
 class RecommendationEngine extends EventEmitter {
     constructor(options = {}) {
         super();
@@ -19,6 +45,14 @@ class RecommendationEngine extends EventEmitter {
             filePatterns: [],
             workflowPatterns: []
         };
+        this.conversionRates = new Map();
+        this._ensurePersistenceDir();
+    }
+
+    _ensurePersistenceDir() {
+        if (!fs.existsSync(this.options.persistenceDir)) {
+            fs.mkdirSync(this.options.persistenceDir, { recursive: true });
+        }
     }
 
     async analyzeRepository(repoPath) {
@@ -27,16 +61,148 @@ class RecommendationEngine extends EventEmitter {
             timestamp: Date.now(),
             languages: await this._detectLanguages(repoPath),
             frameworks: await this._detectFrameworks(repoPath),
+            filePatterns: await this._analyzeFilePatterns(repoPath),
+            gitComplexity: await this._analyzeGitComplexity(repoPath),
             commitPatterns: await this._analyzeCommitPatterns(repoPath),
             fileStructure: await this._analyzeFileStructure(repoPath),
             teamSize: await this._estimateTeamSize(repoPath),
-            activityLevel: await this._calculateActivityLevel(repoPath)
+            activityLevel: await this._calculateActivityLevel(repoPath),
+            characteristics: await this._analyzeCharacteristics(repoPath)
         };
 
         this.repositoryProfile = profile;
         this.emit('repository-analyzed', profile);
 
         return profile;
+    }
+
+    async _analyzeCharacteristics(repoPath) {
+        const characteristics = {
+            hasPackageJson: false,
+            hasRequirementsTxt: false,
+            hasGoMod: false,
+            hasCICD: false,
+            hasDocker: false,
+            hasTests: false,
+            projectType: 'unknown',
+            buildSystem: 'none'
+        };
+
+        try {
+            characteristics.hasPackageJson = fs.existsSync(path.join(repoPath, 'package.json'));
+            characteristics.hasRequirementsTxt = fs.existsSync(path.join(repoPath, 'requirements.txt'));
+            characteristics.hasGoMod = fs.existsSync(path.join(repoPath, 'go.mod'));
+            characteristics.hasCICD = fs.existsSync(path.join(repoPath, '.github', 'workflows')) ||
+                                      fs.existsSync(path.join(repoPath, '.gitlab-ci.yml')) ||
+                                      fs.existsSync(path.join(repoPath, 'Jenkinsfile'));
+            characteristics.hasDocker = fs.existsSync(path.join(repoPath, 'Dockerfile'));
+            characteristics.hasTests = fs.existsSync(path.join(repoPath, 'test')) ||
+                                       fs.existsSync(path.join(repoPath, 'tests')) ||
+                                       fs.existsSync(path.join(repoPath, '__tests__'));
+
+            if (characteristics.hasPackageJson) {
+                characteristics.projectType = 'javascript';
+                characteristics.buildSystem = 'npm';
+            } else if (characteristics.hasRequirementsTxt) {
+                characteristics.projectType = 'python';
+                characteristics.buildSystem = 'pip';
+            } else if (characteristics.hasGoMod) {
+                characteristics.projectType = 'go';
+                characteristics.buildSystem = 'go';
+            }
+        } catch (error) {
+        }
+
+        return characteristics;
+    }
+
+    async _analyzeFilePatterns(repoPath) {
+        const patterns = {
+            totalFiles: 0,
+            fileTypes: {},
+            largeFiles: 0,
+            configFiles: 0
+        };
+
+        try {
+            const gitLsFiles = execSync('git ls-files', {
+                cwd: repoPath,
+                encoding: 'utf8',
+                stdio: ['pipe', 'pipe', 'ignore']
+            }).trim();
+
+            const files = gitLsFiles.split('\n').filter(f => f);
+            patterns.totalFiles = files.length;
+
+            for (const file of files) {
+                const ext = path.extname(file);
+                patterns.fileTypes[ext] = (patterns.fileTypes[ext] || 0) + 1;
+
+                if (file.includes('config') || file.includes('.rc') || file.includes('.yml') || file.includes('.yaml')) {
+                    patterns.configFiles++;
+                }
+
+                try {
+                    const fullPath = path.join(repoPath, file);
+                    if (fs.existsSync(fullPath)) {
+                        const stat = fs.statSync(fullPath);
+                        if (stat.size > 1024 * 1024) {
+                            patterns.largeFiles++;
+                        }
+                    }
+                } catch (e) {
+                }
+            }
+        } catch (error) {
+        }
+
+        return patterns;
+    }
+
+    async _analyzeGitComplexity(repoPath) {
+        const complexity = {
+            totalCommits: 0,
+            branches: 0,
+            contributors: 0,
+            ageInDays: 0
+        };
+
+        try {
+            const commitCount = execSync('git log --oneline | wc -l', {
+                cwd: repoPath,
+                encoding: 'utf8',
+                stdio: ['pipe', 'pipe', 'ignore']
+            }).trim();
+            complexity.totalCommits = parseInt(commitCount) || 0;
+
+            const branchCount = execSync('git branch -a | wc -l', {
+                cwd: repoPath,
+                encoding: 'utf8',
+                stdio: ['pipe', 'pipe', 'ignore']
+            }).trim();
+            complexity.branches = parseInt(branchCount) || 0;
+
+            const contributorCount = execSync('git log --format="%ae" | sort -u | wc -l', {
+                cwd: repoPath,
+                encoding: 'utf8',
+                stdio: ['pipe', 'pipe', 'ignore']
+            }).trim();
+            complexity.contributors = parseInt(contributorCount) || 0;
+
+            const firstCommitTimestamp = execSync('git log --reverse --format="%at" | head -1', {
+                cwd: repoPath,
+                encoding: 'utf8',
+                stdio: ['pipe', 'pipe', 'ignore']
+            }).trim();
+            
+            if (firstCommitTimestamp) {
+                const firstCommitTime = parseInt(firstCommitTimestamp) * 1000;
+                complexity.ageInDays = Math.floor((Date.now() - firstCommitTime) / (1000 * 60 * 60 * 24));
+            }
+        } catch (error) {
+        }
+
+        return complexity;
     }
 
     registerExtension(extensionId, metadata) {
@@ -61,9 +227,13 @@ class RecommendationEngine extends EventEmitter {
         recommendations.push(...this._recommendByTeamSize());
         recommendations.push(...this._recommendByActivity());
         recommendations.push(...this._recommendByUserBehavior(context.behaviorAnalytics));
+        recommendations.push(...this._recommendByFilePatterns());
+        recommendations.push(...this._recommendByGitComplexity());
+        recommendations.push(...this._recommendByCharacteristics());
 
         const scored = recommendations.map(rec => ({
             ...rec,
+            confidence: this._calculateConfidenceScore(rec),
             score: this._calculateRecommendationScore(rec)
         }));
 
@@ -99,7 +269,42 @@ class RecommendationEngine extends EventEmitter {
             ...feedback
         });
 
+        if (feedback.installed === true) {
+            this._updateConversionRate(extensionId, true);
+        } else if (feedback.dismissed === true) {
+            this._updateConversionRate(extensionId, false);
+        }
+
         this.emit('feedback-recorded', { extensionId, feedback });
+    }
+
+    _updateConversionRate(extensionId, converted) {
+        const current = this.conversionRates.get(extensionId) || {
+            recommendations: 0,
+            conversions: 0,
+            conversion_rate: 0
+        };
+
+        current.recommendations++;
+        if (converted) {
+            current.conversions++;
+        }
+        current.conversion_rate = current.conversions / current.recommendations;
+
+        this.conversionRates.set(extensionId, current);
+    }
+
+    getConversionRate(extensionId) {
+        const data = this.conversionRates.get(extensionId);
+        return data ? data.conversion_rate : 0;
+    }
+
+    getAllConversionRates() {
+        const rates = {};
+        for (const [extensionId, data] of this.conversionRates.entries()) {
+            rates[extensionId] = data;
+        }
+        return rates;
     }
 
     async persist() {
@@ -110,7 +315,8 @@ class RecommendationEngine extends EventEmitter {
             repositoryProfile: this.repositoryProfile,
             extensionRegistry: Array.from(this.extensionRegistry.entries()),
             recommendations: this.recommendations,
-            userPatterns: this.userPatterns
+            userPatterns: this.userPatterns,
+            conversionRates: Array.from(this.conversionRates.entries())
         };
 
         try {
@@ -137,6 +343,7 @@ class RecommendationEngine extends EventEmitter {
             this.extensionRegistry = new Map(data.extensionRegistry);
             this.recommendations = data.recommendations || [];
             this.userPatterns = data.userPatterns || { commitPatterns: [], filePatterns: [], workflowPatterns: [] };
+            this.conversionRates = new Map(data.conversionRates || []);
 
             this.emit('loaded', { filepath });
         } catch (error) {
@@ -164,6 +371,29 @@ class RecommendationEngine extends EventEmitter {
             '.swift': 'Swift',
             '.kt': 'Kotlin'
         };
+
+        const packageJsonPath = path.join(repoPath, 'package.json');
+        if (fs.existsSync(packageJsonPath)) {
+            try {
+                const pkg = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+                const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+                
+                if (deps['typescript'] || deps['@types/node']) {
+                    languages.set('TypeScript', (languages.get('TypeScript') || 0) + 100);
+                }
+            } catch (error) {
+            }
+        }
+
+        const requirementsPath = path.join(repoPath, 'requirements.txt');
+        if (fs.existsSync(requirementsPath)) {
+            languages.set('Python', (languages.get('Python') || 0) + 100);
+        }
+
+        const goModPath = path.join(repoPath, 'go.mod');
+        if (fs.existsSync(goModPath)) {
+            languages.set('Go', (languages.get('Go') || 0) + 100);
+        }
 
         const countFiles = (dir) => {
             if (!fs.existsSync(dir)) return;
@@ -216,6 +446,8 @@ class RecommendationEngine extends EventEmitter {
                 if (deps['next']) frameworks.push('Next.js');
                 if (deps['nuxt']) frameworks.push('Nuxt.js');
                 if (deps['electron']) frameworks.push('Electron');
+                if (deps['nest']) frameworks.push('NestJS');
+                if (deps['fastify']) frameworks.push('Fastify');
             } catch (error) {
             }
         }
@@ -226,6 +458,8 @@ class RecommendationEngine extends EventEmitter {
                 if (content.includes('django')) frameworks.push('Django');
                 if (content.includes('flask')) frameworks.push('Flask');
                 if (content.includes('fastapi')) frameworks.push('FastAPI');
+                if (content.includes('tensorflow')) frameworks.push('TensorFlow');
+                if (content.includes('pytorch')) frameworks.push('PyTorch');
             } catch (error) {
             }
         }
@@ -234,6 +468,17 @@ class RecommendationEngine extends EventEmitter {
             try {
                 const content = fs.readFileSync(gemfilePath, 'utf8');
                 if (content.includes('rails')) frameworks.push('Ruby on Rails');
+                if (content.includes('sinatra')) frameworks.push('Sinatra');
+            } catch (error) {
+            }
+        }
+
+        if (fs.existsSync(goModPath)) {
+            try {
+                const content = fs.readFileSync(goModPath, 'utf8');
+                if (content.includes('gin-gonic/gin')) frameworks.push('Gin');
+                if (content.includes('gorilla/mux')) frameworks.push('Gorilla');
+                if (content.includes('echo')) frameworks.push('Echo');
             } catch (error) {
             }
         }
@@ -395,29 +640,42 @@ class RecommendationEngine extends EventEmitter {
                 case 'TypeScript':
                     recommendations.push({
                         extensionId: 'eslint-integration',
-                        reason: `High ${language} usage detected`,
+                        reason: `High ${language} usage detected (${count} files)`,
                         category: 'code-quality',
-                        confidence: 0.9
+                        confidence: 0.9,
+                        matchScore: Math.min(count / 100, 1.0)
                     });
                     recommendations.push({
                         extensionId: 'prettier-formatter',
                         reason: `${language} code formatting`,
                         category: 'code-quality',
-                        confidence: 0.85
+                        confidence: 0.85,
+                        matchScore: Math.min(count / 100, 1.0)
                     });
                     break;
                 case 'Python':
                     recommendations.push({
                         extensionId: 'black-formatter',
-                        reason: 'Python code formatting',
+                        reason: `Python code formatting (${count} files)`,
                         category: 'code-quality',
-                        confidence: 0.9
+                        confidence: 0.9,
+                        matchScore: Math.min(count / 100, 1.0)
                     });
                     recommendations.push({
                         extensionId: 'pylint-checker',
                         reason: 'Python code analysis',
                         category: 'code-quality',
-                        confidence: 0.85
+                        confidence: 0.85,
+                        matchScore: Math.min(count / 100, 1.0)
+                    });
+                    break;
+                case 'Go':
+                    recommendations.push({
+                        extensionId: 'gofmt-formatter',
+                        reason: `Go code formatting (${count} files)`,
+                        category: 'code-quality',
+                        confidence: 0.95,
+                        matchScore: Math.min(count / 50, 1.0)
                     });
                     break;
             }
@@ -437,15 +695,30 @@ class RecommendationEngine extends EventEmitter {
                         extensionId: 'react-hooks-linter',
                         reason: 'React hooks best practices',
                         category: 'framework',
-                        confidence: 0.9
+                        confidence: 0.9,
+                        matchScore: 1.0
                     });
                     break;
                 case 'Express':
+                case 'Fastify':
+                case 'NestJS':
                     recommendations.push({
                         extensionId: 'api-documentation-generator',
-                        reason: 'Express API documentation',
+                        reason: `${framework} API documentation`,
                         category: 'documentation',
-                        confidence: 0.8
+                        confidence: 0.8,
+                        matchScore: 1.0
+                    });
+                    break;
+                case 'Django':
+                case 'Flask':
+                case 'FastAPI':
+                    recommendations.push({
+                        extensionId: 'python-api-docs',
+                        reason: `${framework} API documentation`,
+                        category: 'documentation',
+                        confidence: 0.8,
+                        matchScore: 1.0
                     });
                     break;
             }
@@ -461,9 +734,10 @@ class RecommendationEngine extends EventEmitter {
         if (patterns.commitsByType.fix && patterns.commitsByType.fix > patterns.totalCommits * 0.3) {
             recommendations.push({
                 extensionId: 'automated-testing',
-                reason: 'High number of bug fixes detected',
+                reason: `High number of bug fixes detected (${Math.round(patterns.commitsByType.fix / patterns.totalCommits * 100)}%)`,
                 category: 'quality',
-                confidence: 0.85
+                confidence: 0.85,
+                matchScore: patterns.commitsByType.fix / patterns.totalCommits
             });
         }
 
@@ -472,7 +746,8 @@ class RecommendationEngine extends EventEmitter {
                 extensionId: 'test-coverage-reporter',
                 reason: 'Low test commit frequency',
                 category: 'testing',
-                confidence: 0.8
+                confidence: 0.8,
+                matchScore: 1.0 - (patterns.commitsByType.test || 0) / patterns.totalCommits
             });
         }
 
@@ -488,7 +763,8 @@ class RecommendationEngine extends EventEmitter {
                 extensionId: 'test-scaffolder',
                 reason: 'No test directory found',
                 category: 'testing',
-                confidence: 0.9
+                confidence: 0.9,
+                matchScore: 1.0
             });
         }
 
@@ -497,7 +773,8 @@ class RecommendationEngine extends EventEmitter {
                 extensionId: 'doc-generator',
                 reason: 'No documentation directory found',
                 category: 'documentation',
-                confidence: 0.85
+                confidence: 0.85,
+                matchScore: 1.0
             });
         }
 
@@ -506,7 +783,8 @@ class RecommendationEngine extends EventEmitter {
                 extensionId: 'ci-cd-setup',
                 reason: 'No CI/CD configuration detected',
                 category: 'automation',
-                confidence: 0.8
+                confidence: 0.8,
+                matchScore: 1.0
             });
         }
 
@@ -520,15 +798,17 @@ class RecommendationEngine extends EventEmitter {
         if (teamSize >= 5) {
             recommendations.push({
                 extensionId: 'code-review-automation',
-                reason: 'Large team detected',
+                reason: `Large team detected (${teamSize} contributors)`,
                 category: 'collaboration',
-                confidence: 0.85
+                confidence: 0.85,
+                matchScore: Math.min(teamSize / 10, 1.0)
             });
             recommendations.push({
                 extensionId: 'pr-template-enforcer',
                 reason: 'Multiple contributors',
                 category: 'collaboration',
-                confidence: 0.8
+                confidence: 0.8,
+                matchScore: Math.min(teamSize / 10, 1.0)
             });
         }
 
@@ -544,13 +824,15 @@ class RecommendationEngine extends EventEmitter {
                 extensionId: 'commit-message-validator',
                 reason: 'High commit frequency',
                 category: 'workflow',
-                confidence: 0.85
+                confidence: 0.85,
+                matchScore: 1.0
             });
             recommendations.push({
                 extensionId: 'changelog-generator',
                 reason: 'Active development',
                 category: 'documentation',
-                confidence: 0.8
+                confidence: 0.8,
+                matchScore: 1.0
             });
         }
 
@@ -570,18 +852,20 @@ class RecommendationEngine extends EventEmitter {
             if (cmd.command.includes('commit') && cmd.count > 50) {
                 recommendations.push({
                     extensionId: 'smart-commit-assistant',
-                    reason: 'Frequent commit operations',
+                    reason: `Frequent commit operations (${cmd.count} times)`,
                     category: 'productivity',
-                    confidence: 0.8
+                    confidence: 0.8,
+                    matchScore: Math.min(cmd.count / 100, 1.0)
                 });
             }
             
             if (cmd.command.includes('merge') && cmd.count > 20) {
                 recommendations.push({
                     extensionId: 'merge-conflict-resolver',
-                    reason: 'Frequent merge operations',
+                    reason: `Frequent merge operations (${cmd.count} times)`,
                     category: 'workflow',
-                    confidence: 0.85
+                    confidence: 0.85,
+                    matchScore: Math.min(cmd.count / 50, 1.0)
                 });
             }
         }
@@ -589,8 +873,103 @@ class RecommendationEngine extends EventEmitter {
         return recommendations;
     }
 
+    _recommendByFilePatterns() {
+        const recommendations = [];
+        const patterns = this.repositoryProfile.filePatterns;
+
+        if (patterns.largeFiles > 5) {
+            recommendations.push({
+                extensionId: 'large-file-optimizer',
+                reason: `${patterns.largeFiles} large files detected`,
+                category: 'optimization',
+                confidence: 0.75,
+                matchScore: Math.min(patterns.largeFiles / 20, 1.0)
+            });
+        }
+
+        if (patterns.configFiles > 10) {
+            recommendations.push({
+                extensionId: 'config-validator',
+                reason: `Multiple configuration files (${patterns.configFiles})`,
+                category: 'quality',
+                confidence: 0.7,
+                matchScore: Math.min(patterns.configFiles / 30, 1.0)
+            });
+        }
+
+        return recommendations;
+    }
+
+    _recommendByGitComplexity() {
+        const recommendations = [];
+        const complexity = this.repositoryProfile.gitComplexity;
+
+        if (complexity.totalCommits > 1000) {
+            recommendations.push({
+                extensionId: 'git-history-analyzer',
+                reason: `Large commit history (${complexity.totalCommits} commits)`,
+                category: 'analytics',
+                confidence: 0.75,
+                matchScore: Math.min(complexity.totalCommits / 5000, 1.0)
+            });
+        }
+
+        if (complexity.branches > 10) {
+            recommendations.push({
+                extensionId: 'branch-management',
+                reason: `Multiple branches (${complexity.branches})`,
+                category: 'workflow',
+                confidence: 0.7,
+                matchScore: Math.min(complexity.branches / 50, 1.0)
+            });
+        }
+
+        return recommendations;
+    }
+
+    _recommendByCharacteristics() {
+        const recommendations = [];
+        const chars = this.repositoryProfile.characteristics;
+
+        if (chars.hasDocker) {
+            recommendations.push({
+                extensionId: 'docker-integration',
+                reason: 'Docker configuration detected',
+                category: 'devops',
+                confidence: 0.85,
+                matchScore: 1.0
+            });
+        }
+
+        if (chars.hasCICD) {
+            recommendations.push({
+                extensionId: 'ci-integration',
+                reason: 'CI/CD pipeline detected',
+                category: 'automation',
+                confidence: 0.8,
+                matchScore: 1.0
+            });
+        }
+
+        return recommendations;
+    }
+
+    _calculateConfidenceScore(recommendation) {
+        let confidence = recommendation.confidence || 0.5;
+        
+        const matchScore = recommendation.matchScore || 0.5;
+        confidence = confidence * 0.7 + matchScore * 0.3;
+
+        const conversionRate = this.getConversionRate(recommendation.extensionId);
+        if (conversionRate > 0) {
+            confidence = confidence * 0.8 + conversionRate * 0.2;
+        }
+
+        return Math.min(Math.max(confidence, 0), 1);
+    }
+
     _calculateRecommendationScore(recommendation) {
-        let score = recommendation.confidence * 100;
+        let score = this._calculateConfidenceScore(recommendation) * 100;
 
         const extension = this.extensionRegistry.get(recommendation.extensionId);
         if (extension && extension.feedback) {
@@ -613,6 +992,16 @@ class RecommendationEngine extends EventEmitter {
         }
 
         return deduplicated;
+    }
+
+    static async getTopRecommendations(repoPath, limit = 5) {
+        const engine = new RecommendationEngine();
+        await engine.load();
+        
+        const profile = await engine.analyzeRepository(repoPath);
+        const recommendations = await engine.generateRecommendations();
+        
+        return engine.getTopRecommendations(limit);
     }
 }
 

@@ -551,6 +551,142 @@ app.whenReady().then(() => {
       }
     }
   })
+
+  ipcMain.handle('recommendations.analyzeRepo', async (_, { repoPath }) => {
+    try {
+      const { createRequire } = await import('module')
+      const require = createRequire(import.meta.url)
+      
+      const { AnalyticsPlatform } = require('../../core/analytics/index.js')
+      
+      const analytics = new AnalyticsPlatform({
+        persistenceDir: path.join(app.getPath('userData'), 'analytics')
+      })
+      
+      await analytics.initialize()
+      
+      const profile = await analytics.analyzeRepository(repoPath)
+      const recommendations = await analytics.getRecommendations()
+      
+      store.addLog({ 
+        ts: nowIso(), 
+        level: 'info', 
+        scope: 'recommendations', 
+        message: 'recommendations.analyzeRepo', 
+        data: { repoPath, recommendationCount: recommendations.length } 
+      })
+      
+      return {
+        profile,
+        recommendations: recommendations.slice(0, 5),
+        timestamp: Date.now()
+      }
+    } catch (error) {
+      store.addLog({ 
+        ts: nowIso(), 
+        level: 'error', 
+        scope: 'recommendations', 
+        message: 'recommendations.analyzeRepo.error', 
+        data: { repoPath, error: error.message } 
+      })
+      
+      return {
+        profile: null,
+        recommendations: [],
+        timestamp: Date.now(),
+        error: error.message
+      }
+    }
+  })
+
+  ipcMain.handle('recommendations.recordFeedback', async (_, { extensionId, feedback }) => {
+    try {
+      const { createRequire } = await import('module')
+      const require = createRequire(import.meta.url)
+      
+      const { AnalyticsPlatform } = require('../../core/analytics/index.js')
+      
+      const analytics = new AnalyticsPlatform({
+        persistenceDir: path.join(app.getPath('userData'), 'analytics')
+      })
+      
+      await analytics.initialize()
+      
+      analytics.recommendations.recordUserFeedback(extensionId, feedback)
+      await analytics.recommendations.persist()
+      
+      store.addLog({ 
+        ts: nowIso(), 
+        level: 'info', 
+        scope: 'recommendations', 
+        message: 'recommendations.recordFeedback', 
+        data: { extensionId, feedback } 
+      })
+      
+      return {
+        success: true,
+        timestamp: Date.now()
+      }
+    } catch (error) {
+      store.addLog({ 
+        ts: nowIso(), 
+        level: 'error', 
+        scope: 'recommendations', 
+        message: 'recommendations.recordFeedback.error', 
+        data: { extensionId, error: error.message } 
+      })
+      
+      return {
+        success: false,
+        timestamp: Date.now(),
+        error: error.message
+      }
+    }
+  })
+
+  ipcMain.handle('recommendations.getConversionRates', async () => {
+    try {
+      const { createRequire } = await import('module')
+      const require = createRequire(import.meta.url)
+      
+      const { AnalyticsPlatform } = require('../../core/analytics/index.js')
+      
+      const analytics = new AnalyticsPlatform({
+        persistenceDir: path.join(app.getPath('userData'), 'analytics')
+      })
+      
+      await analytics.initialize()
+      
+      const rates = analytics.recommendations.getAllConversionRates()
+      
+      store.addLog({ 
+        ts: nowIso(), 
+        level: 'info', 
+        scope: 'recommendations', 
+        message: 'recommendations.getConversionRates', 
+        data: { count: Object.keys(rates).length } 
+      })
+      
+      return {
+        rates,
+        timestamp: Date.now()
+      }
+    } catch (error) {
+      store.addLog({ 
+        ts: nowIso(), 
+        level: 'error', 
+        scope: 'recommendations', 
+        message: 'recommendations.getConversionRates.error', 
+        data: { error: error.message } 
+      })
+      
+      return {
+        rates: {},
+        timestamp: Date.now(),
+        error: error.message
+      }
+    }
+  })
 })
 
 app.on('window-all-closed', () => {

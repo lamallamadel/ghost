@@ -19,9 +19,14 @@ interface GhostAPI {
   analyticsGetRecommendations: () => Promise<unknown>;
 }
 
+interface ElectronAPI {
+  invoke: (channel: string, data?: unknown) => Promise<unknown>;
+}
+
 declare global {
   interface Window {
     ghost: GhostAPI;
+    electron: ElectronAPI;
   }
 }
 
