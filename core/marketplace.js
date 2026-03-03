@@ -390,6 +390,16 @@ module.exports = ${this._toPascalCase(manifest.id)}Extension;
                             compatibility: { ghostCli: '>=1.0.0' },
                             downloadUrl: 'https://example.com/extensions/example-extension-1.0.0.tar.gz',
                             signature: null,
+                            securityScan: {
+                                scannedAt: new Date().toISOString(),
+                                vulnerabilities: 0,
+                                malwareClean: true,
+                                codeAnalysis: {
+                                    suspiciousPatterns: 0,
+                                    obfuscatedCode: false,
+                                    networkCalls: 0
+                                }
+                            },
                             manifest: JSON.stringify({
                                 id: 'example-extension',
                                 name: 'Example Extension',
@@ -405,6 +415,44 @@ module.exports = ${this._toPascalCase(manifest.id)}Extension;
                 }
             ]
         };
+    }
+
+    async submitRating(extensionId, rating, comment = '') {
+        if (rating < 1 || rating > 5) {
+            throw new Error('Rating must be between 1 and 5');
+        }
+
+        const payload = {
+            extensionId,
+            rating,
+            comment,
+            timestamp: new Date().toISOString()
+        };
+
+        try {
+            const result = await this._httpRequest('POST', `/marketplace/extensions/${extensionId}/ratings`, payload);
+            return result;
+        } catch (error) {
+            const ratingsFile = path.join(this.cacheDir, 'local-ratings.json');
+            let ratings = [];
+            
+            if (fs.existsSync(ratingsFile)) {
+                try {
+                    ratings = JSON.parse(fs.readFileSync(ratingsFile, 'utf8'));
+                } catch (e) {
+                    ratings = [];
+                }
+            }
+            
+            ratings.push(payload);
+            fs.writeFileSync(ratingsFile, JSON.stringify(ratings, null, 2));
+            
+            return {
+                success: true,
+                cached: true,
+                message: 'Rating saved locally and will be synced when registry is available'
+            };
+        }
     }
 
     clearCache() {

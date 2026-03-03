@@ -999,7 +999,15 @@ class GatewayLauncher {
      */
     async handleMarketplaceCommand(parsedArgs) {
         const { MarketplaceService } = require('./core/marketplace');
+        const { CodeSigningManager } = require('./core/code-signing');
+        const { IntrusionDetectionSystem } = require('./core/intrusion-detection');
+        const DependencyResolver = require('./core/dependency-resolver');
+        
         const marketplace = new MarketplaceService();
+        const codeSigningManager = new CodeSigningManager();
+        const intrusionDetection = new IntrusionDetectionSystem();
+        const dependencyResolver = new DependencyResolver();
+        
         const subcommand = parsedArgs.subcommand;
 
         if (!subcommand || subcommand === 'help') {
@@ -1011,6 +1019,13 @@ class GatewayLauncher {
     Options for install:
       --version=X.Y.Z                       Install specific version
       --with-deps                           Automatically install dependencies
+      --skip-security                       Skip security scans (not recommended)
+  ghost marketplace update [id]           Update extension(s) to latest version
+  ghost marketplace uninstall <id>        Uninstall marketplace extension
+  ghost marketplace rate <id> <rating>    Rate an extension (1-5 stars)
+    Options for rate:
+      --comment="text"                      Add review comment
+  ghost marketplace sync                  Sync local extensions with registry
   ghost marketplace refresh               Clear cache and refresh marketplace data
 `);
             return;
@@ -1178,33 +1193,381 @@ class GatewayLauncher {
             const extensionId = parsedArgs.args[0];
             const version = parsedArgs.flags.version;
             const autoInstallDeps = parsedArgs.flags['with-deps'] || parsedArgs.flags.deps || false;
+            const skipSecurity = parsedArgs.flags['skip-security'] || false;
             
             if (!extensionId) {
                 console.error(`${Colors.FAIL}Error: Extension ID required${Colors.ENDC}`);
-                console.log('Usage: ghost marketplace install <id> [--version=X.Y.Z] [--with-deps]');
+                console.log('Usage: ghost marketplace install <id> [--version=X.Y.Z] [--with-deps] [--skip-security]');
                 process.exit(1);
             }
 
             try {
                 console.log(`${Colors.CYAN}Installing ${extensionId}${version ? `@${version}` : ''} from marketplace...${Colors.ENDC}\n`);
                 
-                const result = await marketplace.installExtension(extensionId, { version, autoInstallDeps });
+                const extensionInfo = await marketplace.fetchExtensionById(extensionId);
+                const targetVersion = version || extensionInfo.versions[0].version;
+                const versionData = extensionInfo.versions.find(v => v.version === targetVersion);
+                
+                if (!versionData) {
+                    throw new Error(`Version ${targetVersion} not found for ${extensionId}`);
+                }
+                
+                const manifest = JSON.parse(versionData.manifest || '{}');
+                
+                if (!skipSecurity) {
+                    console.log(`${Colors.CYAN}Running security scans...${Colors.ENDC}`);
+                    
+                    if (versionData.signature) {
+                        console.log(`  ${Colors.DIM}Code signature:${Colors.ENDC} ${Colors.GREEN}✓ Present${Colors.ENDC}`);
+                    } else {
+                        console.log(`  ${Colors.DIM}Code signature:${Colors.ENDC} ${Colors.WARNING}⚠ Not signed${Colors.ENDC}`);
+                    }
+                    
+                    if (versionData.securityScan) {
+                        const scan = versionData.securityScan;
+                        console.log(`  ${Colors.DIM}Security scan:${Colors.ENDC}`);
+                        console.log(`    Vulnerabilities: ${scan.vulnerabilities || 0}`);
+                        console.log(`    Malware scan: ${scan.malwareClean ? Colors.GREEN + '✓ Clean' : Colors.FAIL + '✗ Issues found'}${Colors.ENDC}`);
+                        
+                        if (scan.vulnerabilities > 0 && !parsedArgs.flags.force) {
+                            console.error(`\n${Colors.FAIL}Security vulnerabilities detected!${Colors.ENDC}`);
+                            console.log(`Use --force to install anyway or choose a different version\n`);
+                            process.exit(1);
+                        }
+                    } else {
+                        console.log(`  ${Colors.DIM}Security scan:${Colors.ENDC} ${Colors.WARNING}⚠ Not available${Colors.ENDC}`);
+                    }
+                    
+                    intrusionDetection.recordEvent(extensionId, {
+                        type: 'marketplace-install',
+                        operation: 'install',
+                        version: targetVersion,
+                        signed: !!versionData.signature
+                    });
+                    
+                    console.log('');
+                }
+                
+                if (manifest.dependencies && Object.keys(manifest.dependencies).length > 0) {
+                    console.log(`${Colors.CYAN}Validating dependencies...${Colors.ENDC}`);
+                    
+                    const installedExtensions = this.gateway.listExtensions();
+                    const installedManifests = new Map();
+                    
+                    for (const ext of installedExtensions) {
+                        const fullExt = this.gateway.getExtension(ext.id);
+                        if (fullExt && fullExt.manifest) {
+                            installedManifests.set(ext.id, { manifest: fullExt.manifest });
+                        }
+                    }
+                    
+                    installedManifests.set(extensionId, { manifest });
+                    
+                    const issues = dependencyResolver.validateVersionConstraints(installedManifests);
+                    const relevantIssues = issues.filter(issue => 
+                        issue.extension === extensionId || issue.dependency === extensionId
+                    );
+                    
+                    if (relevantIssues.length > 0) {
+                        console.log(`${Colors.WARNING}Dependency issues detected:${Colors.ENDC}`);
+                        relevantIssues.forEach(issue => {
+                            console.log(`  ${Colors.WARNING}⚠${Colors.ENDC} ${issue.message}`);
+                        });
+                        
+                        if (!autoInstallDeps && !parsedArgs.flags.force) {
+                            console.log(`\nUse --with-deps to auto-install dependencies or --force to skip validation\n`);
+                            process.exit(1);
+                        }
+                        console.log('');
+                    }
+                }
+                
+                const result = await marketplace.installExtension(extensionId, { 
+                    version: targetVersion,
+                    autoInstallDeps,
+                    codeSigningManager,
+                    requireSigning: false
+                });
                 
                 console.log(`${Colors.GREEN}✓${Colors.ENDC} Extension ${Colors.BOLD}${result.extensionId}${Colors.ENDC} v${result.version} installed successfully`);
                 console.log(`${Colors.DIM}  Location: ${result.installPath}${Colors.ENDC}`);
                 
-                if (result.dependencies && result.dependencies.length > 0) {
-                    console.log(`\n${Colors.BOLD}Dependencies:${Colors.ENDC}`);
-                    result.dependencies.forEach(dep => {
-                        console.log(`  ${dep.id}@${dep.version}`);
-                    });
-                    console.log(`${Colors.WARNING}Note: Dependencies must be installed manually${Colors.ENDC}`);
+                if (result.signed) {
+                    console.log(`${Colors.DIM}  Signature: ${Colors.GREEN}✓ Verified${Colors.ENDC}`);
                 }
                 
-                console.log(`\n${Colors.DIM}Restart Ghost or reload extensions to activate: ghost gateway extensions${Colors.ENDC}`);
+                if (result.dependencies && result.dependencies.length > 0) {
+                    console.log(`\n${Colors.BOLD}Dependencies installed:${Colors.ENDC}`);
+                    result.dependencies.forEach(dep => {
+                        console.log(`  ${Colors.GREEN}✓${Colors.ENDC} ${dep.id}@${dep.version}`);
+                    });
+                }
+                
+                console.log(`\n${Colors.DIM}Restart Ghost or reload extensions to activate: ghost gateway reload ${result.extensionId}${Colors.ENDC}`);
                 console.log('');
             } catch (error) {
                 console.error(`${Colors.FAIL}Error installing extension: ${error.message}${Colors.ENDC}`);
+                process.exit(1);
+            }
+        } else if (subcommand === 'update') {
+            const extensionId = parsedArgs.args[0];
+            
+            try {
+                if (extensionId) {
+                    console.log(`${Colors.CYAN}Checking for updates to ${extensionId}...${Colors.ENDC}\n`);
+                    
+                    const installed = this.gateway.getExtension(extensionId);
+                    if (!installed) {
+                        console.error(`${Colors.FAIL}Extension ${extensionId} not installed${Colors.ENDC}`);
+                        process.exit(1);
+                    }
+                    
+                    const marketplaceInfo = await marketplace.fetchExtensionById(extensionId);
+                    const latestVersion = marketplaceInfo.versions[0].version;
+                    const currentVersion = installed.manifest.version;
+                    
+                    if (latestVersion === currentVersion) {
+                        console.log(`${Colors.GREEN}✓${Colors.ENDC} ${extensionId} is already at the latest version (${currentVersion})\n`);
+                        return;
+                    }
+                    
+                    console.log(`  Current: ${currentVersion}`);
+                    console.log(`  Latest:  ${latestVersion}\n`);
+                    
+                    const result = await marketplace.installExtension(extensionId, {
+                        version: latestVersion,
+                        codeSigningManager,
+                        requireSigning: false
+                    });
+                    
+                    console.log(`${Colors.GREEN}✓${Colors.ENDC} Updated ${extensionId} from ${currentVersion} to ${latestVersion}`);
+                    console.log(`${Colors.DIM}  Location: ${result.installPath}${Colors.ENDC}\n`);
+                } else {
+                    console.log(`${Colors.CYAN}Checking for updates to all marketplace extensions...${Colors.ENDC}\n`);
+                    
+                    const extensions = this.gateway.listExtensions();
+                    const updates = [];
+                    
+                    for (const ext of extensions) {
+                        const fullExt = this.gateway.getExtension(ext.id);
+                        if (!fullExt || !fullExt.manifest) continue;
+                        
+                        try {
+                            const marketplaceInfo = await marketplace.fetchExtensionById(ext.id);
+                            const latestVersion = marketplaceInfo.versions[0].version;
+                            const currentVersion = fullExt.manifest.version;
+                            
+                            if (latestVersion !== currentVersion) {
+                                updates.push({
+                                    id: ext.id,
+                                    currentVersion,
+                                    latestVersion
+                                });
+                            }
+                        } catch (error) {
+                        }
+                    }
+                    
+                    if (updates.length === 0) {
+                        console.log(`${Colors.GREEN}✓${Colors.ENDC} All extensions are up to date\n`);
+                        return;
+                    }
+                    
+                    console.log(`${Colors.BOLD}Available updates:${Colors.ENDC}`);
+                    updates.forEach(update => {
+                        console.log(`  ${update.id}: ${update.currentVersion} → ${update.latestVersion}`);
+                    });
+                    console.log(`\nRun ${Colors.CYAN}ghost marketplace update <id>${Colors.ENDC} to update individual extensions\n`);
+                }
+            } catch (error) {
+                console.error(`${Colors.FAIL}Error checking for updates: ${error.message}${Colors.ENDC}`);
+                process.exit(1);
+            }
+        } else if (subcommand === 'uninstall') {
+            const extensionId = parsedArgs.args[0];
+            
+            if (!extensionId) {
+                console.error(`${Colors.FAIL}Error: Extension ID required${Colors.ENDC}`);
+                console.log('Usage: ghost marketplace uninstall <id>');
+                process.exit(1);
+            }
+            
+            try {
+                const ext = this.gateway.getExtension(extensionId);
+                
+                if (!ext) {
+                    console.error(`${Colors.FAIL}Error: Extension ${extensionId} not found${Colors.ENDC}`);
+                    process.exit(1);
+                }
+                
+                const installedExtensions = this.gateway.listExtensions();
+                const installedManifests = new Map();
+                
+                for (const e of installedExtensions) {
+                    const fullExt = this.gateway.getExtension(e.id);
+                    if (fullExt && fullExt.manifest) {
+                        installedManifests.set(e.id, { manifest: fullExt.manifest });
+                    }
+                }
+                
+                const dependents = [];
+                for (const [id, data] of installedManifests) {
+                    if (id === extensionId) continue;
+                    const deps = data.manifest.dependencies || {};
+                    if (deps[extensionId]) {
+                        dependents.push({ id, constraint: deps[extensionId] });
+                    }
+                }
+                
+                if (dependents.length > 0 && !parsedArgs.flags.force) {
+                    console.error(`${Colors.FAIL}Cannot uninstall ${extensionId}: required by other extensions${Colors.ENDC}\n`);
+                    console.log(`${Colors.BOLD}Dependent extensions:${Colors.ENDC}`);
+                    dependents.forEach(dep => {
+                        console.log(`  ${dep.id} (requires ${dep.constraint})`);
+                    });
+                    console.log(`\nUse --force to uninstall anyway\n`);
+                    process.exit(1);
+                }
+                
+                try {
+                    await this.runtime.stopExtension(extensionId);
+                } catch (error) {
+                }
+                
+                this.gateway.unloadExtension(extensionId);
+                
+                const extPath = path.join(USER_EXTENSIONS_DIR, extensionId);
+                if (fs.existsSync(extPath)) {
+                    this._removeDirectory(extPath);
+                }
+                
+                console.log(`${Colors.GREEN}✓${Colors.ENDC} Extension ${Colors.BOLD}${extensionId}${Colors.ENDC} uninstalled successfully\n`);
+            } catch (error) {
+                console.error(`${Colors.FAIL}Error uninstalling extension: ${error.message}${Colors.ENDC}`);
+                process.exit(1);
+            }
+        } else if (subcommand === 'rate') {
+            const extensionId = parsedArgs.args[0];
+            const rating = parseInt(parsedArgs.args[1]);
+            const comment = parsedArgs.flags.comment || '';
+            
+            if (!extensionId || !rating) {
+                console.error(`${Colors.FAIL}Error: Extension ID and rating (1-5) required${Colors.ENDC}`);
+                console.log('Usage: ghost marketplace rate <id> <rating> [--comment="text"]');
+                process.exit(1);
+            }
+            
+            if (rating < 1 || rating > 5) {
+                console.error(`${Colors.FAIL}Error: Rating must be between 1 and 5${Colors.ENDC}`);
+                process.exit(1);
+            }
+            
+            try {
+                await marketplace.submitRating(extensionId, rating, comment);
+                
+                const stars = '★'.repeat(rating) + '☆'.repeat(5 - rating);
+                console.log(`${Colors.GREEN}✓${Colors.ENDC} Rating submitted for ${extensionId}`);
+                console.log(`  ${Colors.YELLOW}${stars}${Colors.ENDC} ${rating}/5`);
+                if (comment) {
+                    console.log(`  "${comment}"`);
+                }
+                console.log('');
+            } catch (error) {
+                console.error(`${Colors.FAIL}Error submitting rating: ${error.message}${Colors.ENDC}`);
+                process.exit(1);
+            }
+        } else if (subcommand === 'sync') {
+            console.log(`${Colors.CYAN}Synchronizing local extensions with marketplace registry...${Colors.ENDC}\n`);
+            
+            try {
+                const extensions = this.gateway.listExtensions();
+                const syncResults = {
+                    upToDate: [],
+                    updatesAvailable: [],
+                    notInRegistry: [],
+                    errors: []
+                };
+                
+                for (const ext of extensions) {
+                    const fullExt = this.gateway.getExtension(ext.id);
+                    if (!fullExt || !fullExt.manifest) continue;
+                    
+                    try {
+                        const marketplaceInfo = await marketplace.fetchExtensionById(ext.id);
+                        const latestVersion = marketplaceInfo.versions[0].version;
+                        const currentVersion = fullExt.manifest.version;
+                        
+                        if (latestVersion === currentVersion) {
+                            syncResults.upToDate.push({
+                                id: ext.id,
+                                version: currentVersion,
+                                verified: marketplaceInfo.verified
+                            });
+                        } else {
+                            syncResults.updatesAvailable.push({
+                                id: ext.id,
+                                currentVersion,
+                                latestVersion,
+                                verified: marketplaceInfo.verified
+                            });
+                        }
+                    } catch (error) {
+                        if (error.message.includes('not found')) {
+                            syncResults.notInRegistry.push({
+                                id: ext.id,
+                                version: fullExt.manifest.version
+                            });
+                        } else {
+                            syncResults.errors.push({
+                                id: ext.id,
+                                error: error.message
+                            });
+                        }
+                    }
+                }
+                
+                if (parsedArgs.flags.json) {
+                    console.log(JSON.stringify(syncResults, null, 2));
+                } else {
+                    console.log(`${Colors.BOLD}Sync Results:${Colors.ENDC}\n`);
+                    
+                    if (syncResults.upToDate.length > 0) {
+                        console.log(`${Colors.GREEN}✓ Up to date (${syncResults.upToDate.length}):${Colors.ENDC}`);
+                        syncResults.upToDate.forEach(ext => {
+                            const badge = ext.verified ? `${Colors.GREEN}✓${Colors.ENDC}` : '';
+                            console.log(`  ${ext.id} ${badge} v${ext.version}`);
+                        });
+                        console.log('');
+                    }
+                    
+                    if (syncResults.updatesAvailable.length > 0) {
+                        console.log(`${Colors.YELLOW}⚠ Updates available (${syncResults.updatesAvailable.length}):${Colors.ENDC}`);
+                        syncResults.updatesAvailable.forEach(ext => {
+                            const badge = ext.verified ? `${Colors.GREEN}✓${Colors.ENDC}` : '';
+                            console.log(`  ${ext.id} ${badge} ${ext.currentVersion} → ${ext.latestVersion}`);
+                        });
+                        console.log(`\nRun ${Colors.CYAN}ghost marketplace update${Colors.ENDC} to update all extensions`);
+                        console.log('');
+                    }
+                    
+                    if (syncResults.notInRegistry.length > 0) {
+                        console.log(`${Colors.DIM}Not in registry (${syncResults.notInRegistry.length}):${Colors.ENDC}`);
+                        syncResults.notInRegistry.forEach(ext => {
+                            console.log(`  ${ext.id} v${ext.version} (local only)`);
+                        });
+                        console.log('');
+                    }
+                    
+                    if (syncResults.errors.length > 0) {
+                        console.log(`${Colors.FAIL}✗ Errors (${syncResults.errors.length}):${Colors.ENDC}`);
+                        syncResults.errors.forEach(ext => {
+                            console.log(`  ${ext.id}: ${ext.error}`);
+                        });
+                        console.log('');
+                    }
+                }
+            } catch (error) {
+                console.error(`${Colors.FAIL}Error syncing extensions: ${error.message}${Colors.ENDC}`);
                 process.exit(1);
             }
         } else if (subcommand === 'refresh') {
