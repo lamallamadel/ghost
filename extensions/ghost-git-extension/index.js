@@ -3,6 +3,7 @@
 const { ExtensionRPCClient, GitExtension } = require('./extension.js');
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
 
 const manifestPath = path.join(__dirname, 'manifest.json');
 const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
@@ -49,16 +50,52 @@ class ExtensionWrapper {
 
     /**
      * Command: commit
-     * Generates a commit message using AI.
+     * Generates an AI commit message for staged changes and commits them.
      */
     async commit(params) {
-        return await this.git.generateCommit(
-            params.diffText,
-            params.customPrompt,
-            params.provider,
-            params.apiKey,
-            params.model
-        );
+        const flags = params.flags || {};
+
+        // Resolve AI config: flags take precedence over ghostrc
+        let provider = flags.provider;
+        let apiKey = flags.apiKey || flags['api-key'];
+        let model = flags.model;
+
+        if (!provider || !apiKey) {
+            try {
+                const configPath = path.join(os.homedir(), '.ghost', 'config', 'ghostrc.json');
+                const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+                if (config.ai) {
+                    provider = provider || config.ai.provider;
+                    apiKey = apiKey || config.ai.apiKey;
+                    model = model || config.ai.model;
+                }
+            } catch (e) {
+                // no config file, will fail later if apiKey still missing
+            }
+        }
+
+        // Get staged diff
+        const diff = await this.git.getStagedDiff();
+        if (!diff.text) {
+            return { success: false, output: 'No staged changes to commit.' };
+        }
+
+        // Security audit (skippable via --skip-audit)
+        if (!flags['skip-audit'] && !flags.skipAudit) {
+            const audit = await this.git.auditSecurity(diff.map, provider, apiKey, model);
+            if (audit.blocked) {
+                return { success: false, output: `\x1b[31mCommit blocked: ${audit.reason}\x1b[0m` };
+            }
+        }
+
+        // Generate commit message via AI
+        const customPrompt = flags.prompt || flags.message;
+        const message = await this.git.generateCommit(diff.text, customPrompt, provider, apiKey, model);
+
+        // Run the actual git commit
+        await this.rpc.gitExec(['commit', '-m', message]);
+
+        return { success: true, output: `\x1b[32m✓ Committed:\x1b[0m ${message}` };
     }
 
     /**
