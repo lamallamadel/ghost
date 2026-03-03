@@ -195,3 +195,11 @@ registry/uploads/
 registry/temp/
 registry/*.db
 registry/*.db-*
+
+# E2E Test Artifacts
+test/e2e/fixtures/*.tgz
+test/e2e/temp/
+test/e2e/test-results/
+test/e2e/playwright-report/
+test/e2e/*.e2e.example.js
+e2e-test-report.json
