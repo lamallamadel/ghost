@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { Package, Power, RefreshCw, Edit2, X, Check } from 'lucide-react'
+import { Package, Power, RefreshCw, Edit2, X, Check, Shield } from 'lucide-react'
 import { ghost } from '@/ipc/ghost'
 import type { GatewayState, ExtensionInfo } from '@/ipc/types'
 import { useToastsStore } from '@/stores/useToastsStore'
@@ -145,6 +145,29 @@ export function ExtensionManagerTab() {
 
   const extensions = state?.extensions || []
 
+  function renderHealthBadge(ext: ExtensionInfo) {
+    if (!ext.healthScore || !ext.healthBadge) return null
+
+    const badge = ext.healthBadge
+    const score = ext.healthScore
+
+    return (
+      <div 
+        className="flex items-center gap-1.5 rounded-md border px-2 py-0.5 text-xs font-medium"
+        style={{
+          borderColor: `${badge.color}30`,
+          backgroundColor: `${badge.color}15`,
+          color: badge.color
+        }}
+        title={`Score de santé: ${score}/100`}
+      >
+        <Shield size={12} />
+        <span>{badge.label}</span>
+        <span className="opacity-70">{score}</span>
+      </div>
+    )
+  }
+
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-white/5 px-4 py-3 backdrop-blur">
@@ -212,6 +235,7 @@ export function ExtensionManagerTab() {
                             Modifié
                           </span>
                         )}
+                        {renderHealthBadge(ext)}
                       </div>
                       <div className="mt-1 font-mono text-xs text-white/60">{ext.manifest.id}</div>
 
@@ -345,7 +369,7 @@ export function ExtensionManagerTab() {
                   </div>
                 </div>
 
-                <div className="mt-4 grid grid-cols-3 gap-4 border-t border-white/10 pt-4">
+                <div className="mt-4 grid grid-cols-4 gap-4 border-t border-white/10 pt-4">
                   <div>
                     <div className="text-xs text-white/40">Permissions</div>
                     <div className="mt-1 font-mono text-sm font-semibold">
@@ -362,6 +386,26 @@ export function ExtensionManagerTab() {
                     <div className="text-xs text-white/40">Requêtes approuvées</div>
                     <div className="mt-1 font-mono text-sm font-semibold text-emerald-400">
                       {ext.stats.requestsApproved}
+                    </div>
+                  </div>
+                  <div>
+                    <div className="text-xs text-white/40">Score de santé</div>
+                    <div className="mt-1 flex items-center gap-1.5">
+                      {ext.healthScore !== undefined ? (
+                        <>
+                          <div 
+                            className="font-mono text-sm font-semibold"
+                            style={{ 
+                              color: ext.healthBadge?.color || '#888' 
+                            }}
+                          >
+                            {ext.healthScore}
+                          </div>
+                          <div className="text-xs text-white/40">/100</div>
+                        </>
+                      ) : (
+                        <div className="font-mono text-sm text-white/40">N/A</div>
+                      )}
                     </div>
                   </div>
                 </div>

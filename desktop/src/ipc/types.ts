@@ -103,6 +103,12 @@ export type ExtensionManifest = {
   permissions?: string[]
 }
 
+export type HealthBadge = {
+  level: 'excellent' | 'good' | 'fair' | 'poor'
+  color: string
+  label: string
+}
+
 export type IntentTypeBreakdown = {
   filesystem: number
   network: number
@@ -174,6 +180,8 @@ export type ExtensionInfo = {
   stats: ExtensionStats
   trafficPolicerState?: TrafficPolicerState
   runtimeState?: RuntimeState
+  healthScore?: number
+  healthBadge?: HealthBadge
 }
 
 export type TrafficPolicerState = {

@@ -365,7 +365,15 @@ module.exports = ${this._toPascalCase(manifest.id)}Extension;
         
         if (fs.existsSync(registryPath)) {
             try {
-                return JSON.parse(fs.readFileSync(registryPath, 'utf8'));
+                const registry = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
+                if (registry.extensions) {
+                    registry.extensions = registry.extensions.map(ext => ({
+                        ...ext,
+                        healthScore: ext.healthScore || this._estimateHealthScore(ext),
+                        healthBadge: ext.healthBadge || this._getHealthBadge(ext.healthScore || this._estimateHealthScore(ext))
+                    }));
+                }
+                return registry;
             } catch {
                 return { extensions: [] };
             }
@@ -383,6 +391,8 @@ module.exports = ${this._toPascalCase(manifest.id)}Extension;
                     ratings: { average: 4.5, count: 10 },
                     downloads: 150,
                     verified: true,
+                    healthScore: 75,
+                    healthBadge: { level: 'good', color: '#3b82f6', label: 'Good' },
                     versions: [
                         {
                             version: '1.0.0',
@@ -461,6 +471,46 @@ module.exports = ${this._toPascalCase(manifest.id)}Extension;
             for (const file of files) {
                 fs.unlinkSync(path.join(this.cacheDir, file));
             }
+        }
+    }
+
+    _estimateHealthScore(extension) {
+        let score = 50;
+        
+        if (extension.ratings && extension.ratings.average) {
+            score += (extension.ratings.average / 5) * 20;
+        }
+        
+        if (extension.verified) {
+            score += 15;
+        }
+        
+        if (extension.downloads > 1000) {
+            score += 10;
+        } else if (extension.downloads > 100) {
+            score += 5;
+        }
+        
+        if (extension.versions && extension.versions.length > 0) {
+            const latestVersion = extension.versions[0];
+            if (latestVersion.publishedAt) {
+                const daysSinceUpdate = (Date.now() - new Date(latestVersion.publishedAt).getTime()) / (1000 * 60 * 60 * 24);
+                if (daysSinceUpdate < 30) score += 5;
+            }
+        }
+        
+        return Math.min(100, Math.round(score));
+    }
+
+    _getHealthBadge(healthScore) {
+        if (healthScore >= 80) {
+            return { level: 'excellent', color: '#10b981', label: 'Excellent' };
+        } else if (healthScore >= 60) {
+            return { level: 'good', color: '#3b82f6', label: 'Good' };
+        } else if (healthScore >= 40) {
+            return { level: 'fair', color: '#f59e0b', label: 'Fair' };
+        } else {
+            return { level: 'poor', color: '#ef4444', label: 'Poor' };
         }
     }
 }

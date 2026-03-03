@@ -11,6 +11,8 @@ const { RateLimiter } = require('./rate-limiter');
 const { AuthManager } = require('./auth-manager');
 const { AdminDashboard } = require('./admin-dashboard');
 const { DownloadTracker } = require('./download-tracker');
+const { HealthScorer } = require('./health-scorer');
+const { CodeSigningManager } = require('../code-signing');
 
 class MarketplaceServer {
     constructor(options = {}) {
@@ -22,7 +24,15 @@ class MarketplaceServer {
         this.authManager = new AuthManager();
         this.adminDashboard = new AdminDashboard(this.db);
         this.downloadTracker = new DownloadTracker(this.db);
+        this.codeSigning = new CodeSigningManager();
+        this.healthScorer = new HealthScorer({ 
+            db: this.db, 
+            codeSigning: this.codeSigning,
+            extensionDir: options.extensionDir || path.join(__dirname, '..', '..', 'extensions')
+        });
         this.uploadDir = options.uploadDir || path.join(__dirname, 'uploads');
+        this.healthScoreCache = new Map();
+        this.healthScoreCacheTTL = 3600000;
         this._ensureUploadDir();
     }
 
@@ -183,7 +193,20 @@ class MarketplaceServer {
 
         const sort = query.sort || 'recent';
 
-        const results = this.db.searchExtensions(filters, pagination, sort);
+        const results = await this.db.searchExtensions(filters, pagination, sort);
+
+        const extensionsWithHealth = await Promise.all(
+            results.extensions.map(async (ext) => {
+                const healthData = await this._getHealthScore(ext.id);
+                return {
+                    ...ext,
+                    healthScore: healthData.healthScore,
+                    healthBadge: this.healthScorer.getHealthBadge(healthData.healthScore)
+                };
+            })
+        );
+
+        results.extensions = extensionsWithHealth;
 
         res.writeHead(200);
         res.end(JSON.stringify(results));
@@ -191,7 +214,7 @@ class MarketplaceServer {
 
     async _handleGetExtension(req, res) {
         const id = req.url.split('/')[3];
-        const extension = this.db.getExtensionById(id);
+        const extension = await this.db.getExtensionById(id);
 
         if (!extension) {
             res.writeHead(404);
@@ -199,16 +222,20 @@ class MarketplaceServer {
             return;
         }
 
-        const versions = this.db.getExtensionVersions(id);
-        const changelog = this.db.getExtensionChangelog(id);
-        const stats = this.db.getExtensionStats(id);
+        const versions = await this.db.getExtensionVersions(id);
+        const changelog = await this.db.getExtensionChangelog(id);
+        const stats = await this.db.getExtensionStats(id);
+        const healthData = await this._getHealthScore(id);
 
         res.writeHead(200);
         res.end(JSON.stringify({
             ...extension,
             versions,
             changelog,
-            stats
+            stats,
+            healthScore: healthData.healthScore,
+            healthBadge: this.healthScorer.getHealthBadge(healthData.healthScore),
+            healthBreakdown: healthData.breakdown
         }));
     }
 
@@ -422,6 +449,29 @@ class MarketplaceServer {
         }
 
         return parts;
+    }
+
+    async _getHealthScore(extensionId) {
+        const cached = this.healthScoreCache.get(extensionId);
+        if (cached && Date.now() - cached.timestamp < this.healthScoreCacheTTL) {
+            return cached.data;
+        }
+
+        const healthData = await this.healthScorer.calculateHealthScore(extensionId);
+        this.healthScoreCache.set(extensionId, {
+            data: healthData,
+            timestamp: Date.now()
+        });
+
+        return healthData;
+    }
+
+    clearHealthScoreCache(extensionId) {
+        if (extensionId) {
+            this.healthScoreCache.delete(extensionId);
+        } else {
+            this.healthScoreCache.clear();
+        }
     }
 }
 

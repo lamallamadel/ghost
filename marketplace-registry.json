@@ -15,6 +15,12 @@
       },
       "downloads": 5420,
       "verified": true,
+      "healthScore": 92,
+      "healthBadge": {
+        "level": "excellent",
+        "color": "#10b981",
+        "label": "Excellent"
+      },
       "homepage": "https://github.com/ghost/ai-commit-helper",
       "repository": "https://github.com/ghost/ai-commit-helper.git",
       "versions": [
@@ -58,6 +64,12 @@
       },
       "downloads": 3890,
       "verified": true,
+      "healthScore": 85,
+      "healthBadge": {
+        "level": "excellent",
+        "color": "#10b981",
+        "label": "Excellent"
+      },
       "homepage": "https://github.com/devtools/code-review",
       "repository": "https://github.com/devtools/code-review.git",
       "versions": [
@@ -91,6 +103,12 @@
       },
       "downloads": 8750,
       "verified": true,
+      "healthScore": 95,
+      "healthBadge": {
+        "level": "excellent",
+        "color": "#10b981",
+        "label": "Excellent"
+      },
       "homepage": "https://github.com/sectools/dep-scanner",
       "repository": "https://github.com/sectools/dep-scanner.git",
       "versions": [
@@ -122,6 +140,12 @@
       },
       "downloads": 2340,
       "verified": false,
+      "healthScore": 68,
+      "healthBadge": {
+        "level": "good",
+        "color": "#3b82f6",
+        "label": "Good"
+      },
       "homepage": "https://github.com/community/changelog-gen",
       "repository": "https://github.com/community/changelog-gen.git",
       "versions": [
@@ -153,6 +177,12 @@
       },
       "downloads": 1680,
       "verified": false,
+      "healthScore": 58,
+      "healthBadge": {
+        "level": "fair",
+        "color": "#f59e0b",
+        "label": "Fair"
+      },
       "homepage": "https://github.com/workflow/pr-template",
       "repository": "https://github.com/workflow/pr-template.git",
       "versions": [
@@ -184,6 +214,12 @@
       },
       "downloads": 4210,
       "verified": true,
+      "healthScore": 88,
+      "healthBadge": {
+        "level": "excellent",
+        "color": "#10b981",
+        "label": "Excellent"
+      },
       "homepage": "https://github.com/testing/coverage-reporter",
       "repository": "https://github.com/testing/coverage-reporter.git",
       "versions": [
