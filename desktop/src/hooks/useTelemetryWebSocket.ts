@@ -66,11 +66,61 @@ export interface GatewayStateEvent {
   };
 }
 
+export interface InvocationEvent {
+  extensionId: string;
+  status: 'success' | 'failure';
+  duration: number;
+  timestamp: number;
+  cpu?: number;
+  memory?: number;
+  io?: number;
+  network?: number;
+  storage?: number;
+  error?: boolean;
+}
+
+export interface CostEvent {
+  extensionId: string;
+  totalCost: number;
+  resourceCosts: {
+    cpu: number;
+    memory: number;
+    io: number;
+    network: number;
+    storage: number;
+  };
+  invocations: number;
+  timestamp: number;
+}
+
+export interface RegressionEvent {
+  alertId: string;
+  timestamp: number;
+  timestampISO: string;
+  extensionId: string;
+  version: string;
+  baselineVersion: string;
+  severity: 'critical' | 'high' | 'medium' | 'low';
+  regressions: Array<{
+    metric: string;
+    baseline: number;
+    current: number;
+    threshold: number;
+    exceeded: number;
+  }>;
+}
+
 export type TelemetryEvent =
   | { type: 'span'; data: SpanEvent | SpanEvent[]; batch?: boolean; count?: number }
   | { type: 'log'; data: LogEvent }
   | { type: 'metric_update'; data: MetricUpdateEvent }
-  | { type: 'gateway_state'; data: GatewayStateEvent };
+  | { type: 'gateway_state'; data: GatewayStateEvent }
+  | { type: 'invocation-completed'; data: InvocationEvent }
+  | { type: 'cost-recorded'; data: CostEvent }
+  | { type: 'regression-detected'; data: RegressionEvent }
+  | { type: 'connected'; timestamp: number; message: string }
+  | { type: 'subscribed'; extensionId: string; timestamp: number }
+  | { type: 'pong'; timestamp: number };
 
 export type TelemetryEventHandler = (event: TelemetryEvent) => void;
 
@@ -88,6 +138,9 @@ interface CachedData {
   logs: LogEvent[];
   metrics: MetricUpdateEvent | null;
   gatewayState: GatewayStateEvent | null;
+  invocations: InvocationEvent[];
+  costs: CostEvent[];
+  regressions: RegressionEvent[];
 }
 
 export interface TelemetryWebSocketHook {
@@ -100,7 +153,7 @@ export interface TelemetryWebSocketHook {
   droppedEvents: number;
 }
 
-const DEFAULT_PORT = 9876;
+const DEFAULT_PORT = 9877;
 const INITIAL_RECONNECT_DELAY = 1000;
 const MAX_RECONNECT_DELAY = 10000;
 const DEFAULT_EVENTS_PER_SECOND = 60;
@@ -135,6 +188,9 @@ export function useTelemetryWebSocket(
     logs: [],
     metrics: null,
     gatewayState: null,
+    invocations: [],
+    costs: [],
+    regressions: [],
   });
 
   const updateCache = useCallback((event: TelemetryEvent) => {
@@ -165,6 +221,27 @@ export function useTelemetryWebSocket(
 
       case 'gateway_state':
         cache.gatewayState = event.data;
+        break;
+
+      case 'invocation-completed':
+        cache.invocations.push(event.data);
+        if (cache.invocations.length > cacheSize) {
+          cache.invocations.splice(0, cache.invocations.length - cacheSize);
+        }
+        break;
+
+      case 'cost-recorded':
+        cache.costs.push(event.data);
+        if (cache.costs.length > cacheSize) {
+          cache.costs.splice(0, cache.costs.length - cacheSize);
+        }
+        break;
+
+      case 'regression-detected':
+        cache.regressions.push(event.data);
+        if (cache.regressions.length > 100) {
+          cache.regressions.splice(0, cache.regressions.length - 100);
+        }
         break;
     }
   }, [cacheSize]);
@@ -225,16 +302,25 @@ export function useTelemetryWebSocket(
       wsRef.current = ws;
 
       ws.onopen = () => {
-        console.log('[TelemetryWebSocket] Connected');
+        console.log('[TelemetryWebSocket] Connected to port', port);
         setConnectionState('connected');
         reconnectDelayRef.current = INITIAL_RECONNECT_DELAY;
 
         if (subscriptionsRef.current.size > 0) {
-          const message = JSON.stringify({
-            type: 'subscribe',
-            events: Array.from(subscriptionsRef.current),
-          });
-          ws.send(message);
+          if (port === 9877) {
+            for (const extensionId of subscriptionsRef.current) {
+              ws.send(JSON.stringify({
+                type: 'subscribe',
+                extensionId,
+              }));
+            }
+          } else {
+            const message = JSON.stringify({
+              type: 'subscribe',
+              events: Array.from(subscriptionsRef.current),
+            });
+            ws.send(message);
+          }
         }
       };
 
@@ -242,14 +328,8 @@ export function useTelemetryWebSocket(
         try {
           const message = JSON.parse(event.data);
           
-          if (message.event && message.data) {
-            const telemetryEvent: TelemetryEvent = {
-              type: message.event,
-              data: message.data,
-              ...(message.batch !== undefined && { batch: message.batch }),
-              ...(message.count !== undefined && { count: message.count }),
-            } as TelemetryEvent;
-
+          if (message.type) {
+            const telemetryEvent = message as TelemetryEvent;
             eventQueueRef.current.push(telemetryEvent);
           }
         } catch (error) {
@@ -320,13 +400,23 @@ export function useTelemetryWebSocket(
     }
 
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      const message = JSON.stringify({
-        type: 'subscribe',
-        events,
-      });
-      wsRef.current.send(message);
+      if (port === 9877) {
+        for (const extensionId of events) {
+          const message = JSON.stringify({
+            type: 'subscribe',
+            extensionId,
+          });
+          wsRef.current.send(message);
+        }
+      } else {
+        const message = JSON.stringify({
+          type: 'subscribe',
+          events,
+        });
+        wsRef.current.send(message);
+      }
     }
-  }, []);
+  }, [port]);
 
   const unsubscribe = useCallback((events: string[]) => {
     for (const event of events) {
@@ -334,23 +424,26 @@ export function useTelemetryWebSocket(
     }
 
     if (wsRef.current?.readyState === WebSocket.OPEN) {
-      const message = JSON.stringify({
-        type: 'unsubscribe',
-        events,
-      });
-      wsRef.current.send(message);
+      if (port === 9877) {
+        for (const extensionId of events) {
+          const message = JSON.stringify({
+            type: 'unsubscribe',
+            extensionId,
+          });
+          wsRef.current.send(message);
+        }
+      } else {
+        const message = JSON.stringify({
+          type: 'unsubscribe',
+          events,
+        });
+        wsRef.current.send(message);
+      }
     }
-  }, []);
+  }, [port]);
 
   const clearSubscriptions = useCallback(() => {
     subscriptionsRef.current.clear();
-
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      const message = JSON.stringify({
-        type: 'clear_subscriptions',
-      });
-      wsRef.current.send(message);
-    }
   }, []);
 
   const getCachedData = useCallback((): CachedData => {
@@ -359,6 +452,9 @@ export function useTelemetryWebSocket(
       logs: [...cacheRef.current.logs],
       metrics: cacheRef.current.metrics ? { ...cacheRef.current.metrics } : null,
       gatewayState: cacheRef.current.gatewayState ? { ...cacheRef.current.gatewayState } : null,
+      invocations: [...cacheRef.current.invocations],
+      costs: [...cacheRef.current.costs],
+      regressions: [...cacheRef.current.regressions],
     };
   }, []);
 

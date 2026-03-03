@@ -4,6 +4,8 @@ import { PerformanceChart } from './PerformanceChart';
 import { CostAttributionChart } from './CostAttributionChart';
 import { DistributedTracingGraph } from './DistributedTracingGraph';
 import { RegressionAlerts } from './RegressionAlerts';
+import { RealTimeMetricsChart } from './RealTimeMetricsChart';
+import { useTelemetryWebSocket } from '../hooks/useTelemetryWebSocket';
 
 interface ExtensionMetrics {
   invocationCount: number;
@@ -37,6 +39,8 @@ interface CostBreakdown {
     storage: number;
   };
   billingPeriod: string;
+  projectedMonthlyCost?: number;
+  invocations?: number;
 }
 
 interface RegressionAlert {
@@ -85,6 +89,19 @@ export function AnalyticsDashboard() {
   const [timeRange, setTimeRange] = useState<'1h' | '6h' | '24h' | '7d'>('6h');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [liveUpdatesEnabled, setLiveUpdatesEnabled] = useState(true);
+
+  const { connectionState, subscribe } = useTelemetryWebSocket({
+    port: 9877,
+    autoReconnect: true,
+    onEvent: (event) => {
+      if (event.type === 'invocation-completed' || 
+          event.type === 'cost-recorded' || 
+          event.type === 'regression-detected') {
+        loadAnalytics();
+      }
+    },
+  });
 
   const loadAnalytics = useCallback(async () => {
     try {
@@ -113,6 +130,12 @@ export function AnalyticsDashboard() {
     const interval = setInterval(loadAnalytics, 5000);
     return () => clearInterval(interval);
   }, [loadAnalytics]);
+
+  useEffect(() => {
+    if (selectedExtension && connectionState === 'connected') {
+      subscribe([selectedExtension]);
+    }
+  }, [selectedExtension, connectionState, subscribe]);
 
   const formatDuration = (ms: number) => {
     if (ms < 1) return `${(ms * 1000).toFixed(0)}μs`;
@@ -182,6 +205,35 @@ export function AnalyticsDashboard() {
             Analytics Dashboard
           </h3>
           <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-400">WebSocket:</span>
+              <div className={`flex items-center gap-1 px-2 py-1 rounded text-xs ${
+                connectionState === 'connected' 
+                  ? 'bg-green-900/30 text-green-400' 
+                  : connectionState === 'connecting'
+                  ? 'bg-yellow-900/30 text-yellow-400'
+                  : 'bg-red-900/30 text-red-400'
+              }`}>
+                <div className={`w-2 h-2 rounded-full ${
+                  connectionState === 'connected' 
+                    ? 'bg-green-500 animate-pulse' 
+                    : connectionState === 'connecting'
+                    ? 'bg-yellow-500 animate-pulse'
+                    : 'bg-red-500'
+                }`}></div>
+                <span className="capitalize">{connectionState}</span>
+              </div>
+            </div>
+            <button
+              onClick={() => setLiveUpdatesEnabled(!liveUpdatesEnabled)}
+              className={`px-3 py-1 text-sm rounded transition-colors ${
+                liveUpdatesEnabled
+                  ? 'bg-green-600 hover:bg-green-700 text-white'
+                  : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+              }`}
+            >
+              {liveUpdatesEnabled ? 'Live' : 'Paused'}
+            </button>
             <select
               value={timeRange}
               onChange={(e) => setTimeRange(e.target.value as '1h' | '6h' | '24h' | '7d')}
@@ -290,12 +342,11 @@ export function AnalyticsDashboard() {
             </div>
           </div>
 
-          {/* Performance Charts */}
+          {/* Real-Time Metrics and Cost */}
           <div className="grid grid-cols-2 gap-4">
-            <PerformanceChart
+            <RealTimeMetricsChart
               extensionId={selectedExtension}
-              metrics={selectedMetrics}
-              timeRange={timeRange}
+              liveUpdates={liveUpdatesEnabled && connectionState === 'connected'}
             />
             
             {selectedCosts && (
@@ -303,6 +354,15 @@ export function AnalyticsDashboard() {
                 costs={selectedCosts}
               />
             )}
+          </div>
+
+          {/* Performance Charts */}
+          <div className="grid grid-cols-2 gap-4">
+            <PerformanceChart
+              extensionId={selectedExtension}
+              metrics={selectedMetrics}
+              timeRange={timeRange}
+            />
           </div>
 
           {/* Success/Failure Breakdown */}
