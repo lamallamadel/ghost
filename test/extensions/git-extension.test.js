@@ -21,15 +21,23 @@ class MockRPCClient extends ExtensionRPCClient {
         this.gitCommands = [];
         this.fileReads = new Map();
         this.fileWrites = new Map();
-        this.fileExists = new Set();
+        this.existingFiles = new Set();
         this.networkCalls = [];
     }
 
     async call(method, params = {}) {
-        // Handle intent-based calls (the actual RPC format used by ExtensionRPCClient)
+        // Normalise both call styles into a single intent object:
+        //   emitIntent('git', 'exec', {...})  → call('git', { operation, params })
+        //   call('intent', { type, operation, params })
+        const capabilityMethods = ['filesystem', 'network', 'git', 'process', 'ui', 'log'];
+        let intent;
         if (method === 'intent') {
-            const intent = params;
-            
+            intent = params;
+        } else if (capabilityMethods.includes(method)) {
+            intent = { type: method, operation: params.operation, params: params.params || params };
+        }
+
+        if (intent) {
             if (intent.type === 'git' && intent.operation === 'exec') {
                 this.gitCommands.push({ args: intent.params.args, suppressError: intent.params.suppressError });
                 
@@ -64,16 +72,19 @@ class MockRPCClient extends ExtensionRPCClient {
             }
             
             if (intent.type === 'filesystem' && intent.operation === 'exists') {
-                return this.fileExists.has(intent.params.path);
+                return this.existingFiles.has(intent.params.path);
             }
             
             if (intent.type === 'filesystem' && intent.operation === 'readdir') {
-                // Return empty array for directory reads
-                return [];
+                // Return empty directory listing in expected format
+                return { entries: [] };
             }
             
             if (intent.type === 'filesystem' && intent.operation === 'stat') {
-                return { isDirectory: () => false };
+                if (this.existingFiles.has(intent.params.path)) {
+                    return { isDirectory: () => false };
+                }
+                throw new Error(`File not found: ${intent.params.path}`);
             }
             
             if (intent.type === 'network' && intent.operation === 'request') {
@@ -215,8 +226,10 @@ console.log('▶ Test 2: Check Git repository');
         // Test 11: Gateway integration - extension registration
         console.log('▶ Test 11: Gateway integration - extension registration');
         const auditLogPath = path.join(os.tmpdir(), `ghost-git-test-audit-${Date.now()}.log`);
+        const rateLimitPath = path.join(os.tmpdir(), `ghost-rl-test-${Date.now()}.json`);
         const pipeline = new IOPipeline({
-            auditLogPath: auditLogPath
+            auditLogPath: auditLogPath,
+            persistencePath: rateLimitPath
         });
         
         const gitManifest = {
@@ -232,9 +245,9 @@ console.log('▶ Test 2: Check Git repository');
                         'https://api.openai.com'
                     ],
                     rateLimit: {
-                        cir: 1000,
-                        bc: 5000,
-                        be: 10000
+                        cir: 60,
+                        bc: 5,
+                        be: 10
                     }
                 },
                 git: {
@@ -421,12 +434,13 @@ console.log('▶ Test 2: Check Git repository');
         // First, consume all committed tokens
         for (let i = 0; i < 5; i++) {
             const burstIntent = {
+                jsonrpc: '2.0',
+                id: `burst-req-${i}`,
+                method: 'io',
                 type: 'network',
-                operation: 'request',
-                params: { 
-                    url: 'https://api.groq.com/test',
-                    options: {},
-                    payload: {}
+                operation: 'https',
+                params: {
+                    params: { url: 'https://api.groq.com/test' }
                 },
                 extensionId: 'ghost-git-extension',
                 requestId: `burst-req-${i}`
@@ -448,12 +462,13 @@ console.log('▶ Test 2: Check Git repository');
         let violatingRequestFound = false;
         for (let i = 0; i < 100; i++) {
             const overloadIntent = {
+                jsonrpc: '2.0',
+                id: `overload-req-${i}`,
+                method: 'io',
                 type: 'network',
-                operation: 'request',
-                params: { 
-                    url: 'https://api.groq.com/overload',
-                    options: {},
-                    payload: {}
+                operation: 'https',
+                params: {
+                    params: { url: 'https://api.groq.com/overload' }
                 },
                 extensionId: 'ghost-git-extension',
                 requestId: `overload-req-${i}`
@@ -551,7 +566,7 @@ console.log('▶ Test 2: Check Git repository');
             }
         };
         
-        mockRPC.fileExists.add(path.join(process.cwd(), 'package.json'));
+        mockRPC.existingFiles.add(path.join(process.cwd(), 'package.json'));
         mockRPC.fileReads.set(
             path.join(process.cwd(), 'package.json'),
             '{"name":"test","version":"1.0.0"}'
@@ -643,15 +658,18 @@ console.log('▶ Test 2: Check Git repository');
         
         // Gateway should still function after extension error
         const postCrashIntent = {
+            jsonrpc: '2.0',
+            id: 'post-crash-req',
+            method: 'io',
             type: 'filesystem',
             operation: 'read',
-            params: { path: 'test.txt' },
+            params: { params: { path: 'test.txt' } },
             extensionId: 'ghost-git-extension',
             requestId: 'post-crash-req'
         };
-        
+
         const postCrashResult = await pipeline.process(postCrashIntent);
-        assert.ok(postCrashResult.stage === 'EXECUTION' || postCrashResult.success, 
+        assert.ok(postCrashResult.stage === 'EXECUTION' || postCrashResult.success,
             'Gateway should continue functioning after extension error');
         console.log('✅ Extension errors do not affect gateway operation\n');
 
@@ -695,7 +713,7 @@ console.log('▶ Test 2: Check Git repository');
 
         // Test 37: GhostIgnore loading
         console.log('▶ Test 37: GhostIgnore pattern loading');
-        mockRPC.fileExists.add(path.join(process.cwd(), '.ghostignore'));
+        mockRPC.existingFiles.add(path.join(process.cwd(), '.ghostignore'));
         mockRPC.fileReads.set(path.join(process.cwd(), '.ghostignore'), 'node_modules\n*.log\n# comment');
         
         const ignorePatterns = await gitExt.loadGhostIgnore();
@@ -720,9 +738,12 @@ console.log('▶ Test 2: Check Git repository');
         pipeline.registerExtension('ghost-git-e2e', e2eManifest);
         
         const e2eIntent = {
+            jsonrpc: '2.0',
+            id: 'git-e2e-001',
+            method: 'io',
             type: 'git',
             operation: 'log',
-            params: { args: ['--oneline', '-5'] },
+            params: { params: { args: ['--oneline', '-5'] } },
             extensionId: 'ghost-git-e2e',
             requestId: 'git-e2e-001'
         };

@@ -479,7 +479,7 @@ const entropyValidator = new EntropyValidator({
 });
 
 test('Secret detection: Real AWS Access Key format', () => {
-    const content = 'AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE';
+    const content = 'AWS_ACCESS_KEY_ID=AKIA1234567890ABCDEF';
     const result = entropyValidator.scanContent(content);
     assert.strictEqual(result.hasSecrets, true);
     assert.ok(result.secrets.some(s => s.type.includes('AWS')));

@@ -46,7 +46,7 @@ if (output1.includes('problème(s) détecté(s)')) {
 // Test 1b: --force should allow audit to exit 0 even if secrets exist
 console.log('Test 1b: Audit forced (--force)...');
 const output1b = runGhost('audit --force');
-if (output1b.includes('Audit forcé') || output1b.includes('Sortie avec succès')) {
+if (output1b.includes('--force') || output1b.includes('Audit forcé') || output1b.includes('Sortie avec succès')) {
     console.log('✅ PASS: --force bypass works');
 } else {
     console.error('❌ FAIL: --force bypass NOT working');

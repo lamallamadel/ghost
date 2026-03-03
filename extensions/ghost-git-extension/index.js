@@ -64,17 +64,40 @@ class ExtensionWrapper {
     /**
      * Command: version
      * Manages repository versioning.
+     * Subcommands: install-hooks, bump, check
      */
     async version(params) {
-        return await this.git.handleVersionBump(params.bumpType, params.flags);
+        const subcommand = params.subcommand;
+        const flags = params.flags || {};
+
+        if (subcommand === 'install-hooks') {
+            return await this.git.installVersionHooks(flags);
+        }
+
+        // 'bump' subcommand or no subcommand: use --bump flag or subcommand as bumpType
+        const bumpType = flags.bump || flags.bumpType || (subcommand !== 'bump' ? subcommand : undefined);
+        return await this.git.handleVersionBump(bumpType, flags);
     }
 
     /**
      * Command: merge
      * Resolves merge conflicts.
+     * Subcommands: status (report conflicts, exit non-zero if any), resolve (apply strategy)
      */
     async merge(params) {
-        return await this.git.handleMergeResolve(params.strategy, params.flags);
+        const subcommand = params.subcommand;
+        const strategy = params.flags && params.flags.strategy;
+
+        if (subcommand === 'status') {
+            const conflicts = await this.git.getConflictedFiles();
+            if (conflicts.length > 0) {
+                throw new Error(`Merge conflicts detected in: ${conflicts.join(', ')}`);
+            }
+            return { success: true, message: 'No merge conflicts detected' };
+        }
+
+        // resolve subcommand (or default): use strategy from --strategy flag
+        return await this.git.handleMergeResolve(strategy, params.flags);
     }
 
     /**

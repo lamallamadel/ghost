@@ -147,9 +147,9 @@ const { IOPipeline, AuthorizationLayer, AuditLayer } = require('../core/pipeline
     authLayer.resetTrafficPolicer('qos-integration-ext');
     rateLimitBucket.tokens = 1000;
 
-    // Consume all tokens again
+    // Consume all tokens again (use Date.now() to prevent stale-timestamp refill)
     for (let i = 0; i < 8; i++) {
-        trafficPolicerBucket.lastRefill = fixedTime;
+        trafficPolicerBucket.lastRefill = Date.now();
         await testPipeline.testProcess(networkIntent);
     }
 
@@ -157,7 +157,7 @@ const { IOPipeline, AuthorizationLayer, AuditLayer } = require('../core/pipeline
     auditCalled = false;
 
     // 9th request should be denied and audit should NOT be called
-    trafficPolicerBucket.lastRefill = fixedTime;
+    trafficPolicerBucket.lastRefill = Date.now();
     const pipelineResult = await testPipeline.testProcess(networkIntent);
 
     assert.strictEqual(pipelineResult.success, false, 'Pipeline should fail for violating request');

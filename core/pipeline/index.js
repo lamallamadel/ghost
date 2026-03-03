@@ -46,14 +46,18 @@ class IOPipeline {
                 'AUTHORIZATION_DENIED',
                 { reason: authResult.reason, code: authResult.code, severity: 'high', rule: 'AUTHORIZATION' }
             );
-            
-            return {
+
+            const authDeniedResult = {
                 success: false,
                 stage: 'AUTHORIZATION',
                 error: authResult.reason,
                 code: authResult.code,
                 requestId: intent.requestId
             };
+            if (authResult.qos) {
+                authDeniedResult.qos = authResult.qos;
+            }
+            return authDeniedResult;
         }
 
         const manifest = this.extensionManifests.get(intent.extensionId);

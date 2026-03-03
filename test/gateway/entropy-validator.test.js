@@ -96,14 +96,14 @@ test('Shannon entropy: null input → 0 bits', () => {
 console.log('\n⚖️  Threshold Calibration - Real Secrets vs Model Names\n');
 
 test('Real AWS key AKIA... is detected (critical severity)', () => {
-    const content = 'AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE';
+    const content = 'AWS_ACCESS_KEY_ID=AKIA1234567890ABCDEF';
     const result = entropyValidator.scanContent(content);
     assert.strictEqual(result.hasSecrets, true);
     assert.ok(result.secrets.some(s => s.type.includes('AWS') && s.severity === 'critical'));
 });
 
 test('Real AWS secret key (40 chars high entropy) is detected (high severity)', () => {
-    const content = 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY12';
+    const content = 'rHbYwMxKpLzQvNtJdFsGcAeOiUy1234567890AbC';
     const result = entropyValidator.scanContent(content);
     assert.strictEqual(result.hasSecrets, true);
     assert.ok(result.secrets.some(s => s.severity === 'high' || s.severity === 'medium'));
@@ -323,7 +323,7 @@ test('scanContentForIntent: Clean content returns valid=true, violations=[]', ()
 
 test('scanContentForIntent: Secret content returns valid=false with violations', () => {
     const validator = new EntropyValidator();
-    const content = 'AWS_KEY=AKIAIOSFODNN7EXAMPLE';
+    const content = 'AWS_KEY=AKIA1234567890ABCDEF';
     const result = validator.scanContentForIntent(content);
     
     assert.strictEqual(result.valid, false);
@@ -352,7 +352,7 @@ test('scanContentForIntent: Violations have correct structure', () => {
 test('scanContentForIntent: Multiple secrets create multiple violations', () => {
     const validator = new EntropyValidator();
     const content = `
-        AWS_KEY=AKIAIOSFODNN7EXAMPLE
+        AWS_KEY=AKIA1234567890ABCDEF
         GITHUB_TOKEN=ghp_1234567890abcdefghijklmnopqrstuvwxyz
         GROQ_KEY=gsk_abcdefghijklmnopqrstuvwxyz1234567890ABCDEFGH
     `;
@@ -380,7 +380,7 @@ test('Severity: Private key header → critical', () => {
 
 test('Severity: AWS Access Key → critical', () => {
     const validator = new EntropyValidator();
-    const content = 'AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE';
+    const content = 'AWS_ACCESS_KEY_ID=AKIA1234567890ABCDEF';
     const result = validator.scanContent(content);
     
     const awsSecret = result.secrets.find(s => s.type.includes('AWS'));
@@ -410,7 +410,7 @@ test('Severity: Groq API key → critical', () => {
 
 test('Severity: AWS Secret Key (40 chars) → high', () => {
     const validator = new EntropyValidator();
-    const content = 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY';
+    const content = 'rHbYwMxKpLzQvNtJdFsGcAeOiUy1234567890AbC';
     const result = validator.scanContent(content);
     
     const secret = result.secrets.find(s => s.type.includes('AWS Secret') || s.method === 'entropy');
@@ -465,7 +465,7 @@ console.log('\n📊 Summary Statistics Tests\n');
 test('Summary: byMethod tracks regex vs entropy detection', () => {
     const validator = new EntropyValidator();
     const content = `
-        AWS_KEY=AKIAIOSFODNN7EXAMPLE
+        AWS_KEY=AKIA1234567890ABCDEF
         api_key="abcd1234efgh5678ijkl9012mnop3456"
     `;
     const result = validator.scanContent(content);
@@ -478,7 +478,7 @@ test('Summary: bySeverity tracks critical/high/medium counts', () => {
     const validator = new EntropyValidator();
     const content = `
         -----BEGIN RSA PRIVATE KEY-----
-        AWS_KEY=AKIAIOSFODNN7EXAMPLE
+        AWS_KEY=AKIA1234567890ABCDEF
         api_key="abcd1234efgh5678ijkl9012mnop3456"
     `;
     const result = validator.scanContent(content);

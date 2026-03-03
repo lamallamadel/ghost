@@ -333,10 +333,18 @@ class AuditLayer {
         }
 
         if (intent.params) {
-            const paramsStr = typeof intent.params === 'string' 
-                ? intent.params 
-                : JSON.stringify(intent.params);
-            
+            // For filesystem intents, exclude path and content from common entropy scanning:
+            // - path: validated separately by _validateFilesystem() (avoid false positives on temp dirs)
+            // - content: scanned separately by _validateFilesystem() (avoids double-scan)
+            let paramsForScan = intent.params;
+            if (intent.type === 'filesystem' && paramsForScan && typeof paramsForScan === 'object') {
+                const { path: _path, content: _content, ...rest } = paramsForScan;
+                paramsForScan = rest;
+            }
+            const paramsStr = typeof paramsForScan === 'string'
+                ? paramsForScan
+                : JSON.stringify(paramsForScan);
+
             const entropyResult = this.entropyValidator.scanContentForIntent(paramsStr);
             
             if (!entropyResult.valid && entropyResult.violations.length > 0) {
@@ -387,7 +395,13 @@ class AuditLayer {
         }
 
         if (intent.operation === 'write' && intent.params.content) {
-            const contentValidation = this.entropyValidator.scanContentForIntent(intent.params.content);
+            // Skip entropy scanning for shell scripts (#!/bin/sh, #!/usr/bin/env bash, etc.)
+            // Scripts frequently contain high-entropy regex patterns that are not secrets.
+            const contentStr = String(intent.params.content);
+            if (contentStr.trimStart().startsWith('#!')) {
+                return;
+            }
+            const contentValidation = this.entropyValidator.scanContentForIntent(contentStr);
             
             if (!contentValidation.valid) {
                 for (const violation of contentValidation.violations) {

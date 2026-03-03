@@ -149,7 +149,8 @@ class ExtensionRPCClient {
     }
 
     async requestGitExec(args, suppressError = false) {
-        return await this.emitIntent('git', 'exec', { args, suppressError });
+        const result = await this.emitIntent('git', 'exec', { args, suppressError });
+        return result && result.stdout !== undefined ? result.stdout : result;
     }
 
     async requestNetworkCall(options, payload) {
@@ -851,7 +852,48 @@ class GitExtension {
 
     async getRepoRoot() {
         const root = await this.rpc.gitExec(['rev-parse', '--show-toplevel'], true);
-        return root || process.cwd();
+        return (root || process.cwd()).trim();
+    }
+
+    async installVersionHooks(flags = {}) {
+        await this.rpc.log('info', 'Installing version hooks');
+
+        const repoRoot = await this.getRepoRoot();
+        const hookPath = path.join(repoRoot, '.git', 'hooks', 'commit-msg');
+
+        const hookContent = [
+            '#!/bin/sh',
+            '# Ghost version hook - installed by ghost version install-hooks',
+            'MSG=$(cat "$1")',
+            '',
+            '# Determine required bump (Conventional Commits)',
+            'REQUIRED_BUMP=""',
+            'if echo "$MSG" | grep -qE "BREAKING[[:space:]]CHANGE|^[a-zA-Z]+(\\([^)]*\\))?!:"; then',
+            '    REQUIRED_BUMP="major"',
+            'elif echo "$MSG" | grep -qE "^feat(\\([^)]*\\))?:"; then',
+            '    REQUIRED_BUMP="minor"',
+            'elif echo "$MSG" | grep -qE "^fix(\\([^)]*\\))?:|^perf(\\([^)]*\\))?:"; then',
+            '    REQUIRED_BUMP="patch"',
+            'fi',
+            '',
+            'if [ -z "$REQUIRED_BUMP" ]; then',
+            '    exit 0',
+            'fi',
+            '',
+            '# Check if version was bumped (package.json staged with version change)',
+            'if git diff --cached -- package.json | grep -q \'"version"\'; then',
+            '    exit 0',
+            'fi',
+            '',
+            'echo ""',
+            'echo "Error: Commit requires a $REQUIRED_BUMP version bump."',
+            'echo "Run: ghost version bump --bump $REQUIRED_BUMP"',
+            'exit 1'
+        ].join('\n');
+
+        await this.rpc.writeFile(hookPath, hookContent);
+        await this.rpc.log('info', 'Version commit-msg hook installed', { hookPath });
+        return { success: true, message: 'Version hooks installed successfully' };
     }
 
     async loadVersionConfig() {

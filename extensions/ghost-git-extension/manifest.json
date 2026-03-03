@@ -9,11 +9,11 @@
     "filesystem": {
       "read": ["**/*"],
       "write": [
-        ".git/**",
-        "package.json",
-        ".ghost-versionrc",
-        ".ghostignore",
-        ".ghostrc",
+        "**/.git/**",
+        "**/package.json",
+        "**/.ghost-versionrc",
+        "**/.ghostignore",
+        "**/.ghostrc",
         "~/.ghost*",
         "~/.ghost/audit.log"
       ]

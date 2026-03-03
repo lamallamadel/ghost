@@ -34,6 +34,7 @@ class EntropyValidator {
             { name: 'Google Cloud Service Account Key', regex: /\{"type"\s*:\s*"service_account"[^}]*"private_key"\s*:\s*"[^"]+"/gi, severity: 'critical' },
             { name: 'Google Cloud Private Key ID', regex: /"private_key_id"\s*:\s*"[a-f0-9]{40}"/gi, severity: 'critical' },
             { name: 'Stripe Live Secret Key', regex: /sk_live_[a-zA-Z0-9]{24,}/g, severity: 'critical' },
+            { name: 'Stripe Test Secret Key', regex: /sk_test_[a-zA-Z0-9]{24,}/g, severity: 'high' },
             { name: 'Stripe Live Restricted Key', regex: /rk_live_[a-zA-Z0-9]{24,}/g, severity: 'critical' },
             { name: 'Twilio API Key', regex: /SK[a-f0-9]{32}/g, severity: 'critical' },
             { name: 'Azure Storage Connection String', regex: /DefaultEndpointsProtocol=https?;.*AccountName=[^;]+;.*AccountKey=[a-zA-Z0-9+/=]{88}/gi, severity: 'critical' },
@@ -63,7 +64,6 @@ class EntropyValidator {
             'GhostMonitor',
             'startConsoleServer',
             'example',
-            'test',
             'sample',
             'placeholder',
             'dummy',
@@ -145,7 +145,7 @@ class EntropyValidator {
             }
         }
 
-        if (/example|test|sample|placeholder|dummy|fixture|mock/i.test(content)) {
+        if (/\b(example|test|sample|placeholder|dummy|fixture|mock)\b/i.test(content)) {
             return true;
         }
 

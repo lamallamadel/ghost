@@ -356,11 +356,13 @@ class GitExecutor {
     }
 
     async _executeGitCommand(operation, args, cwd, timeout) {
-        const gitArgs = [operation, ...args];
+        // 'exec' means run args directly as the git subcommand (no operation prefix)
+        const gitArgs = operation === 'exec' ? [...args] : [operation, ...args];
         
         try {
+            const shellArgs = gitArgs.map(a => /\s/.test(a) ? `"${a}"` : a);
             const result = await TimeoutManager.withTimeout(
-                execAsync(`git ${gitArgs.join(' ')}`, { cwd }),
+                execAsync(`git ${shellArgs.join(' ')}`, { cwd }),
                 timeout || 30000
             );
             

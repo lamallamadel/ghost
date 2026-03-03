@@ -1,6 +1,6 @@
 {
   "name": "atlasia-ghost",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "description": "Extensible gateway-based Git CLI with AI-powered operations",
   "main": "ghost.js",
   "files": [
@@ -50,5 +50,9 @@
   "homepage": "https://github.com/lamallamadel/ghost#readme",
   "engines": {
     "node": ">=14.0.0"
+  },
+  "dependencies": {
+    "jsonwebtoken": "^9.0.3",
+    "ws": "^8.19.0"
   }
 }

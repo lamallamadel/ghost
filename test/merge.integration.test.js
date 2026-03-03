@@ -20,7 +20,8 @@ function trySh(cmd, cwd) {
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'ghost-merge-'));
 try {
-  sh('git init', tmpRoot);
+  sh('git init -b master', tmpRoot);
+  sh('git config core.autocrlf false', tmpRoot);
   sh('git config user.email "test@example.com"', tmpRoot);
   sh('git config user.name "Test User"', tmpRoot);
 

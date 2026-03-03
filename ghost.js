@@ -431,9 +431,12 @@ class GatewayLauncher {
             } else if (arg === '--no-color') {
                 parsed.flags.noColor = true;
             } else if (arg.startsWith('--')) {
-                parsed.flags[arg.slice(2)] = args[i + 1] || true;
-                if (args[i + 1] && !args[i + 1].startsWith('--')) {
+                const nextArg = args[i + 1];
+                if (nextArg !== undefined && !nextArg.startsWith('-')) {
+                    parsed.flags[arg.slice(2)] = nextArg;
                     i++;
+                } else {
+                    parsed.flags[arg.slice(2)] = true;
                 }
             } else if (!parsed.command) {
                 parsed.command = arg;
@@ -934,17 +937,28 @@ class GatewayLauncher {
                 console.log('');
             }
         } else if (subcommand === 'init') {
-            // Delegate to interactive template wizard for better UX
-            const TemplateWizard = require('./core/template-wizard');
-            const wizard = new TemplateWizard();
-            
             const extensionName = parsedArgs.args[0];
             const templateFlag = parsedArgs.flags.template;
-            
-            await wizard.run({
-                name: extensionName,
-                template: templateFlag
-            });
+
+            // Use interactive template wizard only when running in a real TTY
+            if (process.stdin.isTTY && !templateFlag) {
+                const TemplateWizard = require('./core/template-wizard');
+                const wizard = new TemplateWizard();
+                await wizard.run({ name: extensionName, template: templateFlag });
+            } else if (templateFlag) {
+                // Non-interactive with explicit --template flag
+                const TemplateWizard = require('./core/template-wizard');
+                const wizard = new TemplateWizard();
+                await wizard.run({ name: extensionName, template: templateFlag });
+            } else {
+                // Non-interactive fallback: direct scaffold (CI, piped stdin, tests)
+                if (!extensionName) {
+                    console.error(`${Colors.FAIL}Error: Extension name is required${Colors.ENDC}`);
+                    console.log(`Usage: ghost extension init <name>\n`);
+                    process.exit(1);
+                }
+                await this._scaffoldExtension(extensionName, parsedArgs.flags);
+            }
         } else if (subcommand === 'validate') {
             // VIOLATION: Delegates to _validateExtension which has direct fs operations
             const extPath = parsedArgs.args[0] || '.';
@@ -2698,7 +2712,7 @@ complete -c ghost -l help -s h -d "Show help message"`);
         const manifest = {
             id: extId,
             name: name,
-            version: VERSION,
+            version: '1.0.0',
             description: `${name} extension for Ghost CLI`,
             author: flags.author || 'Your Name',
             main: 'index.js',
@@ -3753,4 +3767,53 @@ if (require.main === module) {
     main().catch(console.error);
 }
 
-module.exports = { GatewayLauncher };
+function semverParse(input) {
+    const raw = (input || '').trim();
+    const cleaned = raw.startsWith('v') ? raw.slice(1) : raw;
+    const match = cleaned.match(/^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/);
+    if (!match) return null;
+    return { major: parseInt(match[1], 10), minor: parseInt(match[2], 10), patch: parseInt(match[3], 10) };
+}
+
+function semverString(v) {
+    return `${v.major}.${v.minor}.${v.patch}`;
+}
+
+function semverCompare(a, b) {
+    if (a.major !== b.major) return a.major > b.major ? 1 : -1;
+    if (a.minor !== b.minor) return a.minor > b.minor ? 1 : -1;
+    if (a.patch !== b.patch) return a.patch > b.patch ? 1 : -1;
+    return 0;
+}
+
+function semverBump(version, bump) {
+    const v = { major: version.major, minor: version.minor, patch: version.patch };
+    if (bump === 'major') return { major: v.major + 1, minor: 0, patch: 0 };
+    if (bump === 'minor') return { major: v.major, minor: v.minor + 1, patch: 0 };
+    if (bump === 'patch') return { major: v.major, minor: v.minor, patch: v.patch + 1 };
+    return v;
+}
+
+function semverDiffType(fromV, toV) {
+    if (semverCompare(toV, fromV) <= 0) return 'none';
+    if (toV.major !== fromV.major) return 'major';
+    if (toV.minor !== fromV.minor) return 'minor';
+    if (toV.patch !== fromV.patch) return 'patch';
+    return 'none';
+}
+
+function conventionalRequiredBumpFromMessage(message) {
+    const msg = (message || '').trim();
+    if (!msg) return null;
+    const firstLine = msg.split('\n')[0].trim();
+    const match = firstLine.match(/^(\w+)(\([^)]+\))?(!)?:\s+/);
+    const type = match ? match[1].toLowerCase() : null;
+    const hasBang = !!(match && match[3] === '!');
+    const hasBreaking = /BREAKING CHANGE/i.test(msg);
+    if (hasBang || hasBreaking) return 'major';
+    if (type === 'feat') return 'minor';
+    if (type === 'fix' || type === 'perf') return 'patch';
+    return null;
+}
+
+module.exports = { GatewayLauncher, semverParse, semverString, semverCompare, semverBump, semverDiffType, conventionalRequiredBumpFromMessage };
