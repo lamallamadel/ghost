@@ -2,17 +2,17 @@
 
 IDE connector and RPC bridge for the Ghost CLI ecosystem.
 
-## Phase 1: RPC Bridge & Connectivity (Completed)
-This phase established the communication layer between external IDEs and the Ghost Gateway.
+## Phase 2: Session & Auth Management (Completed)
+This phase secured the bridge and added robust lifecycle management for editor connections.
 
-### Features
-- **WebSocket Gateway**: Exposes a local endpoint (`ws://localhost:9877`) for IDE plugin connections.
-- **Protocol Mapping**: Translates IDE-specific requests into Ghost native intents.
-- **Service Isolation**: Maintains the zero-trust boundary by ensuring the IDE only has access to explicitly allowed Ghost commands.
+### New Features
+- **Token Handshake**: Mandatory authentication for IDEs to prevent unauthorized local access.
+- **Session Tracking**: Manages multiple concurrent editor sessions with unique IDs.
+- **Heartbeat Monitoring**: (Simulated) Ensures connections are alive and cleans up stale sessions.
+- **Security Toggles**: Supports `--no-auth` for local development environments.
 
-### Commands
-- `ghost bridge start [--port 9877]`: Starts the IDE connector server.
-- `ghost bridge status`: Checks the current state of the bridge and active connections.
+### New Commands
+- `ghost bridge auth --token <t> --editor <name>`: Internal command for IDE handshake.
 
 ## Installation
 ```bash
