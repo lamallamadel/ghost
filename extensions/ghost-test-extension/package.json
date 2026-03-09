@@ -1,0 +1,22 @@
+{
+  "name": "@ghost/test-extension",
+  "version": "1.0.0",
+  "description": "AI-powered test automation and coverage extension for Ghost CLI.",
+  "main": "index.js",
+  "scripts": {
+    "test": "node test.js"
+  },
+  "author": "Ghost CLI Team",
+  "license": "MIT",
+  "dependencies": {
+    "@ghost/extension-sdk": "^1.0.0"
+  },
+  "files": [
+    "index.js",
+    "extension.js",
+    "manifest.json",
+    "lib/**/*",
+    "templates/**/*",
+    "README.md"
+  ]
+}

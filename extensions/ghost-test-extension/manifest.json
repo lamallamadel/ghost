@@ -1,0 +1,32 @@
+{
+  "id": "ghost-test-extension",
+  "name": "Ghost Test Master",
+  "version": "1.0.0",
+  "description": "Automated test runner and AI-powered test generator.",
+  "main": "index.js",
+  "commands": ["run", "gen", "coverage"],
+  "capabilities": {
+    "filesystem": {
+      "read": ["**/*"],
+      "write": [
+        "**/*.test.js",
+        "**/*.spec.js",
+        "**/coverage/**"
+      ]
+    },
+    "network": {
+      "allowlist": [
+        "https://api.groq.com",
+        "https://api.openai.com",
+        "https://api.anthropic.com",
+        "https://generativelanguage.googleapis.com"
+      ]
+    }
+  },
+  "permissions": [
+    "filesystem:read",
+    "filesystem:write",
+    "network:https",
+    "process:spawn"
+  ]
+}
