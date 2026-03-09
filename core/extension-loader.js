@@ -137,10 +137,29 @@ class ExtensionLoader {
             // Phase 6: Detect capability conflicts
             const conflicts = this.dependencyResolver.detectCapabilityConflicts(manifests, loadOrder);
             if (conflicts.length > 0) {
-                console.warn(`[ExtensionLoader] Capability conflicts detected (first-loaded wins):`);
-                conflicts.forEach(conflict => {
-                    console.warn(`  ${conflict.type}: ${conflict.extensions.join(', ')} declare overlapping capabilities`);
-                });
+                const colors = {
+                    softGreen: '\x1b[38;5;120m',
+                    brown: '\x1b[38;5;130m',
+                    reset: '\x1b[0m',
+                    clearLine: '\x1b[2K\r'
+                };
+
+                const spinner = ['/', '-', '\\', '|'];
+                let spinIdx = 0;
+
+                for (let i = 0; i < conflicts.length; i++) {
+                    const conflict = conflicts[i];
+                    const message = `${colors.brown}${spinner[spinIdx]}${colors.reset} ${colors.softGreen}Resolving ${conflict.type} capability for ${conflict.extensions[0]}...${colors.reset}`;
+                    
+                    process.stdout.write(colors.clearLine + message);
+                    
+                    // Small sync delay to simulate loading feel and allow visual transition
+                    const start = Date.now();
+                    while (Date.now() - start < 40) { /* sync delay */ }
+                    
+                    spinIdx = (spinIdx + 1) % spinner.length;
+                }
+                process.stdout.write(colors.clearLine); // Final clear
             }
 
             // Phase 7: Load extensions in dependency order

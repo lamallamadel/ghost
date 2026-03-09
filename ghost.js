@@ -177,7 +177,21 @@ class GatewayLauncher {
         const { SystemExecutor, LogExecutor } = require('./core/pipeline/execute');
         
         basePipeline.executionLayer.registerExecutor('system', new SystemExecutor(async (operation, params) => {
-            if (operation === 'telemetry-start') {
+            if (operation === 'registry') {
+                return {
+                    success: true,
+                    result: this.gateway.listExtensions().map(ext => {
+                        const full = this.gateway.getExtension(ext.id);
+                        return {
+                            id: ext.id,
+                            name: ext.name,
+                            version: ext.version,
+                            path: full.path,
+                            capabilities: full.manifest.capabilities
+                        };
+                    })
+                };
+            } else if (operation === 'telemetry-start') {
                 return await this.startTelemetryServer(params.port || 9876);
             } else if (operation === 'telemetry-stop') {
                 return await this.stopTelemetryServer();
@@ -527,6 +541,17 @@ class GatewayLauncher {
         }
 
         if (parsedArgs.flags.help || !parsedArgs.command) {
+            // Check if we have a modern shell extension available
+            const shellExt = this._findExtensionForCapability('ui:shell');
+            if (shellExt && !parsedArgs.flags.help) {
+                if (this._isVerbose()) console.log(`[Gateway] Entering modern shell mode via ${shellExt.id}...`);
+                await this.forwardToExtension({
+                    ...parsedArgs,
+                    command: shellExt.id,
+                    subcommand: 'start'
+                });
+                return;
+            }
             this.showHelp();
             return;
         }
@@ -2952,6 +2977,26 @@ complete -c ghost -l help -s h -d "Show help message"`);
             console.error(`${Colors.FAIL}Error executing command '${command}': ${error.message}${Colors.ENDC}`);
             process.exit(1);
         }
+    }
+
+    /**
+     * Find an extension that provides a specific capability.
+     */
+    _findExtensionForCapability(capability) {
+        const extensions = this.gateway.listExtensions();
+        for (const ext of extensions) {
+            const fullExt = this.gateway.getExtension(ext.id);
+            if (fullExt && fullExt.manifest && fullExt.manifest.capabilities) {
+                // Check if the capability exists in the manifest
+                const [category, op] = capability.split(':');
+                if (fullExt.manifest.capabilities[category] && 
+                    (fullExt.manifest.capabilities[category] === true || 
+                     fullExt.manifest.capabilities[category][op])) {
+                    return fullExt;
+                }
+            }
+        }
+        return null;
     }
 
     /**

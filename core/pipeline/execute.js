@@ -569,10 +569,16 @@ class SystemExecutor {
 
     async execute(operation, params) {
         return this.circuitBreaker.execute(async () => {
+            if (operation === 'registry') {
+                // Returns the global command registry
+                if (this.callback) {
+                    return await this.callback(operation, params);
+                }
+            }
             if (this.callback) {
                 return await this.callback(operation, params);
             }
-            throw new Error('System executor callback not configured');
+            throw new Error(`System operation ${operation} callback not configured`);
         });
     }
 }
