@@ -2,17 +2,16 @@
 
 AI-powered database query analysis and schema optimization assistant for the Ghost CLI ecosystem.
 
-## Phase 2: Indexing & Schema Audit (Completed)
-This phase added the capability to analyze database schema files for structural issues.
+## Phase 3: Migration Generation (Completed)
+This final phase enabled the automated generation of SQL migration scripts to apply optimizations.
 
 ### New Features
-- **Primary Key Validation**: Ensures every table has a defined primary key.
-- **Foreign Key Indexing**: Detects missing indexes on foreign key columns to optimize join performance.
-- **Data Type Optimization**: Identifies inefficient data types (e.g., oversized VARCHARs).
-- **Static Schema Parsing**: Analyzes `.sql` and migration files using Ghost's filesystem intents.
+- **AI Migration Synthesizer**: Automatically creates DDL scripts (CREATE INDEX, ALTER TABLE) based on audit findings.
+- **Standards Compliance**: Supports standard SQL syntax compatible with major databases (PostgreSQL, MySQL).
+- **Safety First**: Generates migrations in a dedicated `migrations/` folder for review before execution.
 
 ### New Commands
-- `ghost sql audit [path]`: Performs a structural audit of your SQL schema files.
+- `ghost sql generate [path]`: Generates a migration script to fix detected schema issues.
 
 ## Installation
 ```bash

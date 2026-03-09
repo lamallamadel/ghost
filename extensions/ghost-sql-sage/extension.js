@@ -193,13 +193,61 @@ class SQLSageExtension {
         return issues;
     }
 
+    async handleGenerate(params) {
+        const flags = params.flags || {};
+        await this.sdk.requestLog({ level: 'info', message: 'Generating optimization migration scripts...' });
+
+        try {
+            const { provider, apiKey, model } = this._resolveAIConfig(flags);
+            if (!provider || !apiKey) {
+                return { success: false, output: `${Colors.WARNING}AI Provider not configured. Run 'ghost setup'.${Colors.ENDC}` };
+            }
+
+            // 1. Gather audit data (re-run audit for context)
+            const schemaPath = params.args?.[0] || 'schemas';
+            const content = await this.sdk.requestFileRead({ path: schemaPath });
+            const issues = this._analyzeSchema(content);
+
+            if (issues.length === 0) {
+                return { success: true, output: `${Colors.GREEN}✓ No issues found to generate migrations for.${Colors.ENDC}` };
+            }
+
+            // 2. Prepare AI Call
+            const prompt = `Tu es un expert DBA.
+            Génère un script SQL de migration (DDL) pour corriger les problèmes suivants détectés dans le schéma :
+            
+            VULNÉRABILITÉS : ${JSON.stringify(issues)}
+            SCHÉMA ORIGINAL : ${content.substring(0, 2000)}
+            
+            Règles :
+            - Utilise une syntaxe SQL standard ou compatible PostgreSQL/MySQL.
+            - Ajoute des commentaires explicatifs pour chaque changement.
+            - Réponds UNIQUEMENT avec le contenu brut du script SQL.`;
+
+            const migrationContent = await this.callAI(provider, apiKey, model, "Expert DBA SQL", prompt);
+            
+            // 3. Save
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const targetPath = `migrations/optimization-${timestamp}.sql`;
+            await this.sdk.requestFileWrite({ path: targetPath, content: migrationContent.trim() });
+
+            return { 
+                success: true, 
+                output: `${Colors.GREEN}✓ Optimization migration generated at ${targetPath}${Colors.ENDC}\n${Colors.DIM}Review the script before applying it to your database.${Colors.ENDC}`
+            };
+
+        } catch (error) {
+            return { success: false, output: `Generation failed: ${error.message}` };
+        }
+    }
+
     async handleRPCRequest(request) {
         const { method, params = {} } = request;
         try {
             switch (method) {
                 case 'sql.analyze': return await this.handleAnalyze(params);
                 case 'sql.audit': return await this.handleAudit(params);
-                case 'sql.generate': return { success: true, output: 'Optimization generation pending Phase 3.' };
+                case 'sql.generate': return await this.handleGenerate(params);
                 default: throw new Error(`Unknown method: ${method}`);
             }
         } catch (error) {
