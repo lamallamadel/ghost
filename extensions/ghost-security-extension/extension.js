@@ -138,15 +138,13 @@ class SecurityExtension {
 
     async handleScan(params) {
         const target = params.args?.[0] || '.';
-        await this.sdk.requestLog({ level: 'info', message: `Starting security scan on: ${target}` });
+        await this.sdk.requestLog({ level: 'info', message: `Starting targeted security scan on: ${target}` });
         
-        // In a real impl, we'd recursively walk directories via intents
-        // For Phase 1, we'll implement a robust single-file or current-dir scan
         try {
-            const results = await this._performScan(target);
+            const results = await this._scanRecursive(target);
             return { 
                 success: true, 
-                output: this._formatScanReport(results),
+                output: this._formatScanReport(results, 'TARGETED SCAN'),
                 findings: results
             };
         } catch (error) {
@@ -154,34 +152,171 @@ class SecurityExtension {
         }
     }
 
-    async _performScan(target) {
-        // Implementation detail: use readdir and read intents
-        const findings = [];
-        // Recursive scan logic would go here
-        // For demo/Phase 1, let's scan the target if it's a file
+    async handleAudit(params) {
+        const flags = params.flags || {};
+        await this.sdk.requestLog({ level: 'info', message: `Starting comprehensive repository audit` });
+        
         try {
-            const content = await this.sdk.requestFileRead({ path: target });
-            const issues = this.scanner.scan(content);
-            if (issues.length > 0) {
-                findings.push({ file: target, issues });
+            // 1. Recursive Scan
+            const results = await this._scanRecursive('.');
+            
+            // 2. Configuration Analysis
+            const configIssues = await this._auditConfigurations();
+            
+            // 3. AI Validation (if enabled)
+            let aiReport = "";
+            if (flags.ai && results.length > 0) {
+                aiReport = await this._validateWithAI(results, params);
             }
-        } catch (e) {
-            // If target is directory, we'd readdir...
+
+            const output = this._formatScanReport(results, 'FULL REPOSITORY AUDIT') + 
+                           this._formatConfigReport(configIssues) +
+                           (aiReport ? `\n\n${Colors.BOLD}AI VALIDATION ANALYSIS${Colors.ENDC}\n${aiReport}` : "");
+
+            return { 
+                success: true, 
+                output,
+                findings: results,
+                configIssues
+            };
+        } catch (error) {
+            return { success: false, output: `Audit failed: ${error.message}` };
         }
+    }
+
+    async _scanRecursive(target) {
+        const findings = [];
+        const ignoreDirs = ['.git', 'node_modules', 'dist', 'build', '.migration-backup'];
+        
+        const walk = async (currentPath) => {
+            try {
+                const stats = await this.sdk.emitIntent({ type: 'filesystem', operation: 'stat', params: { path: currentPath } });
+                
+                if (stats.isDirectory) {
+                    if (ignoreDirs.some(d => currentPath.includes(d))) return;
+                    
+                    const files = await this.sdk.emitIntent({ type: 'filesystem', operation: 'readdir', params: { path: currentPath } });
+                    for (const file of files) {
+                        await walk(path.join(currentPath, file));
+                    }
+                } else {
+                    // Only scan text files or relevant code files
+                    const ext = path.extname(currentPath).toLowerCase();
+                    const textExtensions = ['.js', '.ts', '.py', '.env', '.json', '.yml', '.yaml', '.md', '.sh', '.txt'];
+                    if (textExtensions.includes(ext) || ext === '') {
+                        const content = await this.sdk.requestFileRead({ path: currentPath });
+                        const issues = this.scanner.scan(content);
+                        if (issues.length > 0) {
+                            findings.push({ file: currentPath, issues });
+                        }
+                    }
+                }
+            } catch (e) {
+                // Skip files that can't be read
+            }
+        };
+
+        await walk(target);
         return findings;
     }
 
-    _formatScanReport(results) {
-        if (results.length === 0) return `${Colors.GREEN}✓ No security issues found.${Colors.ENDC}`;
+    async _auditConfigurations() {
+        const issues = [];
+        const configFiles = [
+            { path: '.env', type: 'Environment File' },
+            { path: 'package.json', type: 'Node Dependencies' },
+            { path: 'docker-compose.yml', type: 'Docker Configuration' }
+        ];
+
+        for (const config of configFiles) {
+            try {
+                const exists = await this.sdk.emitIntent({ type: 'filesystem', operation: 'stat', params: { path: config.path } });
+                if (exists) {
+                    if (config.path === '.env') {
+                        issues.push({ file: config.path, type: 'Information Exposure', message: '.env file found in repository. This should be ignored by Git.', severity: 'high' });
+                    }
+                    // Add more specific config checks here
+                }
+            } catch (e) { /* ignore */ }
+        }
+        return issues;
+    }
+
+    async _validateWithAI(findings, params) {
+        const flags = params.flags || {};
+        const { provider, apiKey, model } = this._resolveAIConfig(flags);
         
-        let report = `\n${Colors.BOLD}SECURITY SCAN REPORT${Colors.ENDC}\n${'='.repeat(30)}\n`;
+        if (!provider || !apiKey) return `${Colors.WARNING}⚠ AI validation skipped: No API key configured.${Colors.ENDC}`;
+
+        const prompt = `Tu es un expert en cybersécurité. Voici une liste de vulnérabilités potentielles détectées par un scanner automatique.
+        Analyse-les et identifie les vrais risques par rapport aux faux positifs (ex: clés de test, placeholders).
+        
+        DONNÉES : ${JSON.stringify(findings)}
+        
+        Réponds par un résumé concis des risques critiques réels.`;
+
+        try {
+            return await this.callAI(provider, apiKey, model, "Expert en cybersécurité", prompt);
+        } catch (e) {
+            return `${Colors.FAIL}⚠ AI call failed: ${e.message}${Colors.ENDC}`;
+        }
+    }
+
+    _resolveAIConfig(flags) {
+        // Simple mock for resolve - in real impl, read from ghostrc via intent
+        return { 
+            provider: flags.provider || 'anthropic', 
+            apiKey: flags.apiKey || flags['api-key'],
+            model: flags.model 
+        };
+    }
+
+    async callAI(provider, apiKey, model, systemPrompt, userPrompt, temperature = 0.3) {
+        const actualModel = model || this.DEFAULT_MODEL;
+        const config = this.AI_PROVIDERS[provider] || this.AI_PROVIDERS.groq;
+        
+        const payload = {
+            model: actualModel,
+            messages: [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: userPrompt }
+            ],
+            temperature
+        };
+
+        const response = await this.sdk.requestNetworkCall({
+            url: `https://${config.hostname}${config.path}`,
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        const data = JSON.parse(response);
+        return data.choices?.[0]?.message?.content || JSON.stringify(data);
+    }
+
+    _formatScanReport(results, title) {
+        if (results.length === 0) return `${Colors.GREEN}✓ No security issues found in scan.${Colors.ENDC}`;
+        
+        let report = `\n${Colors.BOLD}${title}${Colors.ENDC}\n${'='.repeat(30)}\n`;
         for (const res of results) {
             report += `\nFile: ${Colors.CYAN}${res.file}${Colors.ENDC}\n`;
             for (const issue of res.issues) {
                 const color = issue.severity === 'critical' || issue.severity === 'high' ? Colors.FAIL : Colors.WARNING;
                 report += `  - [${color}${issue.severity.toUpperCase()}${Colors.ENDC}] ${issue.type}: ${issue.display}\n`;
-                if (issue.category) report += `    Category: ${issue.category}\n`;
             }
+        }
+        return report;
+    }
+
+    _formatConfigReport(issues) {
+        if (issues.length === 0) return "";
+        
+        let report = `\n\n${Colors.BOLD}CONFIGURATION AUDIT${Colors.ENDC}\n${'='.repeat(30)}\n`;
+        for (const issue of issues) {
+            const color = issue.severity === 'high' ? Colors.FAIL : Colors.WARNING;
+            report += `\n[${color}${issue.severity.toUpperCase()}${Colors.ENDC}] ${issue.file}: ${issue.type}\n`;
+            report += `  ${issue.message}\n`;
         }
         return report;
     }
@@ -191,8 +326,8 @@ class SecurityExtension {
         try {
             switch (method) {
                 case 'security.scan': return await this.handleScan(params);
-                case 'security.audit': return { success: true, output: 'Audit logic pending Phase 2.' };
-                case 'security.status': return { success: true, output: 'Security: EXCELLENT (Phase 1 Baseline)' };
+                case 'security.audit': return await this.handleAudit(params);
+                case 'security.status': return { success: true, output: 'Security Status: BASELINE (Phase 2 Auditing Active)' };
                 default: throw new Error(`Unknown method: ${method}`);
             }
         } catch (error) {

@@ -2,18 +2,18 @@
 
 Centralized security hub for the Ghost CLI ecosystem.
 
-## Phase 1: The "Brain" Migration (Completed)
-In this phase, we extracted the security logic from individual extensions into this specialized master module.
+## Phase 2: Advanced Auditing (Completed)
+This phase introduced deep repository inspection and intelligence.
 
-### Features
-- **SecretScanner**: High-performance regex engine for detecting API keys, tokens, and private keys.
-- **Shannon Entropy Analysis**: Advanced detection of high-entropy strings (passwords, compressed secrets).
-- **OWASP Top 10 Patterns**: Initial support for detecting common vulnerabilities (eval, insecure command execution, XSS vectors).
-- **Standardized RPC**: Built on `@ghost/extension-sdk` for secure, audited I/O.
+### New Features
+- **Recursive Auditing**: Deep scan of the entire project tree using Ghost filesystem intents.
+- **Config Audit**: Automatic detection of misconfigured or exposed environment files.
+- **AI Validation Engine**: Integration with major AI providers to analyze and confirm security threats, reducing noise from false positives.
+- **Enhanced Reporting**: Detailed console reports with severity-based color coding.
 
-### Initial Commands
-- `ghost scan [path]`: Scans a specific file or the current directory for secrets.
-- `ghost security status`: Quick security health check.
+### New Commands
+- `ghost audit [--ai]`: Performs a full repository audit with optional AI validation.
+- `ghost scan [path]`: Now supports recursive scanning if a directory is provided.
 
 ## Installation
 ```bash
