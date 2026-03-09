@@ -1,63 +1,65 @@
 {
   "name": "atlasia-ghost",
   "version": "1.1.2",
-  "description": "Sovereign AI-powered Git assistant and security gateway. Orchestrates sandboxed extensions via an asynchronous JSON-RPC bus with NIST SI-10 compliance.",
+  "description": "Zero-Trust Git governance CLI: verify commits, enforce policy gates, and run sandboxed extensions (sovereign alternative to Husky/Commitlint).",
   "main": "ghost.js",
-  "files": [
-    "ghost.js",
-    "lib/**/*.js",
-    "core/**/*.js",
-    "core/**/*.json",
-    "extensions/**",
-    "packages/**",
-    "scripts/install.sh",
-    "scripts/install.ps1",
-    "docs/**/*.md",
-    "LICENSE",
-    "README.md",
-    "AGENTS.md",
-    "INSTALL.md"
-  ],
   "bin": {
     "ghost": "ghost.js"
   },
-  "workspaces": [
-    "packages/*"
-  ],
-  "scripts": {
-    "test": "node test.js",
-    "start": "node ghost.js"
-  },
+  "author": "Adel Lamallam",
+  "license": "MIT",
+  "homepage": "https://github.com/lamallamadel/ghost#readme",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/lamallamadel/ghost.git"
   },
-  "keywords": [
-    "git",
-    "ai",
-    "security",
-    "nist-si-10",
-    "zero-trust",
-    "gateway",
-    "orchestrator",
-    "devsecops",
-    "claude",
-    "anthropic",
-    "automation",
-    "governance",
-    "sovereign-ai"
-  ],
-  "author": "Atlasia",
-  "license": "MIT",
   "bugs": {
     "url": "https://github.com/lamallamadel/ghost/issues"
   },
-  "homepage": "https://github.com/lamallamadel/ghost#readme",
+  "keywords": [
+    "git",
+    "commit",
+    "conventional-commits",
+    "commitlint",
+    "husky",
+    "hooks",
+    "pre-commit",
+    "ci",
+    "policy",
+    "policy-as-code",
+    "governance",
+    "zero-trust",
+    "security",
+    "sandbox",
+    "sandboxed-extensions",
+    "extensions",
+    "marketplace",
+    "ai",
+    "ai-orchestrator",
+    "nist",
+    "si-10",
+    "supply-chain",
+    "devsecops",
+    "sovereign-ai"
+  ],
   "engines": {
-    "node": ">=14.0.0"
+    "node": ">=18.0.0"
   },
+  "files": [
+    "ghost.js",
+    "core/",
+    "lib/",
+    "extensions/ghost-git-extension/",
+    "packages/extension-sdk/",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
   "dependencies": {
     "jsonwebtoken": "^9.0.3",
     "ws": "^8.19.0"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
