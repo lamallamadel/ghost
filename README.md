@@ -3,7 +3,7 @@
 
 [![npm version](https://img.shields.io/npm/v/atlasia-ghost.svg)](https://www.npmjs.com/package/atlasia-ghost)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![NIST SI-10 Compliant](https://img.shields.io/badge/Security-NIST%20SI--10-blue.svg)](#security)
+[![NIST SI-10 Compliant](https://img.shields.io/badge/Security-NIST%20SI--10-blue.svg)](#security-compliance-nist-si-10)
 [![Standard Library](https://img.shields.io/badge/Extensions-14%20Native-success)](#standard-library)
 
 **Atlasia Ghost** is a **Zero-Trust Git governance CLI**: it **verifies commits**, enforces **policy gates** (local + CI), and runs a **sandboxed Standard Library of extensions**.
@@ -15,82 +15,68 @@
 ## 🏛️ Why Ghost exists?
 
 Most tools solve **format** (commitlint) or **triggering** (husky).
-Ghost solves **governance**: *“Is this change allowed? Is this commit explainable? Is this repo policy satisfied?”*
+Ghost solves **governance**: *"Is this change allowed? Is this commit explainable? Is this repo policy satisfied?"*
 
-Ghost acts as a secure air-gap between your environment and AI models, executing all operations through an audited **NIST SI-10 compliant** pipeline.
+Ghost acts as a governance gateway between your repository/CI and external tools/agents, executing all operations through an audited pipeline.
 
 ---
 
-## 📦 Standard Library (14 Native Extensions)
+## 📦 Standard Library
 
-Ghost ships with a robust suite of native, sandboxed extensions:
+Ghost ships with a **native Standard Library** (composed of 14 core modules). 
+Depending on your environment, additional extensions may be loaded.
 
-| Extension | Category | Purpose |
+✅ **Runtime truth (Current Inventory)**:
+To see exactly which extensions are active on your machine, run:
+```bash
+ghost extension list
+```
+
+### Core Extension Roles (Verified via `ghost --help`)
+| Extension | Purpose | Command Example |
 | :--- | :--- | :--- |
-| **`ghost-git`** | Git | AI commits, SemVer, Conventional Commits validation |
-| **`ghost-security`** | Security | NIST SI-10 scanning, Secret detection, Entropy analysis |
-| **`ghost-ai`** | AI | Multi-provider orchestration (Anthropic, OpenAI, Groq, Gemini) |
-| **`ghost-docs`** | Docs | AI-powered README and technical documentation generation |
-| **`ghost-agent`** | Agent | Autonomous planning and multi-step task execution |
-| **`ghost-test`** | QA | AI unit test generation and coverage optimization |
-| **`ghost-ci`** | CI/CD | Pipeline guarding and commit message enforcement |
-| **`ghost-mesh`** | Mesh | Agent-to-agent networking and distributed telemetry |
-| **`ghost-policy`** | Governance | Global security policy enforcement (Policy-as-Code) |
-| **`ghost-author`** | Release | Release notes automation and semantic versioning |
-| **`ghost-deps`** | Deps | Dependency conflict resolution and vulnerability mapping |
-| **`ghost-desktop`** | Visual | Real-time monitoring and visual telemetry console |
-| **`ghost-system`** | Core | Centralized telemetry and configuration management |
-| **`ghost-market`** | Platform | Extension discovery and installation (Standard & 3rd party) |
+| **`ghost-git`** | AI Commits & SemVer | `ghost commit --dry-run` |
+| **`ghost-security`** | NIST SI-10 Compliance | `ghost compliance` |
+| **`ghost-docs`** | AI Documentation | `ghost initialize` |
+| **`ghost-ai`** | LLM Orchestration | `ghost setup` |
+| **`ghost-desktop`** | Visual Monitoring | `ghost console start` |
+| **`ghost-policy`** | Policy Enforcement | `ghost verify` |
 
 ---
 
-## 🏛️ Architecture (Mental Model)
-
-Ghost is built around a **Gateway** that routes requests into **isolated extensions**.
-
-```
-┌─────────────┐     ┌───────────────┐     ┌──────────────────────────┐
-│ Git / CI    │ ──▶ │ Ghost Gateway │ ──▶ │ Extensions (Sandboxed)   │
-└─────────────┘     └───────────────┘     └──────────────────────────┘
-                           │
-                           └── Policy Store (NIST SI-10 / Policy-as-Code)
-```
-
-### Zero-Trust Principles
-- **Explicit Permissions**: Extensions have zero implicit access to your filesystem or network.
-- **Deterministic Gates**: Clear exit codes and stable results, optimized for high-performance CI.
-- **Auditability**: Immutable logs (`~/.ghost/audit.log`) record every intent and decision.
-
----
-
-## 🚀 Quick Start
+## 🚀 Quick Start (Replayable)
 
 ```bash
 npm install -g atlasia-ghost
 
-# Setup AI (Claude 4.6, GPT-4o, etc.)
+# 1. Health check & inventory
+ghost doctor
+ghost extension list
+
+# 2. Setup AI (Claude 4.6, GPT-4o, etc.)
 ghost setup
 
-# Generate a professional AI commit
-ghost commit
+# 3. View Gateway status & telemetry
+ghost gateway status --verbose --json
 
-# Run security audit with NIST compliance check
-ghost audit --verbose
+# 4. Execute a governance check
+ghost verify --help
 ```
 
 ---
 
-## 🛡️ Security Compliance (NIST SI-10 Mapping)
+## 🛡️ Security Compliance (NIST SI-10)
 
-Ghost CLI's architecture is mapped directly to **NIST SP 800-53 SI-10** controls:
+Ghost CLI's architecture is designed to satisfy **NIST SP 800-53 SI-10** (Information Input Validation).
 
-| NIST Control | Ghost Mechanism | Technical Implementation |
-| :--- | :--- | :--- |
-| **Input Validation** | JSON-RPC Schema Enforcement | `core/pipeline/intercept.js` |
-| **Path Sanitization** | Glob-based Root Isolation | `core/validators/path-validator.js` |
-| **Data Scruubing** | High-Entropy Secret Masking | `core/pipeline/audit.js` |
-| **Integrity Checks** | Immutable Audit Logging | `core/pipeline/audit.js` |
-| **Fault Isolation** | Process-level Sandboxing | `core/runtime.js` |
+**Replayable Evidence**:
+- **Telemetry Spans**: Visible via `ghost gateway spans`.
+- **PII Scrubbing**: Emails, IPs, and home paths are automatically redacted in logs.
+- **Auditability**: Use `ghost gateway logs` and `ghost logs info` to inspect governance trails.
+- **Config Lockdown**: Centralized configuration at `~/.ghost/config/ghostrc.json`.
+- **Log Isolation**: All telemetry and audit logs are stored under `~/.ghost/telemetry/`.
+
+For a full mapping of NIST controls to Ghost's implementation, see [SECURITY.md](./SECURITY.md).
 
 ---
 
@@ -98,19 +84,16 @@ Ghost CLI's architecture is mapped directly to **NIST SP 800-53 SI-10** controls
 
 ### Does Ghost send my code to the internet?
 - **Default**: Ghost is **local-first**. No code exfiltration happens by default.
-- **AI Usage**: Remote providers (Anthropic, OpenAI) are only contacted if **explicitly configured**.
-- **Secret Protection**: The core's Audit Layer automatically masks keys and tokens before they are recorded in any logs or telemetry.
-
-### Verifiable Security
-All security logic is located in the `core/pipeline/` and `core/validators/` directories for transparent public audit.
+- **AI Usage**: Remote providers (Anthropic, OpenAI) are only contacted if **explicitly configured** and scoped.
+- **Secret Protection**: The core's Audit Layer masks keys and tokens before they reach logs or telemetry.
 
 ---
 
 ## 📂 Project Structure & Artifacts
 
 - **`docs/`**: Official, versioned documentation and architecture guides.
-- **`ext_mise_en_route/`**: Execution sandbox used for integration testing and feature demonstration. 
-  - *Note*: Files in this directory (e.g., `README.md`) are generated at runtime and are ignored by Git to ensure deterministic source control. They serve as **functional proof** of extension capabilities.
+- **`ext_mise_en_route/`**: Execution sandbox used for integration testing and feature demonstration.
+  - *Note*: Files generated here are ignored by Git. See [README.note.md](./ext_mise_en_route/README.note.md) for reproduction steps.
 
 ---
 
