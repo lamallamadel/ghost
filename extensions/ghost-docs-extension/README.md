@@ -2,16 +2,16 @@
 
 AI-powered documentation engine for the Ghost CLI ecosystem.
 
-## Phase 1: Context Intelligence (Completed)
-This phase established the foundation for project analysis and automated documentation.
+## Phase 2: Architecture & Diagrams (Completed)
+This phase added the ability to visualize project structure and dependencies.
 
-### Features
-- **ProjectAnalyzer**: Detects project stack (Node.js, Python, Go, Rust) and maps file structures.
-- **AI README Generation**: Generates professional `README.md` files based on real project context.
-- **Multi-Provider AI**: Support for Anthropic, Groq, OpenAI, and Gemini.
+### New Features
+- **Dependency Mapping**: Automatically parses source files to identify relationships between modules.
+- **Mermaid Graph Generation**: Creates dynamic architecture diagrams in Mermaid format.
+- **Architecture Report**: Generates `docs/ARCHITECTURE.md` containing the project's dependency graph.
 
-### Commands
-- `ghost docs init`: Analyzes the project and generates a comprehensive `README.md`.
+### New Commands
+- `ghost docs diagram`: Generates a dependency graph and saves it to the `docs/` directory.
 
 ## Installation
 ```bash

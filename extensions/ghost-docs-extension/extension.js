@@ -37,21 +37,66 @@ class ProjectAnalyzer {
         if (rootFiles.includes('go.mod')) stack.languages.push('Go');
         if (rootFiles.includes('Cargo.toml')) stack.languages.push('Rust');
         
-        // Detailed framework detection could be added here by reading package.json
         return stack;
     }
 
     async getFileTree(dir = '.', depth = 2) {
-        if (depth < 0) return [];
-        const entries = await this.sdk.emitIntent({ type: 'filesystem', operation: 'readdir', params: { path: dir } });
         const tree = [];
+        const ignoreDirs = ['node_modules', '.git', 'dist', '.migration-backup', 'assets'];
         
-        for (const entry of entries) {
-            if (['node_modules', '.git', 'dist', '.migration-backup'].includes(entry)) continue;
-            tree.push(path.join(dir, entry));
-            // Simple depth-limited recursion would go here
-        }
+        const walk = async (currentDir, currentDepth) => {
+            if (currentDepth > depth) return;
+            try {
+                const entries = await this.sdk.emitIntent({ type: 'filesystem', operation: 'readdir', params: { path: currentDir } });
+                for (const entry of entries) {
+                    if (ignoreDirs.includes(entry)) continue;
+                    const fullPath = path.join(currentDir, entry);
+                    tree.push(fullPath);
+                    
+                    try {
+                        const stats = await this.sdk.emitIntent({ type: 'filesystem', operation: 'stat', params: { path: fullPath } });
+                        if (stats.isDirectory) await walk(fullPath, currentDepth + 1);
+                    } catch (e) {}
+                }
+            } catch (e) {}
+        };
+
+        await walk(dir, 0);
         return tree;
+    }
+
+    async mapDependencies() {
+        const files = await this.getFileTree('.', 1);
+        const jsFiles = files.filter(f => f.endsWith('.js') || f.endsWith('.ts'));
+        const deps = [];
+
+        for (const file of jsFiles) {
+            try {
+                const content = await this.sdk.requestFileRead({ path: file });
+                // Simple regex to find local requires/imports
+                const requireRegex = /require\(['"](\.\.?\/.*?)['"]\)/g;
+                const importRegex = /from\s+['"](\.\.?\/.*?)['"]/g;
+                
+                let match;
+                while ((match = requireRegex.exec(content)) !== null) {
+                    deps.push({ from: file, to: match[1] });
+                }
+                while ((match = importRegex.exec(content)) !== null) {
+                    deps.push({ from: file, to: match[1] });
+                }
+            } catch (e) {}
+        }
+        return deps;
+    }
+
+    generateMermaidGraph(deps) {
+        let graph = "graph TD\n";
+        for (const dep of deps) {
+            const from = dep.from.replace(/\\/g, '/');
+            const to = dep.to.replace(/\\/g, '/');
+            graph += `    ${from} --> ${to}\n`;
+        }
+        return graph;
     }
 }
 
@@ -78,16 +123,10 @@ class DocsExtension {
         const context = {
             stack,
             fileCount: files.length,
-            structure: files.slice(0, 20) // Give AI a sample
+            structure: files.slice(0, 20)
         };
 
-        const prompt = `Tu es un rédacteur technique expert. Analyse ce projet et génère un README.md professionnel, complet et structuré.
-        
-        STACK : ${JSON.stringify(stack)}
-        STRUCTURE : ${JSON.stringify(context.structure)}
-        
-        Inclus : Description, Installation, Usage, et Architecture.
-        Réponds UNIQUEMENT avec le contenu du fichier Markdown.`;
+        const prompt = `Tu es un rédacteur technique expert. Analyse ce projet et génère un README.md professionnel, complet et structuré.\n\nSTACK : ${JSON.stringify(stack)}\nSTRUCTURE : ${JSON.stringify(context.structure)}\n\nInclus : Description, Installation, Usage, et Architecture.\nRéponds UNIQUEMENT avec le contenu du fichier Markdown.`;
 
         try {
             const { provider, apiKey, model } = this._resolveAIConfig(flags);
@@ -102,33 +141,24 @@ class DocsExtension {
         }
     }
 
-    _resolveAIConfig(flags) {
-        return { 
-            provider: flags.provider || 'anthropic', 
-            apiKey: flags.apiKey || flags['api-key'],
-            model: flags.model 
-        };
-    }
-
-    async callAI(provider, apiKey, model, systemPrompt, userPrompt) {
-        const actualModel = model || this.DEFAULT_MODEL;
-        const config = this.AI_PROVIDERS[provider] || this.AI_PROVIDERS.groq;
+    async handleDiagram(params) {
+        await this.sdk.requestLog({ level: 'info', message: 'Mapping dependencies and generating architecture diagram...' });
         
-        const payload = {
-            model: actualModel,
-            messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }],
-            temperature: 0.2
-        };
-
-        const response = await this.sdk.requestNetworkCall({
-            url: `https://${config.hostname}${config.path}`,
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-
-        const data = JSON.parse(response);
-        return data.choices?.[0]?.message?.content || JSON.stringify(data);
+        try {
+            const deps = await this.analyzer.mapDependencies();
+            const mermaid = this.analyzer.generateMermaidGraph(deps);
+            
+            const report = `# Architectural Diagram\n\nGenerated by Ghost Documentation Bot\n\n\`\`\`mermaid\n${mermaid}\n\`\`\`\n`;
+            await this.sdk.requestFileWrite({ path: 'docs/ARCHITECTURE.md', content: report });
+            
+            return { 
+                success: true, 
+                output: `${Colors.GREEN}✓ Architecture diagram generated at docs/ARCHITECTURE.md${Colors.ENDC}`,
+                graph: mermaid 
+            };
+        } catch (error) {
+            return { success: false, output: `Diagram generation failed: ${error.message}` };
+        }
     }
 
     async handleRPCRequest(request) {
@@ -136,8 +166,8 @@ class DocsExtension {
         try {
             switch (method) {
                 case 'docs.init': return await this.handleInit(params);
-                case 'docs.generate': return { success: true, output: 'API generation pending Phase 2.' };
-                case 'docs.diagram': return { success: true, output: 'Diagram generation pending Phase 2.' };
+                case 'docs.diagram': return await this.handleDiagram(params);
+                case 'docs.generate': return { success: true, output: 'API generation pending Phase 3.' };
                 case 'docs.chat': return { success: true, output: 'Interactive chat pending Phase 3.' };
                 default: throw new Error(`Unknown method: ${method}`);
             }
