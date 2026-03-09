@@ -1,1 +1,5 @@
-test-ignore-pattern
+# Ghost CLI ignore file
+# Ignore the global config file which contains secrets
+~/.ghost/config/ghostrc.json
+.ghostrc.json
+ghostrc.json

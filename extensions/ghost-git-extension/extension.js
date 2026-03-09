@@ -28,6 +28,57 @@ class ExtensionRPCClient {
         throw new Error(`No core handler registered for RPC call: ${method}`);
     }
 
+    _sanitizeParams(params) {
+        if (!params) return params;
+        const sanitized = JSON.parse(JSON.stringify(params)); // Deep copy
+
+        const maskSecret = (val) => {
+            if (typeof val !== 'string') return val;
+            if (val.length < 12) return val;
+            return val.substring(0, 8) + '...' + val.substring(val.length - 4);
+        };
+
+        // Sanitize network intent parameters
+        if (sanitized.url && typeof sanitized.url === 'string') {
+            // Mask API keys in URL (e.g., ?key=...)
+            sanitized.url = sanitized.url.replace(/(key=)([a-zA-Z0-9_\-]+)/g, (m, p1, p2) => p1 + maskSecret(p2));
+        }
+
+        if (sanitized.headers && typeof sanitized.headers === 'object') {
+            const sensitiveHeaders = ['x-api-key', 'authorization', 'api-key', 'token'];
+            for (const key of Object.keys(sanitized.headers)) {
+                if (sensitiveHeaders.includes(key.toLowerCase())) {
+                    sanitized.headers[key] = maskSecret(sanitized.headers[key]);
+                }
+            }
+        }
+
+        if (sanitized.body && typeof sanitized.body === 'string') {
+            // Mask common secret patterns in the body (JSON)
+            try {
+                let bodyObj = JSON.parse(sanitized.body);
+                const maskInObj = (obj) => {
+                    const sensitiveKeys = ['apiKey', 'api_key', 'token', 'secret', 'password', 'key'];
+                    for (const k of Object.keys(obj)) {
+                        if (sensitiveKeys.some(sk => k.toLowerCase().includes(sk))) {
+                            obj[k] = maskSecret(obj[k]);
+                        } else if (typeof obj[k] === 'object' && obj[k] !== null) {
+                            maskInObj(obj[k]);
+                        }
+                    }
+                };
+                maskInObj(bodyObj);
+                sanitized.body = JSON.stringify(bodyObj);
+            } catch (e) {
+                // If not JSON, use regex for common patterns
+                sanitized.body = sanitized.body.replace(/(sk-ant-[a-zA-Z0-9\-]{40,})/g, m => maskSecret(m));
+                sanitized.body = sanitized.body.replace(/(gsk_[a-zA-Z0-9]{40,})/g, m => maskSecret(m));
+            }
+        }
+
+        return sanitized;
+    }
+
     async call(method, params = {}) {
         const id = ++this.requestId;
         
@@ -43,7 +94,7 @@ class ExtensionRPCClient {
                 params: {
                     type: method,
                     operation: params.operation,
-                    params: params.params || params
+                    params: this._sanitizeParams(params.params || params)
                 }
             };
         } else {
@@ -51,7 +102,7 @@ class ExtensionRPCClient {
                 jsonrpc: "2.0",
                 id,
                 method,
-                params
+                params: this._sanitizeParams(params)
             };
         }
 
@@ -92,9 +143,7 @@ class ExtensionRPCClient {
         if (!args || args.length === 0) {
             throw new Error('gitExec requires at least one argument');
         }
-        const operation = args[0];
-        const remainingArgs = args.slice(1);
-        const result = await this.call('git', { operation: operation, params: { args: remainingArgs } });
+        const result = await this.call('git', { operation: 'exec', params: { args: args } });
         return result && result.stdout !== undefined ? result.stdout : result;
     }
 
@@ -154,7 +203,15 @@ class ExtensionRPCClient {
     }
 
     async requestNetworkCall(options, payload) {
-        return await this.emitIntent('network', 'request', { options, payload });
+        const url = `https://${options.hostname}${options.path}`;
+        const params = {
+            url,
+            method: options.method || 'GET',
+            headers: options.headers || {},
+            body: payload ? (typeof payload === 'string' ? payload : JSON.stringify(payload)) : undefined
+        };
+        const result = await this.emitIntent('network', 'https', params);
+        return result && result.body !== undefined ? result.body : result;
     }
 
     async requestExecSync(command, options = {}) {
@@ -451,63 +508,86 @@ class GitExtension {
     }
 
     async callAI(provider, apiKey, model, systemPrompt, userPrompt, temperature = 0.3, jsonMode = false) {
-        await this.rpc.log('info', `Initiating AI call`, { 
-            provider, 
-            model, 
-            temperature, 
-            jsonMode,
-            promptLength: userPrompt.length 
-        });
+        const actualModel = model || this.DEFAULT_MODEL;
+        try {
+            await this.rpc.log('info', `Initiating AI call`, { 
+                provider, 
+                model: actualModel, 
+                temperature, 
+                jsonMode,
+                promptLength: userPrompt.length 
+            });
 
-        const config = this.AI_PROVIDERS[provider] || this.AI_PROVIDERS.groq;
-        
-        if (provider === 'anthropic') {
-            return await this.callAnthropic(config, apiKey, model, systemPrompt, userPrompt, temperature);
-        } else if (provider === 'gemini') {
-            return await this.callGemini(config, apiKey, model, systemPrompt, userPrompt, temperature);
-        }
+            const config = this.AI_PROVIDERS[provider] || this.AI_PROVIDERS.groq;
+            
+            let result;
+            if (provider === 'anthropic') {
+                result = await this.callAnthropic(config, apiKey, actualModel, systemPrompt, userPrompt, temperature);
+            } else if (provider === 'gemini') {
+                result = await this.callGemini(config, apiKey, actualModel, systemPrompt, userPrompt, temperature);
+            } else {
+                const payload = {
+                    model: actualModel,
+                    messages: [
+                        { role: "system", content: systemPrompt },
+                        { role: "user", content: userPrompt }
+                    ],
+                    temperature: temperature
+                };
 
-        const payload = {
-            model: model,
-            messages: [
-                { role: "system", content: systemPrompt },
-                { role: "user", content: userPrompt }
-            ],
-            temperature: temperature
-        };
+                if (jsonMode) {
+                    payload.response_format = { type: "json_object" };
+                }
 
-        if (jsonMode) {
-            payload.response_format = { type: "json_object" };
-        }
+                const options = {
+                    hostname: config.hostname,
+                    path: config.path,
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${apiKey}`,
+                        'Content-Type': 'application/json',
+                        'User-Agent': 'Mozilla/5.0 (Node.js/GhostCLI)'
+                    }
+                };
 
-        const options = {
-            hostname: config.hostname,
-            path: config.path,
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${apiKey}`,
-                'Content-Type': 'application/json',
-                'User-Agent': 'Mozilla/5.0 (Node.js/GhostCLI)'
+                await this.rpc.log('debug', `Sending request to ${provider} API`, { 
+                    hostname: config.hostname,
+                    path: config.path
+                });
+
+                const response = await this.rpc.httpsRequest(options, payload);
+                const data = JSON.parse(response);
+                
+                await this.rpc.log('debug', `Received response from ${provider} API`, { 
+                    responseLength: response.length 
+                });
+                
+                if (data.error) {
+                    throw new Error(`${provider.toUpperCase()} API Error: ${data.error.message || JSON.stringify(data.error)}`);
+                }
+
+                if (!data.choices || !data.choices[0] || !data.choices[0].message) {
+                    throw new Error(`Unexpected ${provider.toUpperCase()} API response: ${JSON.stringify(data)}`);
+                }
+
+                result = data.choices[0].message.content;
             }
-        };
 
-        await this.rpc.log('debug', `Sending request to ${provider} API`, { 
-            hostname: config.hostname,
-            path: config.path
-        });
-
-        const response = await this.rpc.httpsRequest(options, payload);
-        const data = JSON.parse(response);
-        
-        await this.rpc.log('debug', `Received response from ${provider} API`, { 
-            responseLength: response.length 
-        });
-        
-        return data.choices[0].message.content;
+            return result;
+        } catch (error) {
+            await this.rpc.log('error', `AI Call failed: ${error.message}`);
+            
+            // Re-throw with more helpful guidance
+            throw new Error(
+                `AI API Error: ${error.message}\n\n` +
+                `${Colors.CYAN}💡 Pro-tip:${Colors.ENDC} If this is an authentication or configuration issue,\n` +
+                `please run ${Colors.BOLD}ghost setup${Colors.ENDC} to reconfigure your AI provider and API keys.\n`
+            );
+        }
     }
 
     async callAnthropic(config, apiKey, model, systemPrompt, userPrompt, temperature) {
-        const actualModel = model.includes('claude') ? model : "claude-3-5-sonnet-20240620";
+        const actualModel = (model && model.includes('claude')) ? model : "claude-3-5-sonnet-20240620";
         
         await this.rpc.log('debug', `Calling Anthropic API`, { 
             model: actualModel,
@@ -542,12 +622,20 @@ class GitExtension {
             responseLength: response.length,
             contentLength: data.content?.[0]?.text?.length || 0
         });
+
+        if (data.error) {
+            throw new Error(`Anthropic API Error: ${data.error.message || JSON.stringify(data.error)}`);
+        }
+
+        if (!data.content || !data.content[0] || !data.content[0].text) {
+            throw new Error(`Unexpected Anthropic API response: ${JSON.stringify(data)}`);
+        }
         
         return data.content[0].text;
     }
 
     async callGemini(config, apiKey, model, systemPrompt, userPrompt, temperature) {
-        const modelName = model.includes('gemini') ? model : "gemini-1.5-flash";
+        const modelName = (model && model.includes('gemini')) ? model : "gemini-1.5-flash";
         const path = `${config.path}${modelName}:generateContent?key=${apiKey}`;
         
         await this.rpc.log('debug', `Calling Gemini API`, { 
@@ -595,14 +683,24 @@ class GitExtension {
             hasCustomPrompt: !!customPrompt
         });
         
+        // Strip secrets from diff before sending to AI to avoid security blocks
+        let cleanedDiff = diffText;
+        const suspects = await this.scanForSecrets(diffText);
+        if (suspects.length > 0) {
+            await this.rpc.log('info', `Stripping ${suspects.length} detected secrets from diff before AI call`);
+            for (const s of suspects) {
+                cleanedDiff = cleanedDiff.split(s.value).join('[SECRET_MASKED]');
+            }
+        }
+
         const sysPrompt = customPrompt || "Tu es un assistant Git expert. Génère UNIQUEMENT un message de commit suivant la convention 'Conventional Commits' (ex: feat: add login). Sois concis, descriptif et professionnel. N'utilise pas de markdown (pas de backticks), pas de guillemets autour du message.";
         
-        const truncatedDiff = diffText.substring(0, 12000);
+        const truncatedDiff = cleanedDiff.substring(0, 12000);
         
         await this.rpc.log('debug', `Preparing diff for AI analysis`, { 
-            originalLength: diffText.length,
+            originalLength: cleanedDiff.length,
             truncatedLength: truncatedDiff.length,
-            truncated: diffText.length > 12000
+            truncated: cleanedDiff.length > 12000
         });
         
         let commitMsg = await this.callAI(provider, apiKey, model, sysPrompt, `Diff :\n${truncatedDiff}`);
@@ -624,9 +722,21 @@ class GitExtension {
         };
 
         const potentialLeaks = {};
+        const cleanedDiffMap = {};
+
         for (const [fname, content] of Object.entries(diffMap)) {
             const suspects = await this.scanForSecrets(content);
             const filtered = suspects.filter(s => !isIgnored(s));
+            
+            // Create a cleaned version of the content for AI validation
+            let cleanedContent = content;
+            if (suspects.length > 0) {
+                for (const s of suspects) {
+                    cleanedContent = cleanedContent.split(s.value).join(`[POTENTIAL_SECRET_TYPE_${s.type.replace(/\s+/g, '_')}]`);
+                }
+            }
+            cleanedDiffMap[fname] = cleanedContent;
+
             if (filtered.length > 0) {
                 potentialLeaks[fname] = filtered;
                 for (const suspect of filtered) {
@@ -655,7 +765,8 @@ class GitExtension {
             - Ne signale PAS les noms de modèles d'IA comme 'claude-3-5-sonnet', 'gemini-1.5-flash', 'llama-3.3-70b-versatile', etc. Ce ne sont PAS des secrets.
             - Ne signale PAS les noms de fichiers ou de classes (ex: 'ConfigManager', 'AIEngine').
             - Ne signale PAS les noms de fournisseurs (ex: 'anthropic', 'google', 'groq').
-            - Ne signale QUE les chaînes qui ressemblent à des clés d'accès réelles (ex: gsk_..., sk-..., AKIA...) ou des secrets hautement probables.
+            - Ne signale QUE les chaînes qui ressemblent à des clés d'accès réelles ou des secrets hautement probables.
+            - Les secrets ont été masqués par des tags comme [POTENTIAL_SECRET_TYPE_...]. Évalue si la présence d'un secret à cet endroit est une violation.
             
             Réponds UNIQUEMENT au format JSON : {"is_breach": boolean, "reason": "string"}`;
 
@@ -664,27 +775,36 @@ class GitExtension {
                 leaksFormatted[fname] = suspects.map(s => ({
                     type: s.type,
                     severity: s.severity,
-                    preview: s.display
+                    preview: s.display,
+                    context: cleanedDiffMap[fname].substring(0, 500) // Provide some cleaned context
                 }));
             }
 
-            const valPrompt = `${securityPrompt}\n\nSecrets potentiels : ${JSON.stringify(leaksFormatted)}`;
+            const valPrompt = `${securityPrompt}\n\nSecrets potentiels (avec contextes nettoyés) : ${JSON.stringify(leaksFormatted)}`;
             
-            const res = await this.callAI(provider, apiKey, model, "Tu es un expert en cybersécurité.", valPrompt, 0.3, true);
-            const audit = JSON.parse(res);
-            
-            if (audit.is_breach) {
-                await this.rpc.log('error', 'SECURITY_ALERT: Security breach confirmed by AI validation', { 
-                    reason: audit.reason,
-                    filesAffected: Object.keys(potentialLeaks),
-                    details: audit 
+            try {
+                const res = await this.callAI(provider, apiKey, model, "Tu es un expert en cybersécurité.", valPrompt, 0.3, true);
+                const audit = JSON.parse(res);
+                
+                if (audit.is_breach) {
+                    await this.rpc.log('error', 'SECURITY_ALERT: Security breach confirmed by AI validation', { 
+                        reason: audit.reason,
+                        filesAffected: Object.keys(potentialLeaks),
+                        details: audit 
+                    });
+                    return { blocked: true, reason: audit.reason };
+                }
+                await this.rpc.log('info', 'SECURITY_ALERT: False positives confirmed, allowing commit', {
+                    reason: audit.reason
                 });
-                return { blocked: true, reason: audit.reason };
+                return { blocked: false, reason: 'False positives confirmed' };
+            } catch (error) {
+                await this.rpc.log('error', `AI Security Validation failed: ${error.message}`);
+                return { 
+                    blocked: true, 
+                    reason: `AI Security Validation failed: ${error.message}` 
+                };
             }
-            await this.rpc.log('info', 'SECURITY_ALERT: False positives confirmed, allowing commit', {
-                reason: audit.reason
-            });
-            return { blocked: false, reason: 'False positives confirmed' };
         }
         
         return { blocked: false, reason: 'No secrets detected' };
