@@ -1,0 +1,27 @@
+{
+  "id": "ghost-frontend-pulse",
+  "name": "Ghost Frontend-Pulse",
+  "version": "1.0.0",
+  "description": "Smart frontend performance and A11y auditing engine.",
+  "main": "index.js",
+  "commands": ["analyze", "optimize", "report"],
+  "capabilities": {
+    "filesystem": {
+      "read": ["**/*.js", "**/*.ts", "**/*.jsx", "**/*.tsx", "**/*.vue", "**/*.css", "**/*.html"],
+      "write": ["**/fe-reports/*.md"]
+    },
+    "network": {
+      "allowlist": [
+        "https://api.groq.com",
+        "https://api.openai.com",
+        "https://api.anthropic.com",
+        "https://generativelanguage.googleapis.com"
+      ]
+    }
+  },
+  "permissions": [
+    "filesystem:read",
+    "filesystem:write",
+    "network:https"
+  ]
+}

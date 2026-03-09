@@ -3,6 +3,20 @@
   "lastUpdated": "2024-01-15T00:00:00Z",
   "extensions": [
     {
+      "id": "ghost-frontend-pulse",
+      "name": "Ghost Frontend-Pulse",
+      "description": "Smart frontend performance and A11y auditing engine. Optimizes React, Next.js, and Vue components.",
+      "author": "Ghost CLI Team",
+      "category": "development",
+      "verified": true,
+      "versions": [
+        {
+          "version": "1.0.0",
+          "manifest": "{\"id\":\"ghost-frontend-pulse\",\"name\":\"Ghost Frontend-Pulse\",\"version\":\"1.0.0\",\"commands\":[\"analyze\",\"optimize\",\"report\"]}"
+        }
+      ]
+    },
+    {
       "id": "ghost-cloud-master",
       "name": "Ghost Cloud-Master",
       "description": "AI-powered infrastructure-as-code generator. Analyzes your project and generates optimized Terraform or CloudFormation templates.",
