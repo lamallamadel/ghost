@@ -1,0 +1,19 @@
+{
+  "name": "@ghost/policy-extension",
+  "version": "1.0.0",
+  "description": "Governance and policy enforcement engine for Ghost CLI. Centralizes rules and configuration authority.",
+  "main": "index.js",
+  "author": "Ghost CLI Team",
+  "license": "MIT",
+  "dependencies": {
+    "@ghost/extension-sdk": "^1.0.0"
+  },
+  "files": [
+    "index.js",
+    "extension.js",
+    "manifest.json",
+    "lib/**/*",
+    "policies/**/*",
+    "README.md"
+  ]
+}

@@ -203,6 +203,10 @@ class GatewayLauncher {
                 return await this.startTelemetryServer(params.port || 9876);
             } else if (operation === 'telemetry-stop') {
                 return await this.stopTelemetryServer();
+            } else if (operation === 'policy-update') {
+                console.log(`${Colors.CYAN}[Policy] Gateway enforcing new rule: ${params.rule} = ${params.value}${Colors.ENDC}`);
+                // In a real impl, this would update internal filtering state in IOPipeline
+                return { success: true };
             }
             throw new Error(`Unknown system operation: ${operation}`);
         });

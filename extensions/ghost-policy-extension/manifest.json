@@ -1,0 +1,23 @@
+{
+  "id": "ghost-policy-extension",
+  "name": "Ghost Policy Master",
+  "version": "1.0.0",
+  "description": "Central authority for Ghost governance and security policies.",
+  "main": "index.js",
+  "commands": ["list", "set", "verify"],
+  "capabilities": {
+    "filesystem": {
+      "read": ["~/.ghost/**/*"],
+      "write": ["~/.ghost/config/ghostrc.json", "~/.ghost/policies/*"]
+    },
+    "system": {
+      "policy": true,
+      "filtering": true
+    }
+  },
+  "permissions": [
+    "filesystem:read",
+    "filesystem:write",
+    "network:https"
+  ]
+}
