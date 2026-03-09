@@ -1,0 +1,38 @@
+{
+  "id": "ghost-docs-extension",
+  "name": "Ghost Documentation Bot",
+  "version": "1.0.0",
+  "description": "AI-powered documentation engine. Generates professional project documentation and architectural diagrams.",
+  "main": "index.js",
+  "commands": ["init", "generate", "diagram", "chat"],
+  "capabilities": {
+    "filesystem": {
+      "read": ["**/*"],
+      "write": [
+        "**/README.md",
+        "**/docs/*.md",
+        "**/API.md",
+        "**/assets/diagrams/*.svg"
+      ]
+    },
+    "network": {
+      "allowlist": [
+        "https://api.groq.com",
+        "https://api.openai.com",
+        "https://api.anthropic.com",
+        "https://generativelanguage.googleapis.com"
+      ],
+      "rateLimit": {
+        "cir": 100000,
+        "bc": 500000,
+        "be": 1000000
+      }
+    }
+  },
+  "permissions": [
+    "filesystem:read",
+    "filesystem:write",
+    "network:https",
+    "ui:prompt"
+  ]
+}
