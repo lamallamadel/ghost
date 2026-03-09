@@ -1,0 +1,41 @@
+{
+  "id": "ghost-ci-extension",
+  "name": "Ghost Pipeline Orchestrator",
+  "version": "1.0.0",
+  "description": "Headless automation and CI/CD integration for Ghost security and health audits.",
+  "main": "index.js",
+  "commands": ["status", "check", "report"],
+  "extensionDependencies": {
+    "ghost-git-extension": "1.1.1",
+    "ghost-security-extension": "1.0.0",
+    "ghost-docs-extension": "1.0.0"
+  },
+  "capabilities": {
+    "filesystem": {
+      "read": ["**/*"],
+      "write": [
+        "**/ci-reports/**",
+        "**/ghost-results.json"
+      ]
+    },
+    "network": {
+      "allowlist": [
+        "https://api.groq.com",
+        "https://api.openai.com",
+        "https://api.anthropic.com",
+        "https://generativelanguage.googleapis.com"
+      ],
+      "rateLimit": {
+        "cir": 100000,
+        "bc": 500000,
+        "be": 1000000
+      }
+    }
+  },
+  "permissions": [
+    "filesystem:read",
+    "filesystem:write",
+    "network:https",
+    "process:spawn"
+  ]
+}
