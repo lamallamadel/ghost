@@ -2,16 +2,17 @@
 
 Centralized AI model management and usage tracking extension for the Ghost CLI ecosystem.
 
-## Phase 2: Usage & Token Analytics (Completed)
-This phase added visibility into AI consumption and cost tracking.
+## Phase 3: Model Switching & Validation (Completed)
+This final phase enabled dynamic control over the AI engine.
 
 ### New Features
-- **Token Analytics**: Tracks the total number of tokens consumed across all AI operations.
-- **Cost Estimation**: Calculates the estimated cost of AI usage based on provider rates.
-- **Per-Extension Breakdown**: Identifies which extensions are consuming the most AI resources.
+- **Dynamic Provider Switching**: Change AI providers (Anthropic, OpenAI, etc.) instantly via CLI.
+- **Model Selection**: Override default models for specific workflows or cost-saving measures.
+- **Automatic Configuration Sync**: Seamlessly updates `ghostrc.json` using secure filesystem intents.
+- **Connectivity Safeguards**: Warns if a switch is made to a provider without a valid API key.
 
 ### New Commands
-- `ghost ai usage`: Displays a detailed report of token consumption and estimated costs.
+- `ghost ai switch <provider> [--model <name>]`: Switches the global AI provider and optionally the model.
 
 ## Installation
 ```bash

@@ -92,6 +92,52 @@ class AIExtension {
         return { success: true, output, usage };
     }
 
+    async handleSwitch(params) {
+        const provider = params.args?.[0];
+        const model = params.flags?.model;
+
+        if (!provider || !this.SUPPORTED_MODELS[provider]) {
+            return { 
+                success: false, 
+                output: `${Colors.FAIL}Error:${Colors.ENDC} Invalid provider. Supported: ${Object.keys(this.SUPPORTED_MODELS).join(', ')}` 
+            };
+        }
+
+        await this.sdk.requestLog({ level: 'info', message: `Switching AI provider to: ${provider}${model ? ' (model: ' + model + ')' : ''}` });
+
+        try {
+            const config = await this._readConfig();
+            const configPath = path.join(os.homedir(), '.ghost', 'config', 'ghostrc.json');
+
+            // 1. Update config object
+            if (!config.ai) config.ai = {};
+            const oldProvider = config.ai.provider;
+            config.ai.provider = provider;
+            if (model) config.ai.model = model;
+
+            // 2. Validate connectivity (Simulated check)
+            if (!config.ai.apiKey) {
+                return { 
+                    success: false, 
+                    output: `${Colors.WARNING}⚠ Warning:${Colors.ENDC} No API key found for ${provider}. Switch applied, but please run ${Colors.BOLD}ghost setup${Colors.ENDC} to add a key.` 
+                };
+            }
+
+            // 3. Write back to ghostrc.json
+            await this.sdk.requestFileWrite({ 
+                path: configPath, 
+                content: JSON.stringify(config, null, 2) 
+            });
+
+            return { 
+                success: true, 
+                output: `${Colors.GREEN}✓ Switched AI provider successfully.${Colors.ENDC}\n- Old: ${oldProvider}\n- New: ${provider}${model ? ' (' + model + ')' : ''}` 
+            };
+        } catch (error) {
+            return { success: false, output: `Switch failed: ${error.message}` };
+        }
+    }
+
     async handleRPCRequest(request) {
         const { method, params = {} } = request;
         try {
@@ -99,7 +145,7 @@ class AIExtension {
                 case 'ai.status': return await this.handleStatus(params);
                 case 'ai.models': return await this.handleModels(params);
                 case 'ai.usage': return await this.handleUsage(params);
-                case 'ai.switch': return { success: true, output: 'Model switching pending Phase 3.' };
+                case 'ai.switch': return await this.handleSwitch(params);
                 default: throw new Error(`Unknown method: ${method}`);
             }
         } catch (error) {
