@@ -106,6 +106,14 @@ All security logic is located in the `core/pipeline/` and `core/validators/` dir
 
 ---
 
+## 📂 Project Structure & Artifacts
+
+- **`docs/`**: Official, versioned documentation and architecture guides.
+- **`ext_mise_en_route/`**: Execution sandbox used for integration testing and feature demonstration. 
+  - *Note*: Files in this directory (e.g., `README.md`) are generated at runtime and are ignored by Git to ensure deterministic source control. They serve as **functional proof** of extension capabilities.
+
+---
+
 ## 📊 Performance
 - **Latency**: < 30ms p95 overhead.
 - **Throughput**: > 1,200 req/s via asynchronous RPC bus.
