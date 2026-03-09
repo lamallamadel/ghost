@@ -40,6 +40,9 @@
     },
     "hooks": ["pre-commit", "commit-msg", "pre-push"]
   },
+  "extensionDependencies": {
+    "ghost-security-extension": "1.0.0"
+  },
   "permissions": [
     "filesystem:read",
     "filesystem:write",

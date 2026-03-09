@@ -55,6 +55,16 @@ class ExtensionWrapper {
     }
 
     /**
+     * Command: compliance
+     */
+    async compliance(params) {
+        return await this.security.handleRPCRequest({
+            method: 'security.compliance',
+            params
+        });
+    }
+
+    /**
      * Internal: handle generic RPC requests from core
      */
     async handleRPCRequest(request) {

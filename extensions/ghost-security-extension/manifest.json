@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "Centralized security hub for Ghost CLI. Provides secret scanning, OWASP audits, and AI-powered vulnerability validation.",
   "main": "index.js",
-  "commands": ["scan", "audit", "status"],
+  "commands": ["scan", "audit", "status", "compliance"],
   "capabilities": {
     "filesystem": {
       "read": ["**/*"],

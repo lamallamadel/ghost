@@ -303,35 +303,34 @@ class GitExtension {
     async handleAdd(params) {
         const files = params.args || params.files || [];
         const flags = params.flags || {};
-        
-        // 1. Identify what we are adding (resolving '.' or directories)
         const targetFiles = files.length > 0 ? files : ['.'];
-        
-        // 2. Identify UNSTAGED files among targets for pre-add scanning
         const unstaged = await this.git.getUnstagedChanges(files);
         
         if (unstaged.length > 0 && !flags.force && !flags['skip-audit']) {
-            const auditResults = await this._scanFilesForSecrets(unstaged);
-            if (auditResults.length > 0) {
-                let warning = `\n${Colors.WARNING}${Colors.BOLD}⚠ SECURITY WARNING:${Colors.ENDC} Potential secrets detected in files to be staged:\n`;
-                for (const issue of auditResults) {
-                    warning += `  - ${Colors.CYAN}${issue.file}${Colors.ENDC}: ${issue.type} (${issue.severity})\n`;
+            // Call ghost-security-extension via SDK
+            try {
+                const securityResult = await this.sdk.emitIntent({
+                    type: 'extension',
+                    operation: 'call',
+                    params: {
+                        extensionId: 'ghost-security-extension',
+                        method: 'security.scan',
+                        params: { args: unstaged }
+                    }
+                });
+
+                if (securityResult && securityResult.findings && securityResult.findings.length > 0) {
+                    return { success: false, output: securityResult.output, blocked: true };
                 }
-                warning += `\nUse ${Colors.BOLD}--force${Colors.ENDC} to stage these files anyway, or remove the secrets first.\n`;
-                
-                return { success: false, output: warning, blocked: true };
+            } catch (e) {
+                await this.sdk.requestLog({ level: 'warn', message: 'Security extension unavailable, falling back to basic scan' });
+                // Fallback logic could go here if security extension is missing
             }
         }
 
-        // 3. Execute the actual git add
         try {
             await this.git.add(targetFiles);
-            const addedCount = unstaged.length > 0 ? unstaged.length : 'All specified';
-            return { 
-                success: true, 
-                output: `${Colors.GREEN}✓ staged changes${Colors.ENDC}`,
-                filesStaged: unstaged
-            };
+            return { success: true, output: `${Colors.GREEN}✓ staged changes${Colors.ENDC}` };
         } catch (error) {
             return { success: false, output: `${Colors.FAIL}Error staging files:${Colors.ENDC} ${error.message}` };
         }

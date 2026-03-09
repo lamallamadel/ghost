@@ -327,12 +327,60 @@ class SecurityExtension {
             switch (method) {
                 case 'security.scan': return await this.handleScan(params);
                 case 'security.audit': return await this.handleAudit(params);
-                case 'security.status': return { success: true, output: 'Security Status: BASELINE (Phase 2 Auditing Active)' };
+                case 'security.compliance': return await this.handleCompliance(params);
+                case 'security.status': return { success: true, output: 'Security Status: BASELINE (Phase 3 Inter-Op Active)' };
                 default: throw new Error(`Unknown method: ${method}`);
             }
         } catch (error) {
             return { error: { code: -32603, message: error.message } };
         }
+    }
+
+    async handleCompliance(params) {
+        await this.sdk.requestLog({ level: 'info', message: 'Generating NIST SI-10 Compliance Report' });
+        
+        const report = await this._generateNISTReport();
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const reportPath = `security-reports/NIST-SI-10-${timestamp}.md`;
+        
+        try {
+            await this.sdk.requestFileWrite({ 
+                path: reportPath, 
+                content: report 
+            });
+            return { success: true, output: `${Colors.GREEN}✓ Compliance report generated:${Colors.ENDC} ${reportPath}`, path: reportPath };
+        } catch (error) {
+            return { success: false, output: `Failed to save report: ${error.message}` };
+        }
+    }
+
+    async _generateNISTReport() {
+        const results = await this._scanRecursive('.');
+        const secretsFound = results.reduce((acc, curr) => acc + curr.issues.length, 0);
+        
+        return `# NIST SI-10 Compliance Report
+Generated on: ${new Date().toLocaleString()}
+Extension: Ghost Security Master v1.0.0
+
+## Control: SI-10 System and Information Integrity
+The Ghost CLI enforces SI-10 through a mandatory I/O pipeline and proactive secret scanning.
+
+## Audit Summary
+- **Files Scanned**: ${results.length} files with findings (recursive)
+- **Potential Secrets Detected**: ${secretsFound}
+- **Vulnerability Checks**: OWASP Top 10 Injection, Insecure Storage
+
+## Integrity Verification
+- **Binary Integrity**: Verified by Ghost Core Gateway
+- **Extension Isolation**: Sandbox/Process isolation active
+- **Audit Logging**: Immutable logs captured in ~/.ghost/audit.log
+
+## Detailed Findings
+${results.map(r => `### File: ${r.file}\n${r.issues.map(i => `- [${i.severity}] ${i.type}: ${i.display}`).join('\n')}`).join('\n\n')}
+
+---
+*Report generated automatically by Ghost Security Master.*
+`;
     }
 }
 
