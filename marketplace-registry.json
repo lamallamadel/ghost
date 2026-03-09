@@ -3,6 +3,20 @@
   "lastUpdated": "2024-01-15T00:00:00Z",
   "extensions": [
     {
+      "id": "ghost-cloud-master",
+      "name": "Ghost Cloud-Master",
+      "description": "AI-powered infrastructure-as-code generator. Analyzes your project and generates optimized Terraform or CloudFormation templates.",
+      "author": "Ghost CLI Team",
+      "category": "devops",
+      "verified": true,
+      "versions": [
+        {
+          "version": "1.0.0",
+          "manifest": "{\"id\":\"ghost-cloud-master\",\"name\":\"Ghost Cloud-Master\",\"version\":\"1.0.0\",\"commands\":[\"detect\",\"generate\",\"audit\"]}"
+        }
+      ]
+    },
+    {
       "id": "ghost-sql-sage",
       "name": "Ghost SQL-Sage",
       "description": "AI-powered database query optimization and schema auditing engine. Detects N+1 queries and suggests indexing strategies.",

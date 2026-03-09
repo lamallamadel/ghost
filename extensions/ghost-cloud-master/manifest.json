@@ -1,0 +1,32 @@
+{
+  "id": "ghost-cloud-master",
+  "name": "Ghost Cloud-Master",
+  "version": "1.0.0",
+  "description": "Autonomous cloud infrastructure assistant for AWS, Terraform, and Kubernetes.",
+  "main": "index.js",
+  "commands": ["detect", "generate", "audit"],
+  "capabilities": {
+    "filesystem": {
+      "read": ["**/*"],
+      "write": [
+        "**/infra/*.tf",
+        "**/infra/*.yml",
+        "**/infra/*.yaml",
+        "**/infra/cloudformation/*.json"
+      ]
+    },
+    "network": {
+      "allowlist": [
+        "https://api.groq.com",
+        "https://api.openai.com",
+        "https://api.anthropic.com",
+        "https://generativelanguage.googleapis.com"
+      ]
+    }
+  },
+  "permissions": [
+    "filesystem:read",
+    "filesystem:write",
+    "network:https"
+  ]
+}
