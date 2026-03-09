@@ -1,0 +1,38 @@
+{
+  "id": "ghost-security-extension",
+  "name": "Ghost Security Master",
+  "version": "1.0.0",
+  "description": "Centralized security hub for Ghost CLI. Provides secret scanning, OWASP audits, and AI-powered vulnerability validation.",
+  "main": "index.js",
+  "commands": ["scan", "audit", "status"],
+  "capabilities": {
+    "filesystem": {
+      "read": ["**/*"],
+      "write": [
+        "**/security-reports/**",
+        "**/.ghostignore",
+        "~/.ghost/security/**"
+      ]
+    },
+    "network": {
+      "allowlist": [
+        "https://api.groq.com",
+        "https://api.openai.com",
+        "https://api.anthropic.com",
+        "https://generativelanguage.googleapis.com",
+        "https://nvd.nist.gov"
+      ],
+      "rateLimit": {
+        "cir": 50000,
+        "bc": 200000,
+        "be": 500000
+      }
+    }
+  },
+  "permissions": [
+    "filesystem:read",
+    "filesystem:write",
+    "network:https",
+    "process:spawn"
+  ]
+}

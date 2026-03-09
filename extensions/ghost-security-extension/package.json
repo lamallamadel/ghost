@@ -1,0 +1,29 @@
+{
+  "name": "@ghost/security-extension",
+  "version": "1.0.0",
+  "description": "Security auditing and secret scanning extension for Ghost CLI",
+  "main": "index.js",
+  "scripts": {
+    "test": "node test.js",
+    "validate": "node validate-manifest.js"
+  },
+  "keywords": [
+    "ghost",
+    "security",
+    "scanner",
+    "audit",
+    "owasp"
+  ],
+  "author": "Ghost CLI Team",
+  "license": "MIT",
+  "dependencies": {
+    "@ghost/extension-sdk": "^1.0.0"
+  },
+  "files": [
+    "index.js",
+    "extension.js",
+    "manifest.json",
+    "lib/**/*",
+    "README.md"
+  ]
+}
