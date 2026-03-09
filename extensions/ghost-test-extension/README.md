@@ -2,16 +2,16 @@
 
 AI-powered test automation and coverage extension for the Ghost CLI ecosystem.
 
-## Phase 1: Core Test Runner (Completed)
-This phase established the infrastructure for executing project tests via Ghost intents.
+## Phase 2: AI Test Generation (Completed)
+This phase introduced generative AI capabilities to automate unit test creation.
 
-### Features
-- **Automated Execution**: Runs project tests using `npm test` via the secure `process:spawn` intent.
-- **Targeted Runs**: Supports running specific test files or suites by passing arguments.
-- **SDK Integration**: Fully integrated with `@ghost/extension-sdk`.
+### New Features
+- **AI Test Generator**: Automatically analyzes any source file and creates a corresponding unit test file.
+- **Framework Awareness**: Generates tests compatible with established project frameworks (Vitest/Jest).
+- **Multi-Model Support**: Leverage different AI providers for high-quality test logic.
 
-### Commands
-- `ghost test run [target]`: Executes tests for the entire project or a specific target.
+### New Commands
+- `ghost test gen [file]`: Generates a `.test.js` file for the specified source file using AI.
 
 ## Installation
 ```bash
