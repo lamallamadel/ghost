@@ -222,3 +222,6 @@ deployments/*.tar.gz
 # Migration exports and backups
 *.ghost-extensions-export-*.json
 .ghost/backups/
+
+ext_mise_en_route/
+
