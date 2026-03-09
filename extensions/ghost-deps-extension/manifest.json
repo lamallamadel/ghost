@@ -1,0 +1,21 @@
+{
+  "id": "ghost-deps-extension",
+  "name": "Ghost Dependency Master",
+  "version": "1.0.0",
+  "description": "Visualizes and manages project dependencies and extension conflicts.",
+  "main": "index.js",
+  "commands": ["graph", "audit", "solve"],
+  "capabilities": {
+    "filesystem": {
+      "read": ["**/*"]
+    },
+    "network": {
+      "allowlist": ["https://registry.npmjs.org"]
+    }
+  },
+  "permissions": [
+    "filesystem:read",
+    "network:https",
+    "process:spawn"
+  ]
+}

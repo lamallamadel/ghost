@@ -1,0 +1,18 @@
+{
+  "name": "@ghost/deps-extension",
+  "version": "1.0.0",
+  "description": "Dependency management and conflict resolution extension for Ghost CLI.",
+  "main": "index.js",
+  "author": "Ghost CLI Team",
+  "license": "MIT",
+  "dependencies": {
+    "@ghost/extension-sdk": "^1.0.0"
+  },
+  "files": [
+    "index.js",
+    "extension.js",
+    "manifest.json",
+    "lib/**/*",
+    "README.md"
+  ]
+}
