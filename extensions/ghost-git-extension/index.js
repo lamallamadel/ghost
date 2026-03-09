@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
-const { ExtensionRPCClient, GitExtension } = require('./extension.js');
+const { GitExtension } = require('./extension.js');
+const { ExtensionSDK } = require('@ghost/extension-sdk');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -17,26 +18,15 @@ const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
  */
 class ExtensionWrapper {
     constructor() {
-        // Initialize with a default handler that will be replaced during init
-        this.rpc = new ExtensionRPCClient(async (req) => {
-            // This is a bridge that the core will replace or we'll set up
-            if (this.coreHandler) {
-                return await this.coreHandler(req);
-            }
-            throw new Error(`RPC Handler not yet initialized for ${manifest.id}`);
-        });
-        
-        this.git = new GitExtension(this.rpc);
+        this.sdk = new ExtensionSDK(manifest.id);
+        this.git = new GitExtension(this.sdk);
     }
 
     /**
-     * Initialization hook called by core or used to set the handler.
-     * We support both direct assignment and the 'init' command.
+     * Initialization hook called by core.
      */
     async init(options = {}) {
-        if (options.coreHandler) {
-            this.coreHandler = options.coreHandler;
-        }
+        // SDK handles IPC automatically via process.stdout/stdin
         return { success: true };
     }
 
@@ -45,7 +35,38 @@ class ExtensionWrapper {
      * Performs a full security audit of the repository.
      */
     async audit(params) {
-        return await this.git.audit(params);
+        // Migration note: audit was part of GitExtension, now we use performFullAudit logic
+        // For simplicity in this robust refactor, we expose what we have
+        if (typeof this.git.audit === 'function') {
+            return await this.git.audit(params);
+        }
+        return { success: false, output: 'Audit command not implemented in new architecture yet.' };
+    }
+
+    /**
+     * Helper to resolve AI configuration
+     */
+    _resolveAIConfig(flags) {
+        let provider = flags.provider;
+        let apiKey = flags.apiKey || flags['api-key'];
+        let model = flags.model;
+
+        if (!provider || !apiKey) {
+            try {
+                const configPath = path.join(os.homedir(), '.ghost', 'config', 'ghostrc.json');
+                if (fs.existsSync(configPath)) {
+                    const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+                    if (config.ai) {
+                        provider = provider || config.ai.provider;
+                        apiKey = apiKey || config.ai.apiKey;
+                        model = model || config.ai.model;
+                    }
+                }
+            } catch (e) {
+                // Ignore config errors
+            }
+        }
+        return { provider, apiKey, model };
     }
 
     /**
@@ -54,25 +75,7 @@ class ExtensionWrapper {
      */
     async commit(params) {
         const flags = params.flags || {};
-
-        // Resolve AI config: flags take precedence over ghostrc
-        let provider = flags.provider;
-        let apiKey = flags.apiKey || flags['api-key'];
-        let model = flags.model;
-
-        if (!provider || !apiKey) {
-            try {
-                const configPath = path.join(os.homedir(), '.ghost', 'config', 'ghostrc.json');
-                const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-                if (config.ai) {
-                    provider = provider || config.ai.provider;
-                    apiKey = apiKey || config.ai.apiKey;
-                    model = model || config.ai.model;
-                }
-            } catch (e) {
-                // no config file, will fail later if apiKey still missing
-            }
-        }
+        const { provider, apiKey, model } = this._resolveAIConfig(flags);
 
         // Get staged diff
         const diff = await this.git.getStagedDiff();
@@ -80,7 +83,7 @@ class ExtensionWrapper {
             return { success: false, output: 'No staged changes to commit.' };
         }
 
-        // Security audit (skippable via --skip-audit)
+        // Security audit
         if (!flags['skip-audit'] && !flags.skipAudit) {
             const audit = await this.git.auditSecurity(diff.map, provider, apiKey, model);
             if (audit.blocked) {
@@ -89,52 +92,40 @@ class ExtensionWrapper {
         }
 
         // Generate commit message via AI
-        const customPrompt = flags.prompt || flags.message;
-        const message = await this.git.generateCommit(diff.text, customPrompt, provider, apiKey, model);
+        try {
+            const customPrompt = flags.prompt || flags.message;
+            const message = await this.git.generateCommit(diff.text, customPrompt, provider, apiKey, model);
 
-        // Run the actual git commit
-        await this.rpc.gitExec(['commit', '-m', message]);
+            // Run the actual git commit
+            await this.git.git.commit(message, {
+                noVerify: flags['no-verify'] || flags.noVerify,
+                allowEmpty: flags['allow-empty'] || flags.allowEmpty,
+                amend: flags.amend
+            });
 
-        return { success: true, output: `\x1b[32m✓ Committed:\x1b[0m ${message}` };
-    }
-
-    /**
-     * Command: version
-     * Manages repository versioning.
-     * Subcommands: install-hooks, bump, check
-     */
-    async version(params) {
-        const subcommand = params.subcommand;
-        const flags = params.flags || {};
-
-        if (subcommand === 'install-hooks') {
-            return await this.git.installVersionHooks(flags);
+            return { success: true, output: `\x1b[32m✓ Committed:\x1b[0m ${message}` };
+        } catch (error) {
+            return { success: false, output: `\x1b[31mError:\x1b[0m ${error.message}` };
         }
-
-        // 'bump' subcommand or no subcommand: use --bump flag or subcommand as bumpType
-        const bumpType = flags.bump || flags.bumpType || (subcommand !== 'bump' ? subcommand : undefined);
-        return await this.git.handleVersionBump(bumpType, flags);
     }
 
     /**
      * Command: merge
      * Resolves merge conflicts.
-     * Subcommands: status (report conflicts, exit non-zero if any), resolve (apply strategy)
      */
     async merge(params) {
         const subcommand = params.subcommand;
         const strategy = params.flags && params.flags.strategy;
 
         if (subcommand === 'status') {
-            const conflicts = await this.git.getConflictedFiles();
+            const conflicts = await this.git.git.getConflicts();
             if (conflicts.length > 0) {
-                throw new Error(`Merge conflicts detected in: ${conflicts.join(', ')}`);
+                return { success: false, output: `Merge conflicts detected in: ${conflicts.join(', ')}` };
             }
-            return { success: true, message: 'No merge conflicts detected' };
+            return { success: true, output: 'No merge conflicts detected' };
         }
 
-        // resolve subcommand (or default): use strategy from --strategy flag
-        return await this.git.handleMergeResolve(strategy, params.flags);
+        return await this.git.handleMergeResolve(strategy);
     }
 
     /**

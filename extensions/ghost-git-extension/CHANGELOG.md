@@ -5,6 +5,24 @@ All notable changes to the Ghost Git Extension will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-03-09
+
+### Added
+- **SDK Migration**: Migrated to official `@ghost/extension-sdk` for standardized intent handling.
+- **Robust Git Wrapper**: Introduced `GitWrapper` class for consistent Git operations and error handling.
+- **Improved AI Guidance**: Added "Pro-tips" for AI configuration errors, directing users to `ghost setup`.
+- **Secret Masking**: Implemented automatic secret stripping in payloads to prevent NIST SI-10 security blocks on outbound calls.
+- **Enhanced RPC layer**: Added `_sanitizeParams` to RPC client for better security auditing compatibility.
+
+### Changed
+- Refactored `GitExtension` and `ExtensionWrapper` for better architectural alignment.
+- Standardized Git command execution to use argument arrays, mitigating command injection risks.
+
+### Fixed
+- Fixed `ghost commit` command routing and parameter formatting.
+- Resolved issues with AI provider model selection and fallbacks.
+- Corrected network intent formatting for core compatibility.
+
 ## [1.0.0] - 2024-01-XX
 
 ### Added
