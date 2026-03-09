@@ -2,16 +2,17 @@
 
 AI-powered database query analysis and schema optimization assistant for the Ghost CLI ecosystem.
 
-## Phase 1: Query Analysis (Completed)
-This phase established the foundation for detecting SQL performance issues and ORM anti-patterns in source code.
+## Phase 2: Indexing & Schema Audit (Completed)
+This phase added the capability to analyze database schema files for structural issues.
 
-### Features
-- **N+1 Query Detection**: Identifies potential performance bottlenecks in loops using static analysis.
-- **SQL Best Practices**: Scans for `SELECT *` usage and inefficient join patterns.
-- **AI Deep-Dive**: Leverages specialized AI prompts to provide context-aware optimization recommendations.
+### New Features
+- **Primary Key Validation**: Ensures every table has a defined primary key.
+- **Foreign Key Indexing**: Detects missing indexes on foreign key columns to optimize join performance.
+- **Data Type Optimization**: Identifies inefficient data types (e.g., oversized VARCHARs).
+- **Static Schema Parsing**: Analyzes `.sql` and migration files using Ghost's filesystem intents.
 
-### Commands
-- `ghost sql analyze [file]`: Analyzes code for database-related performance and security issues.
+### New Commands
+- `ghost sql audit [path]`: Performs a structural audit of your SQL schema files.
 
 ## Installation
 ```bash

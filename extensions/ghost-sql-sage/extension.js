@@ -124,12 +124,81 @@ class SQLSageExtension {
         return data.choices?.[0]?.message?.content || JSON.stringify(data);
     }
 
+    async handleAudit(params) {
+        const target = params.args?.[0] || 'schemas';
+        await this.sdk.requestLog({ level: 'info', message: `Auditing database schema at: ${target}` });
+
+        try {
+            const content = await this.sdk.requestFileRead({ path: target });
+            const schemaIssues = this._analyzeSchema(content);
+
+            let output = `\n${Colors.BOLD}${Colors.CYAN}SQL-SAGE SCHEMA AUDIT${Colors.ENDC}\n${'='.repeat(40)}\n`;
+            
+            if (schemaIssues.length === 0) {
+                output += `${Colors.GREEN}✓ Schema appears to follow best practices.${Colors.ENDC}\n`;
+            } else {
+                for (const issue of schemaIssues) {
+                    const color = issue.severity === 'high' ? Colors.FAIL : Colors.WARNING;
+                    output += `[${color}${issue.severity.toUpperCase()}${Colors.ENDC}] ${issue.rule}\n`;
+                    output += `  ${issue.message}\n\n`;
+                }
+            }
+
+            return { success: true, output, issues: schemaIssues };
+        } catch (error) {
+            return { success: false, output: `Audit failed: ${error.message}` };
+        }
+    }
+
+    _analyzeSchema(content) {
+        const issues = [];
+        const tables = content.split(/CREATE\s+TABLE/gi).slice(1);
+
+        for (const table of tables) {
+            const tableNameMatch = table.match(/^\s*(\w+)/);
+            const tableName = tableNameMatch ? tableNameMatch[1] : 'Unknown';
+
+            // 1. Check for Primary Key
+            if (!table.toUpperCase().includes('PRIMARY KEY')) {
+                issues.push({
+                    rule: 'Missing Primary Key',
+                    message: `Table "${tableName}" does not have a primary key defined.`,
+                    severity: 'high'
+                });
+            }
+
+            // 2. Check for missing indexes on Foreign Keys
+            const fkMatches = table.matchAll(/FOREIGN\s+KEY\s*\(\s*(\w+)\s*\)/gi);
+            for (const match of fkMatches) {
+                const col = match[1];
+                if (!table.toUpperCase().includes(`CREATE INDEX`) || !table.toUpperCase().includes(col.toUpperCase())) {
+                    issues.push({
+                        rule: 'Missing FK Index',
+                        message: `Foreign key column "${col}" in table "${tableName}" is not indexed.`,
+                        severity: 'medium'
+                    });
+                }
+            }
+
+            // 3. Detect large VARCHAR without size or with huge size
+            if (table.match(/VARCHAR\s*\(\s*(?:max|65535)\s*\)/gi)) {
+                issues.push({
+                    rule: 'Inefficient Data Type',
+                    message: `Table "${tableName}" uses very large VARCHAR. Consider TEXT or smaller VARCHAR if possible.`,
+                    severity: 'low'
+                });
+            }
+        }
+
+        return issues;
+    }
+
     async handleRPCRequest(request) {
         const { method, params = {} } = request;
         try {
             switch (method) {
                 case 'sql.analyze': return await this.handleAnalyze(params);
-                case 'sql.audit': return { success: true, output: 'Schema audit pending Phase 2.' };
+                case 'sql.audit': return await this.handleAudit(params);
                 case 'sql.generate': return { success: true, output: 'Optimization generation pending Phase 3.' };
                 default: throw new Error(`Unknown method: ${method}`);
             }
