@@ -149,13 +149,71 @@ class AuthorExtension {
         }
     }
 
+    async handlePublish(params) {
+        const target = params.args?.[0] || '.';
+        const bump = params.flags?.bump || 'patch'; // major, minor, patch
+        const manifestPath = path.join(target, 'manifest.json');
+        const packagePath = path.join(target, 'package.json');
+
+        await this.sdk.requestLog({ level: 'info', message: `Preparing publication for extension at: ${target}` });
+
+        try {
+            // 1. Read files
+            const manifestContent = await this.sdk.requestFileRead({ path: manifestPath });
+            const pkgContent = await this.sdk.requestFileRead({ path: packagePath });
+            
+            const manifest = JSON.parse(manifestContent);
+            const pkg = JSON.parse(pkgContent);
+
+            // 2. Perform validation first
+            const validation = await this.handleValidate({ args: [target] });
+            if (!validation.success) {
+                return { success: false, output: `${Colors.FAIL}Publication aborted: Validation failed.${Colors.ENDC}\n${validation.output}` };
+            }
+
+            // 3. Bump versions (Simple semver logic)
+            const oldVersion = manifest.version;
+            const parts = oldVersion.split('.').map(Number);
+            if (bump === 'major') parts[0]++;
+            else if (bump === 'minor') parts[1]++;
+            else parts[2]++;
+            const newVersion = parts.join('.');
+
+            manifest.version = newVersion;
+            pkg.version = newVersion;
+
+            // 4. Write back files
+            await this.sdk.requestFileWrite({ path: manifestPath, content: JSON.stringify(manifest, null, 2) });
+            await this.sdk.requestFileWrite({ path: packagePath, content: JSON.stringify(pkg, null, 2) });
+
+            // 5. Git Tagging (via git intent)
+            const tagName = `${manifest.id}@${newVersion}`;
+            try {
+                await this.sdk.emitIntent({
+                    type: 'git',
+                    operation: 'exec',
+                    params: { args: ['tag', '-a', tagName, '-m', `Release ${tagName}`] }
+                });
+            } catch (e) {
+                await this.sdk.requestLog({ level: 'warn', message: 'Git tagging failed. Ensure you are in a git repository.' });
+            }
+
+            return { 
+                success: true, 
+                output: `${Colors.GREEN}✓ Publication prepared successfully.${Colors.ENDC}\n- Version bumped: ${oldVersion} → ${newVersion}\n- Git tag created: ${tagName}\n\nRun 'npm publish' to finalize to NPM.` 
+            };
+        } catch (error) {
+            return { success: false, output: `${Colors.FAIL}Publication failed:${Colors.ENDC} ${error.message}` };
+        }
+    }
+
     async handleRPCRequest(request) {
         const { method, params = {} } = request;
         try {
             switch (method) {
                 case 'author.init': return await this.handleInit(params);
                 case 'author.validate': return await this.handleValidate(params);
-                case 'author.publish': return { success: true, output: 'Publishing pending Phase 3.' };
+                case 'author.publish': return await this.handlePublish(params);
                 default: throw new Error(`Unknown method: ${method}`);
             }
         } catch (error) {

@@ -2,17 +2,17 @@
 
 Developer toolkit for scaffolding, validating, and publishing Ghost CLI extensions.
 
-## Phase 2: Validation & Compliance (Completed)
-This phase introduced strict validation rules to ensure extension quality and security.
+## Phase 3: Publishing & Versioning (Completed)
+This final phase automated the distribution and version management of extensions.
 
 ### New Features
-- **Manifest Validator**: Checks for required fields and standard structure.
-- **Permission Auditing**: Detects invalid or excessive permission requests (e.g., write without read).
-- **Collision Detection**: Prevents extensions from overriding reserved core commands.
-- **Detailed Compliance Reporting**: Provides a structured report with errors and warnings.
+- **Automated Versioning**: Supports `major`, `minor`, and `patch` bumps across manifest and package files.
+- **Git Integration**: Automatically creates annotated Git tags for every release.
+- **Pre-publication Validation**: Ensures an extension is fully compliant before allowing a version bump.
+- **Publishing Prep**: Synchronizes all metadata files to ensure consistency across the registry and NPM.
 
 ### New Commands
-- `ghost ext validate [path]`: Validates an extension's manifest against Ghost standards.
+- `ghost ext publish [path] [--bump patch|minor|major]`: Validates, bumps version, and tags the extension for release.
 
 ## Installation
 ```bash
