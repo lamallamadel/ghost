@@ -60,12 +60,80 @@ class CIExtension {
         return { success: true, output };
     }
 
+    async handleCheck(params) {
+        const flags = params.flags || {};
+        await this.sdk.requestLog({ level: 'info', message: 'Executing CI Pipeline Gates...' });
+        
+        let overallSuccess = true;
+        let reportOutput = `\n${Colors.BOLD}GHOST CI CHECK RESULTS${Colors.ENDC}\n${'='.repeat(30)}\n`;
+
+        // 1. Trigger Security Audit
+        try {
+            reportOutput += `\n[STEP 1] Security Audit: Running...\n`;
+            const securityResult = await this.sdk.emitIntent({
+                type: 'extension',
+                operation: 'call',
+                params: {
+                    extensionId: 'ghost-security-extension',
+                    method: 'security.audit',
+                    params: { flags: { ai: flags.ai } }
+                }
+            });
+
+            if (securityResult && securityResult.success) {
+                const criticalIssues = (securityResult.findings || []).filter(f => 
+                    f.issues.some(i => i.severity === 'critical' || i.severity === 'high')
+                );
+
+                if (criticalIssues.length > 0) {
+                    reportOutput += `${Colors.FAIL}✖ Security Gate Failed:${Colors.ENDC} ${criticalIssues.length} critical/high issues found.\n`;
+                    overallSuccess = false;
+                } else {
+                    reportOutput += `${Colors.GREEN}✔ Security Gate Passed.${Colors.ENDC}\n`;
+                }
+            }
+        } catch (e) {
+            reportOutput += `${Colors.WARNING}⚠ Security Gate Skipped: ghost-security-extension not responding.${Colors.ENDC}\n`;
+        }
+
+        // 2. Trigger Documentation Audit
+        try {
+            reportOutput += `\n[STEP 2] Documentation Check: Running...\n`;
+            const docsResult = await this.sdk.emitIntent({
+                type: 'extension',
+                operation: 'call',
+                params: {
+                    extensionId: 'ghost-docs-extension',
+                    method: 'docs.diagram',
+                    params: {}
+                }
+            });
+
+            if (docsResult && docsResult.success) {
+                reportOutput += `${Colors.GREEN}✔ Documentation Gate Passed (Architecture map generated).${Colors.ENDC}\n`;
+            }
+        } catch (e) {
+            reportOutput += `${Colors.WARNING}⚠ Documentation Gate Skipped: ghost-docs-extension not responding.${Colors.ENDC}\n`;
+        }
+
+        reportOutput += `\n${'='.repeat(30)}\n`;
+        reportOutput += overallSuccess 
+            ? `${Colors.GREEN}${Colors.BOLD}PIPELINE SUCCESS${Colors.ENDC}` 
+            : `${Colors.FAIL}${Colors.BOLD}PIPELINE FAILURE${Colors.ENDC}`;
+
+        return { 
+            success: overallSuccess, 
+            output: reportOutput,
+            exitCode: overallSuccess ? 0 : 1 
+        };
+    }
+
     async handleRPCRequest(request) {
         const { method, params = {} } = request;
         try {
             switch (method) {
                 case 'ci.status': return await this.handleStatus(params);
-                case 'ci.check': return { success: true, output: 'CI Gates pending Phase 2.' };
+                case 'ci.check': return await this.handleCheck(params);
                 case 'ci.report': return { success: true, output: 'CI Reporting pending Phase 3.' };
                 default: throw new Error(`Unknown method: ${method}`);
             }
