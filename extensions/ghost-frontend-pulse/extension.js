@@ -122,12 +122,77 @@ class FrontendPulseExtension {
         return data.choices?.[0]?.message?.content || JSON.stringify(data);
     }
 
+    async handleOptimize(params) {
+        const target = params.args?.[0];
+        if (!target) return { success: false, output: "Please specify a component file to optimize." };
+
+        await this.sdk.requestLog({ level: 'info', message: `Optimizing component rendering and A11y: ${target}` });
+
+        try {
+            const content = await this.sdk.requestFileRead({ path: target });
+            const optimizations = this._suggestComponentOptimizations(content);
+
+            let output = `\n${Colors.BOLD}${Colors.CYAN}FRONTEND-PULSE COMPONENT OPTIMIZATION${Colors.ENDC}\n${'='.repeat(40)}\n`;
+            
+            if (optimizations.length === 0) {
+                output += `${Colors.GREEN}✓ Component structure and semantics look good.${Colors.ENDC}\n`;
+            } else {
+                for (const opt of optimizations) {
+                    output += `${Colors.BOLD}→ ${opt.title}${Colors.ENDC}\n`;
+                    output += `  ${opt.suggestion}\n\n`;
+                }
+            }
+
+            return { success: true, output, optimizations };
+        } catch (error) {
+            return { success: false, output: `Optimization analysis failed: ${error.message}` };
+        }
+    }
+
+    _suggestComponentOptimizations(content) {
+        const suggestions = [];
+
+        // 1. React.memo / useMemo detection
+        if (content.includes('export default function') && !content.includes('memo(') && content.length > 2000) {
+            suggestions.push({
+                title: 'Potential Memoization',
+                suggestion: 'This component is quite large. Consider wrapping it in "React.memo" to avoid unnecessary re-renders.'
+            });
+        }
+
+        // 2. Semantic accessibility
+        if (content.includes('<div') && content.includes('onClick') && !content.includes('role=') && !content.includes('tabIndex=')) {
+            suggestions.push({
+                title: 'Interactive Semantic Gap',
+                suggestion: 'Detected click handler on a <div>. Use a <button> or add role="button" and tabIndex={0} for screen readers.'
+            });
+        }
+
+        // 3. Image Optimization (Next.js)
+        if (content.includes('<img') && (content.includes('next/') || content.includes('package.json'))) {
+            suggestions.push({
+                title: 'Use Next.js Image Component',
+                suggestion: 'Detected native <img> tag in a Next.js project. Use "next/image" for automatic resizing and WebP conversion.'
+            });
+        }
+
+        // 4. Large inline styles
+        if (content.match(/style=\{\{.*?\}\}/gs)?.length > 5) {
+            suggestions.push({
+                title: 'Inline Styles Overhead',
+                suggestion: 'Many large inline styles detected. Move them to a CSS module or styled-components to reduce JS bundle size.'
+            });
+        }
+
+        return suggestions;
+    }
+
     async handleRPCRequest(request) {
         const { method, params = {} } = request;
         try {
             switch (method) {
                 case 'fe.analyze': return await this.handleAnalyze(params);
-                case 'fe.optimize': return { success: true, output: 'Component optimization pending Phase 2.' };
+                case 'fe.optimize': return await this.handleOptimize(params);
                 case 'fe.report': return { success: true, output: 'Lighthouse integration pending Phase 3.' };
                 default: throw new Error(`Unknown method: ${method}`);
             }
