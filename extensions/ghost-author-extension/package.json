@@ -1,0 +1,19 @@
+{
+  "name": "@ghost/author-extension",
+  "version": "1.0.0",
+  "description": "Developer toolkit for scaffolding, validating, and publishing Ghost CLI extensions.",
+  "main": "index.js",
+  "author": "Ghost CLI Team",
+  "license": "MIT",
+  "dependencies": {
+    "@ghost/extension-sdk": "^1.0.0"
+  },
+  "files": [
+    "index.js",
+    "extension.js",
+    "manifest.json",
+    "lib/**/*",
+    "templates/**/*",
+    "README.md"
+  ]
+}

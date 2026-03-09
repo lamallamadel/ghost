@@ -1,0 +1,27 @@
+{
+  "id": "ghost-author-extension",
+  "name": "Ghost Author Kit",
+  "version": "1.0.0",
+  "description": "Scaffold, validate and publish Ghost extensions.",
+  "main": "index.js",
+  "commands": ["init", "validate", "publish"],
+  "capabilities": {
+    "filesystem": {
+      "read": ["**/*"],
+      "write": [
+        "extensions/**/*",
+        "packages/**/*"
+      ]
+    },
+    "network": {
+      "allowlist": ["https://registry.npmjs.org"]
+    }
+  },
+  "permissions": [
+    "filesystem:read",
+    "filesystem:write",
+    "network:https",
+    "process:spawn",
+    "ui:prompt"
+  ]
+}
