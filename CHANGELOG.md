@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.1.2] - 2026-03-09
+
+### 🎉 Milestone: Standard Library & IPC Stabilization
+
+Ghost CLI v1.1.2 marks the transition to a fully decentralized architecture where the core acts as a pure security orchestrator for its 14 native extensions.
+
+### ✨ Added
+- **Standard Library**: 14 native extensions covering Git, Security, AI, Docs, Agents, Tests, CI, Mesh, Policy, Author, Deps, Desktop, System, and Marketplace.
+- **ExtensionRunner**: A new SDK bootstrapper for reliable standalone execution of extensions.
+- **Direct Config Intent**: Secure `requestConfig()` method in SDK to access global settings without manual path handling.
+- **LogExecutor**: Centralized logging system for extensions integrated into the core pipeline.
+
+### 🔧 Improved
+- **Process Isolation**: All extensions now run in isolated subprocesses by default, preventing I/O deadlocks and thread blocking.
+- **RPC Stability**: Asynchronous JSON-RPC over IPC now handles concurrent intents and responses with high reliability.
+- **NIST SI-10 Hardening**: Path traversal protection now supports tilde (`~`) expansion and safe access to global configuration directories.
+- **AI Compatibility**: Enhanced support for Anthropic (Claude) protocol, including proper header handling and model alias resolution (`claude-3-5-sonnet-latest`).
+- **Standardized Executors**: All pipeline executors now return a unified `result` property, simplifying SDK consumption.
+
+### 🐛 Fixed
+- Resolved `Request Timeout` deadlocks in the RPC bus during high-volume intent emission.
+- Fixed `Received response for unknown request ID` errors caused by async bridge race conditions.
+- Corrected CJS/ESM compatibility issues in Desktop and CI extensions.
+- Eliminated false positive security violations during legitimate documentation generation.
+
+---
+
 ## [1.0.0] - 2024-01-15
 
 ### 🎉 Major Release: Production-Ready Enterprise Platform
