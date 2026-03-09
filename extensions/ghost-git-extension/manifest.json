@@ -1,10 +1,10 @@
 {
   "id": "ghost-git-extension",
   "name": "Ghost Git Extension",
-  "version": "1.0.0",
+  "version": "1.1.1",
   "description": "Git operations extension for Ghost CLI with AI-powered commit generation, security scanning, version management, and merge resolution",
   "main": "index.js",
-  "commands": ["commit", "audit", "version", "merge", "history"],
+  "commands": ["add", "commit", "audit", "version", "merge", "history"],
   "capabilities": {
     "filesystem": {
       "read": ["**/*"],

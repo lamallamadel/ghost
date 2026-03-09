@@ -1,3 +1,25 @@
+# Release Notes - Ghost Git Extension v1.1.1
+
+This release introduces the `ghost add` command, bringing proactive security scanning to the staging phase of the Git workflow.
+
+## Key Changes
+
+### 🛡️ Proactive Security Scanning
+The new `ghost add` command now scans your files for potential secrets (API keys, tokens, etc.) *before* they are staged in Git.
+- **Safety First**: If a secret is detected, the `add` operation is automatically blocked.
+- **Detailed Warnings**: Identifies the specific file, secret type, and severity of the issue.
+- **Manual Override**: For false positives, you can use the `--force` flag to stage the files anyway.
+
+### 🛠️ Developer Experience & Testability
+- **Enhanced Testing**: The test suite has been expanded to cover the new `add` logic, with improved mocking for core-level intents.
+- **Robust SDK Integration**: Refined how the extension interacts with the Ghost Core via the SDK, ensuring more reliable behavior across different environments.
+
+## Installation
+
+```bash
+ghost extension install extensions/ghost-git-extension
+```
+
 # Release Notes - Ghost Git Extension v1.1.0
 
 This release marks a significant architectural upgrade for the Ghost Git Extension, focusing on robustness, security, and developer experience.

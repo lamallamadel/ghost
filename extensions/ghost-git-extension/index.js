@@ -70,6 +70,25 @@ class ExtensionWrapper {
     }
 
     /**
+     * Command: add
+     * Stages changes with proactive security scanning.
+     */
+    async add(params) {
+        try {
+            return await this.git.handleRPCRequest({
+                method: 'git.add',
+                params: {
+                    args: params.args || [],
+                    files: params.files || [],
+                    flags: params.flags || {}
+                }
+            });
+        } catch (error) {
+            return { success: false, output: `\x1b[31mError:\x1b[0m ${error.message}` };
+        }
+    }
+
+    /**
      * Command: commit
      * Generates an AI commit message for staged changes and commits them.
      */

@@ -20,7 +20,18 @@ class MockCoreHandler {
     async handle(request) {
         this.calls.push(request);
         
-        const response = this.responses.get(request.method);
+        let methodToLookup = request.method;
+        
+        // If it's an intent, we look up the response by 'intent' or by 'intent:<type>:<op>'
+        if (request.method === 'intent') {
+            const { type, operation } = request.params;
+            const specificKey = `intent:${type}:${operation}`;
+            if (this.responses.has(specificKey)) {
+                methodToLookup = specificKey;
+            }
+        }
+
+        const response = this.responses.get(methodToLookup);
         
         if (response instanceof Error) {
             return {
@@ -271,6 +282,80 @@ async function runTests() {
         assert.strictEqual(response.id, 1);
         assert(response.error);
         assert(response.error.message.includes('Unknown method'));
+    });
+
+    // Test git.add
+    await asyncTest('RPC - git.add (No secrets)', async () => {
+        const mock = new MockCoreHandler();
+        const { handleRequest } = createExtension((req) => mock.handle(req));
+        
+        // Mock status --porcelain
+        mock.setResponse('intent:git:exec', { stdout: ' M clean.txt' });
+        
+        // Mock file read
+        mock.setResponse('intent:filesystem:read', { content: 'Just some clean code' });
+        
+        // Mock actual git add
+        mock.setResponse('intent:git:exec', { stdout: '' });
+        
+        const response = await handleRequest({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "git.add",
+            params: { files: ['clean.txt'] }
+        });
+        
+        assert(response.result, 'Response result should exist');
+        assert.strictEqual(response.result.success, true);
+        assert(response.result.output.includes('staged changes'));
+    });
+
+    await asyncTest('RPC - git.add (Blocked by secret)', async () => {
+        const mock = new MockCoreHandler();
+        const { handleRequest } = createExtension((req) => mock.handle(req));
+        
+        // Mock status --porcelain
+        mock.setResponse('intent:git:exec', { stdout: ' M secret.txt' });
+        
+        // Mock file read with a secret
+        mock.setResponse('intent:filesystem:read', { content: 'const key = "gsk_123456789012345678901234567890123456789012345678";' });
+        
+        const response = await handleRequest({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "git.add",
+            params: { files: ['secret.txt'] }
+        });
+        
+        assert(response.result, 'Response result should exist');
+        assert.strictEqual(response.result.success, false);
+        assert.strictEqual(response.result.blocked, true);
+        assert(response.result.output.includes('SECURITY WARNING'));
+    });
+
+    await asyncTest('RPC - git.add (Force add with secret)', async () => {
+        const mock = new MockCoreHandler();
+        const { handleRequest } = createExtension((req) => mock.handle(req));
+        
+        // Mock status --porcelain
+        mock.setResponse('intent:git:exec', { stdout: ' M secret.txt' });
+        
+        // Mock actual git add
+        mock.setResponse('intent:git:exec', { stdout: '' });
+        
+        const response = await handleRequest({
+            jsonrpc: "2.0",
+            id: 1,
+            method: "git.add",
+            params: { 
+                files: ['secret.txt'],
+                flags: { force: true }
+            }
+        });
+        
+        assert(response.result, 'Response result should exist');
+        assert.strictEqual(response.result.success, true);
+        assert(response.result.output.includes('staged changes'));
     });
 
     // Summary

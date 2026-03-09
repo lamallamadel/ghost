@@ -124,8 +124,28 @@ class GitWrapper {
         return raw.split('----END----').map(s => s.trim()).filter(Boolean);
     }
 
-    async add(file) {
-        return await this.exec(['add', file]);
+    async add(files) {
+        const fileList = Array.isArray(files) ? files : [files];
+        if (fileList.length === 0) return { success: true, output: 'No files specified to add.' };
+        
+        // Escape filenames for shell
+        const escapedFiles = fileList.map(f => `"${f}"`);
+        return await this.exec(['add', ...escapedFiles]);
+    }
+
+    async getUnstagedChanges(files = []) {
+        // git status --porcelain shows unstaged as ' M' or '??' or ' D'
+        // We only care about M and ?? for secret scanning
+        const args = ['status', '--porcelain'];
+        if (files.length > 0) {
+            args.push('--');
+            files.forEach(f => args.push(`"${f}"`));
+        }
+        
+        const output = await this.exec(args);
+        return output.split('\n')
+            .filter(line => line.startsWith(' M') || line.startsWith('??'))
+            .map(line => line.substring(3).trim());
     }
 
     async commit(message, options = {}) {
@@ -280,6 +300,67 @@ class GitExtension {
         return suspicious;
     }
 
+    async handleAdd(params) {
+        const files = params.args || params.files || [];
+        const flags = params.flags || {};
+        
+        // 1. Identify what we are adding (resolving '.' or directories)
+        const targetFiles = files.length > 0 ? files : ['.'];
+        
+        // 2. Identify UNSTAGED files among targets for pre-add scanning
+        const unstaged = await this.git.getUnstagedChanges(files);
+        
+        if (unstaged.length > 0 && !flags.force && !flags['skip-audit']) {
+            const auditResults = await this._scanFilesForSecrets(unstaged);
+            if (auditResults.length > 0) {
+                let warning = `\n${Colors.WARNING}${Colors.BOLD}⚠ SECURITY WARNING:${Colors.ENDC} Potential secrets detected in files to be staged:\n`;
+                for (const issue of auditResults) {
+                    warning += `  - ${Colors.CYAN}${issue.file}${Colors.ENDC}: ${issue.type} (${issue.severity})\n`;
+                }
+                warning += `\nUse ${Colors.BOLD}--force${Colors.ENDC} to stage these files anyway, or remove the secrets first.\n`;
+                
+                return { success: false, output: warning, blocked: true };
+            }
+        }
+
+        // 3. Execute the actual git add
+        try {
+            await this.git.add(targetFiles);
+            const addedCount = unstaged.length > 0 ? unstaged.length : 'All specified';
+            return { 
+                success: true, 
+                output: `${Colors.GREEN}✓ staged changes${Colors.ENDC}`,
+                filesStaged: unstaged
+            };
+        } catch (error) {
+            return { success: false, output: `${Colors.FAIL}Error staging files:${Colors.ENDC} ${error.message}` };
+        }
+    }
+
+    async _scanFilesForSecrets(files) {
+        const findings = [];
+        for (const file of files) {
+            try {
+                // Use intent to read file content safely through core
+                const result = await this.sdk.emitIntent({
+                    type: 'filesystem',
+                    operation: 'read',
+                    params: { path: file }
+                });
+                const content = result.content || result;
+                const secrets = this.scanForSecrets(content);
+                if (secrets.length > 0) {
+                    for (const s of secrets) {
+                        findings.push({ file, type: s.type, severity: s.severity });
+                    }
+                }
+            } catch (e) {
+                // Skip files we can't read (binary, etc)
+            }
+        }
+        return findings;
+    }
+
     async getStagedDiff() {
         const files = await this.git.getStagedFiles();
         if (files.length === 0) return { text: "", map: {}, files: [] };
@@ -396,6 +477,7 @@ class GitExtension {
             let result;
             switch (method) {
                 case 'git.checkRepo': result = await this.git.isRepo(); break;
+                case 'git.add': result = await this.handleAdd(params); break;
                 case 'git.getStagedDiff': result = await this.getStagedDiff(); break;
                 case 'git.generateCommit': result = await this.generateCommit(params.diffText, params.customPrompt, params.provider, params.apiKey, params.model); break;
                 case 'git.auditSecurity': result = await this.auditSecurity(params.diffMap, params.provider, params.apiKey, params.model); break;
@@ -428,6 +510,21 @@ class GitExtension {
 
 function createExtension(coreHandler) {
     const sdk = new ExtensionSDK('ghost-git-extension');
+    
+    // In tests, we need to redirect the SDK's internal calls to our mock handler
+    if (coreHandler) {
+        sdk.emitIntent = async (intent) => {
+            const response = await coreHandler({
+                jsonrpc: "2.0",
+                id: Date.now().toString(),
+                method: 'intent',
+                params: intent
+            });
+            if (response.error) throw new Error(response.error.message);
+            return response.result;
+        };
+    }
+
     const extension = new GitExtension(sdk);
     return { handleRequest: (req) => extension.handleRPCRequest(req), extension };
 }
