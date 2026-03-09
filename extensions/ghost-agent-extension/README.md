@@ -2,16 +2,16 @@
 
 The autonomous orchestration brain for the Ghost CLI ecosystem.
 
-## Phase 1: Task Engine & Orchestration (Completed)
-This phase established the core ability of the agent to communicate with and pilot other expert extensions.
+## Phase 2: Cognitive Loop & Context Analysis (Completed)
+This phase introduced a feedback loop and mission memory to the agent.
 
-### Features
-- **Cross-Extension Call (RPC)**: Uses the `extension:call` permission to trigger actions in any Standard Library extension.
-- **Workflow Orchestration**: Executes multi-step missions by combining Security, Docs, and Git insights.
-- **Goal-Oriented Execution**: Receives high-level objectives and delegates technical work to specialized modules.
+### New Features
+- **Cognitive Loop**: The agent now analyzes results from extensions and adapts its plan dynamically.
+- **Mission Memory**: Maintains a chronological log of all steps taken during a specific objective.
+- **Analytical Thinking**: New command to trigger internal reasoning based on current environment state.
 
-### Commands
-- `ghost agent solve "<goal>"`: Initiates an autonomous mission to achieve the specified goal.
+### New Commands
+- `ghost agent think "<topic>"`: Triggers a cognitive analysis of the current project context.
 
 ## Installation
 ```bash
