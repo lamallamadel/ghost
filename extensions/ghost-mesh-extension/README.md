@@ -2,16 +2,17 @@
 
 Service discovery and dependency management layer for the Ghost CLI ecosystem.
 
-## Phase 1: Service Registry & Discovery (Completed)
-This phase established the infrastructure for dynamic service mapping across extensions.
+## Phase 2: Dependency Graph & Priority Engine (Completed)
+This phase added intelligence to understand and optimize the extension network.
 
-### Features
-- **Dynamic Routing Table**: Scans all installed extensions to build a virtual service map.
-- **Service Abstraction**: Maps extension commands to virtual service endpoints (e.g., `git:commit` → `ghost-git-extension`).
-- **Inter-op Foundation**: Provides the registry needed for extensions to find and call each other without hardcoding IDs.
+### New Features
+- **Dependency Graphing**: Builds a full topological map of all extension relationships.
+- **Circular Dependency Detection**: Advanced DFS algorithm to identify and alert on critical cycles.
+- **Load Order Optimization**: Calculates the optimal priority order for extension initialization.
+- **Graph Metadata**: Exposes the raw graph and load order via RPC for core-level introspection.
 
-### Commands
-- `ghost mesh routes`: Displays the active service routing table and providers.
+### New Commands
+- `ghost mesh map`: Displays the global dependency graph and detects architectural issues.
 
 ## Installation
 ```bash
