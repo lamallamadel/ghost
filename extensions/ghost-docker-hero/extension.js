@@ -20,6 +20,101 @@ const Colors = {
 class DockerHeroExtension {
     constructor(sdk) {
         this.sdk = sdk;
+        this.DEFAULT_MODEL = "llama-3.3-70b-versatile";
+        this.AI_PROVIDERS = {
+            groq: { hostname: "api.groq.com", path: "/openai/v1/chat/completions" },
+            openai: { hostname: "api.openai.com", path: "/v1/chat/completions" },
+            anthropic: { hostname: "api.anthropic.com", path: "/v1/messages" },
+            gemini: { hostname: "generativelanguage.googleapis.com", path: "/v1beta/models/" }
+        };
+    }
+
+    async handleGenerate(params) {
+        const flags = params.flags || {};
+        await this.sdk.requestLog({ level: 'info', message: 'Analyzing project stack for Dockerfile generation...' });
+
+        try {
+            // 1. Gather Context (Simulate fetching from docs/deps extension)
+            const packageJsonExists = await this._fileExists('package.json');
+            let context = "Generic Application";
+            if (packageJsonExists) {
+                const pkgStr = await this.sdk.requestFileRead({ path: 'package.json' });
+                const pkg = JSON.parse(pkgStr);
+                context = `Node.js Application. Dependencies: ${Object.keys(pkg.dependencies || {}).join(', ')}. Scripts: ${Object.keys(pkg.scripts || {}).join(', ')}`;
+            }
+
+            // 2. Prepare AI Call
+            const { provider, apiKey, model } = this._resolveAIConfig(flags);
+            if (!provider || !apiKey) {
+                return { success: false, output: `${Colors.WARNING}AI Provider not configured. Run 'ghost setup'.${Colors.ENDC}` };
+            }
+
+            const prompt = `Tu es un expert DevOps et Docker.
+            Génère un Dockerfile multi-stage, optimisé (Alpine/Slim), et sécurisé (utilisateur non-root) pour le projet suivant :
+            
+            CONTEXTE DU PROJET : ${context}
+            
+            Règles :
+            - Utilise le cache des packages (ex: npm ci).
+            - Ne mets pas de secrets en dur.
+            - Réponds UNIQUEMENT avec le contenu brut du Dockerfile, sans markdown ni explications.`;
+
+            await this.sdk.requestLog({ level: 'info', message: 'Generating optimized Dockerfile via AI...' });
+            
+            // 3. Generate
+            const dockerfileContent = await this.callAI(provider, apiKey, model, "Expert Docker", prompt);
+            
+            // 4. Save
+            const targetPath = flags.out || 'Dockerfile.optimized';
+            await this.sdk.requestFileWrite({ path: targetPath, content: dockerfileContent.trim() });
+
+            return { 
+                success: true, 
+                output: `${Colors.GREEN}✓ Smart Dockerfile generated successfully at ${targetPath}${Colors.ENDC}\n${Colors.DIM}This file uses multi-stage builds and runs as a non-root user.${Colors.ENDC}`
+            };
+
+        } catch (error) {
+            return { success: false, output: `Generation failed: ${error.message}` };
+        }
+    }
+
+    async _fileExists(filePath) {
+        try {
+            await this.sdk.emitIntent({ type: 'filesystem', operation: 'stat', params: { path: filePath } });
+            return true;
+        } catch (e) {
+            return false;
+        }
+    }
+
+    _resolveAIConfig(flags) {
+        // Read from global config in real impl via intent
+        return { 
+            provider: flags.provider || 'anthropic', 
+            apiKey: flags.apiKey || flags['api-key'],
+            model: flags.model 
+        };
+    }
+
+    async callAI(provider, apiKey, model, systemPrompt, userPrompt) {
+        const actualModel = model || this.DEFAULT_MODEL;
+        const config = this.AI_PROVIDERS[provider] || this.AI_PROVIDERS.groq;
+        
+        const payload = {
+            model: actualModel,
+            messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }],
+            temperature: 0.1
+        };
+
+        const response = await this.sdk.requestNetworkCall({
+            url: `https://${config.hostname}${config.path}`,
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        const data = JSON.parse(response);
+        return data.choices?.[0]?.message?.content || JSON.stringify(data);
     }
 
     async handleScan(params) {

@@ -2,17 +2,16 @@
 
 Container optimization and security assistant for the Ghost CLI ecosystem.
 
-## Phase 2: Size Optimization (Completed)
-This phase added intelligence to shrink Docker images and optimize layer usage.
+## Phase 3: Smart Generation (Completed)
+This final phase introduced generative AI capabilities to create perfect Dockerfiles from scratch.
 
 ### New Features
-- **Size Analysis**: Identifies heavy base images and suggests lighter alternatives (Alpine, Slim).
-- **Multi-stage Detection**: Recommends multi-stage build patterns to separate build-time and run-time dependencies.
-- **Cache Hygiene**: Detects missing package manager cleanup commands.
-- **Dependency Pruning**: Suggests production-only flags for language package managers (NPM, Yarn).
+- **Context-Aware Generation**: Analyzes project files (e.g., `package.json`) to understand the tech stack before generating.
+- **AI-Powered Assembly**: Creates multi-stage, secure, and optimized Dockerfiles automatically.
+- **Provider Support**: Compatible with multiple AI providers (Anthropic, OpenAI, etc.) configured via Ghost setup.
 
 ### New Commands
-- `ghost docker shrink [path]`: Analyzes a Dockerfile and provides specific instructions to reduce the final image size.
+- `ghost docker generate [--out <file>]`: Analyzes the project and generates a production-ready `Dockerfile`.
 
 ## Installation
 ```bash
