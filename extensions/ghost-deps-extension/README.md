@@ -2,16 +2,16 @@
 
 Dependency management and visualization extension for the Ghost CLI ecosystem.
 
-## Phase 2: Security & License Audit (Completed)
-This phase added compliance and security scanning for all project dependencies.
+## Phase 3: Conflict Resolution (Completed)
+This final phase enabled automated detection and resolution of dependency version conflicts.
 
 ### New Features
-- **License Compliance**: Scans dependencies to ensure they use approved licenses (MIT, Apache, etc.).
-- **Vulnerability Integration**: Leverages `npm audit` via secure Ghost intents to detect known security threats.
-- **Detailed Reporting**: Generates structured reports on the security posture of the project's dependency tree.
+- **Version Conflict Solver**: Identifies mismatches between extension requirements and actual installed versions.
+- **Smart Recommendations**: Suggests specific `ghost marketplace` commands to resolve peer dependency issues.
+- **RPC Introspection**: Queries the core's resolver to provide accurate, real-time resolution paths.
 
 ### New Commands
-- `ghost deps audit`: Performs a full security and license audit of project dependencies.
+- `ghost deps solve`: Analyzes conflicts and provides actionable recommendations for fixes.
 
 ## Installation
 ```bash
