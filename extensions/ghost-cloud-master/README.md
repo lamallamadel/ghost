@@ -2,16 +2,16 @@
 
 AI-powered infrastructure-as-code generator and cloud auditing assistant for the Ghost CLI ecosystem.
 
-## Phase 1: Infrastructure Analysis (Completed)
-This phase established the foundation for detecting cloud resource requirements from project source code.
+## Phase 2: IaC Template Generation (Completed)
+This phase introduced the automated generation of Infrastructure-as-Code templates.
 
-### Features
-- **Resource Detection**: Scans project files (`package.json`, source code) to identify compute, database, and storage needs.
-- **AI Architecture Recommendations**: Leverages specialized AI prompts to suggest optimal AWS/GCP services based on detected needs.
-- **Project Awareness**: Analyzes dependencies to understand cloud-specific SDK usage.
+### New Features
+- **Multi-Format IaC**: Supports generating both Terraform (`.tf`) and CloudFormation (`.yml`) templates.
+- **AI-Powered Synthesis**: Synthesizes complete, production-ready infrastructure definitions based on detected project needs.
+- **Security-First Templates**: Enforces encryption and least-privilege access rules in generated cloud resources.
 
-### Commands
-- `ghost cloud detect`: Analyzes the project and provides a strategic infrastructure recommendation report.
+### New Commands
+- `ghost cloud generate [--format terraform|cloudformation]`: Generates infrastructure templates in the `infra/` folder.
 
 ## Installation
 ```bash

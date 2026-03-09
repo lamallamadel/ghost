@@ -98,12 +98,57 @@ class CloudExtension {
         return data.choices?.[0]?.message?.content || JSON.stringify(data);
     }
 
+    async handleGenerate(params) {
+        const flags = params.flags || {};
+        const format = flags.format || 'terraform'; // terraform or cloudformation
+        await this.sdk.requestLog({ level: 'info', message: `Generating ${format} templates for project infrastructure...` });
+
+        try {
+            const { provider, apiKey, model } = this._resolveAIConfig(flags);
+            if (!provider || !apiKey) {
+                return { success: false, output: `${Colors.WARNING}AI Provider not configured. Run 'ghost setup'.${Colors.ENDC}` };
+            }
+
+            // 1. Gather context from detection (re-run detection logic briefly)
+            const detection = await this.handleDetect(params);
+            if (!detection.success) throw new Error('Context detection failed.');
+
+            // 2. Prepare AI Call
+            const prompt = `Tu es un expert en Cloud et Infrastructure-as-Code.
+            Génère un template ${format} complet pour déployer l'application suivante :
+            
+            RESSOURCES DÉTECTÉES : ${JSON.stringify(detection.resources)}
+            
+            Règles :
+            - Suis les meilleures pratiques de sécurité (chiffrement, accès minimal).
+            - Utilise des modules modernes si pertinent.
+            - Réponds UNIQUEMENT avec le contenu brut du fichier (${format === 'terraform' ? '.tf' : '.yml'}), sans markdown ni explications.`;
+
+            const iacContent = await this.callAI(provider, apiKey, model, "Expert IaC", prompt);
+            
+            // 3. Save
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 10);
+            const ext = format === 'terraform' ? 'tf' : 'yml';
+            const targetPath = `infra/main-${timestamp}.${ext}`;
+            
+            await this.sdk.requestFileWrite({ path: targetPath, content: iacContent.trim() });
+
+            return { 
+                success: true, 
+                output: `${Colors.GREEN}✓ ${format.toUpperCase()} template generated at ${targetPath}${Colors.ENDC}\n${Colors.DIM}Initialize your infrastructure by running your provider CLI tool.${Colors.ENDC}`
+            };
+
+        } catch (error) {
+            return { success: false, output: `IaC Generation failed: ${error.message}` };
+        }
+    }
+
     async handleRPCRequest(request) {
         const { method, params = {} } = request;
         try {
             switch (method) {
                 case 'cloud.detect': return await this.handleDetect(params);
-                case 'cloud.generate': return { success: true, output: 'IaC generation pending Phase 2.' };
+                case 'cloud.generate': return await this.handleGenerate(params);
                 case 'cloud.audit': return { success: true, output: 'Cost/Security audit pending Phase 3.' };
                 default: throw new Error(`Unknown method: ${method}`);
             }
