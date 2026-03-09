@@ -2,17 +2,16 @@
 
 CI/CD integration and headless automation engine for the Ghost CLI ecosystem.
 
-## Phase 2: CI Gates & Validation (Completed)
-This phase introduced automated quality gates for CI/CD environments.
+## Phase 3: CI Reporting (Completed)
+This phase added structured reporting for integration with CI/CD dashboards.
 
 ### New Features
-- **Automated Security Gates**: Automatically triggers a full repository audit and fails the pipeline if critical secrets are found.
-- **Documentation Verification**: Ensures architectural diagrams and documentation are up to date.
-- **Cross-Extension Orchestration**: Deep integration with Security and Docs extensions via Ghost RPC.
-- **Exit Code Support**: Returns standard Unix exit codes (0 for success, 1 for failure) to integrate with CI job status.
+- **JSON Reporting**: Generates `ci-reports/ghost-results.json` for consumption by external tools and scripts.
+- **Markdown Summaries**: Generates `ci-reports/GHOST_SUMMARY.md` formatted for GitHub/GitLab job summaries.
+- **Environment Metadata**: Captures and reports CI-specific metadata (SHA, Actor, Branch) in all reports.
 
 ### New Commands
-- `ghost ci check [--ai]`: Runs all automated gates and returns a summary report.
+- `ghost ci report`: Generates structured CI artifacts based on the latest checks.
 
 ## Installation
 ```bash
