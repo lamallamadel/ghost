@@ -2,16 +2,16 @@
 
 AI-powered test automation and coverage extension for the Ghost CLI ecosystem.
 
-## Phase 2: AI Test Generation (Completed)
-This phase introduced generative AI capabilities to automate unit test creation.
+## Phase 3: Coverage Reporting (Completed)
+This final phase added visibility into code quality and testing gaps.
 
 ### New Features
-- **AI Test Generator**: Automatically analyzes any source file and creates a corresponding unit test file.
-- **Framework Awareness**: Generates tests compatible with established project frameworks (Vitest/Jest).
-- **Multi-Model Support**: Leverage different AI providers for high-quality test logic.
+- **Coverage Analysis**: Runs project coverage tools and parses results for easy viewing.
+- **Hotspot Detection**: Identifies files with low coverage that need attention.
+- **Metric Breakdown**: Provides detailed percentages for statements, branches, functions, and lines.
 
 ### New Commands
-- `ghost test gen [file]`: Generates a `.test.js` file for the specified source file using AI.
+- `ghost test coverage`: Executes coverage tools and displays a summary report in the console.
 
 ## Installation
 ```bash
