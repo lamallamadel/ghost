@@ -2,16 +2,17 @@
 
 Container optimization and security assistant for the Ghost CLI ecosystem.
 
-## Phase 1: Security Scanning (Completed)
-This phase established the static analysis engine for Dockerfiles.
+## Phase 2: Size Optimization (Completed)
+This phase added intelligence to shrink Docker images and optimize layer usage.
 
-### Features
-- **Security Audit**: Detects high-risk practices like running as `root` or hardcoding secrets in `ENV` instructions.
-- **Best Practices Check**: Verifies image pinning and basic layer hygiene.
-- **Rule-Based Analysis**: Static analysis of Dockerfile instructions via Ghost filesystem intents.
+### New Features
+- **Size Analysis**: Identifies heavy base images and suggests lighter alternatives (Alpine, Slim).
+- **Multi-stage Detection**: Recommends multi-stage build patterns to separate build-time and run-time dependencies.
+- **Cache Hygiene**: Detects missing package manager cleanup commands.
+- **Dependency Pruning**: Suggests production-only flags for language package managers (NPM, Yarn).
 
-### Commands
-- `ghost docker scan [path]`: Analyzes a Dockerfile for security vulnerabilities and best practices.
+### New Commands
+- `ghost docker shrink [path]`: Analyzes a Dockerfile and provides specific instructions to reduce the final image size.
 
 ## Installation
 ```bash
