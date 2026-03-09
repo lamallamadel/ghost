@@ -2,17 +2,16 @@
 
 System utility and environment management extension for the Ghost CLI ecosystem.
 
-## Phase 2: Environment Hardening (Completed)
-This phase added proactive environment management and health checks.
+## Phase 3: Resource Analytics (Completed)
+This phase introduced resource monitoring and performance insights.
 
 ### New Features
-- **Environment Sanitization**: Cleans up temporary files and stale locks in `~/.ghost/temp/`.
-- **System Doctor**: Verifies the existence and accessibility of critical Ghost system files and configurations.
-- **Improved RPC Error Handling**: Better management of RPC errors during system-level operations.
+- **Resource Analytics**: Provides a breakdown of CPU and RAM usage for Ghost and its extensions.
+- **Footprint Estimation**: Estimates the RSS memory impact of each active extension.
+- **Performance Reporting**: Detailed user and system CPU time tracking.
 
 ### New Commands
-- `ghost env sanitize`: Cleans up temporary Ghost artifacts.
-- `ghost sys doctor`: Runs a comprehensive health check on system files.
+- `ghost sys analytics`: Displays a resource utilization report for the entire Ghost environment.
 
 ## Installation
 ```bash

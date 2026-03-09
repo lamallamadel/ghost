@@ -33,6 +33,10 @@ class ExtensionWrapper {
         return await this.sys.handleRPCRequest({ method: 'sys.doctor', params });
     }
 
+    async analytics(params) {
+        return await this.sys.handleRPCRequest({ method: 'sys.analytics', params });
+    }
+
     async handleRPCRequest(request) {
         return await this.sys.handleRPCRequest(request);
     }
