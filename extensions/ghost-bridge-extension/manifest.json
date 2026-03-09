@@ -1,0 +1,20 @@
+{
+  "id": "ghost-bridge-extension",
+  "name": "Ghost Bridge Master",
+  "version": "1.0.0",
+  "description": "Port for IDE communication. Safely exposes Ghost capabilities to external editors.",
+  "main": "index.js",
+  "commands": ["start", "stop", "status"],
+  "capabilities": {
+    "network": {
+      "incoming": true,
+      "port": 9877
+    }
+  },
+  "permissions": [
+    "filesystem:read",
+    "network:https",
+    "extension:call",
+    "process:spawn"
+  ]
+}
