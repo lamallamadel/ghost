@@ -3,6 +3,20 @@
   "lastUpdated": "2024-01-15T00:00:00Z",
   "extensions": [
     {
+      "id": "ghost-sql-sage",
+      "name": "Ghost SQL-Sage",
+      "description": "AI-powered database query optimization and schema auditing engine. Detects N+1 queries and suggests indexing strategies.",
+      "author": "Ghost CLI Team",
+      "category": "database",
+      "verified": true,
+      "versions": [
+        {
+          "version": "1.0.0",
+          "manifest": "{\"id\":\"ghost-sql-sage\",\"name\":\"Ghost SQL-Sage\",\"version\":\"1.0.0\",\"commands\":[\"analyze\",\"audit\",\"generate\"]}"
+        }
+      ]
+    },
+    {
       "id": "ghost-docker-hero",
       "name": "Ghost Docker-Hero",
       "description": "Container optimization and security engine. Scans Dockerfiles for vulnerabilities and suggests optimizations.",
