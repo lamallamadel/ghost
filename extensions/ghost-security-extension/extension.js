@@ -68,38 +68,23 @@ class SecretScanner {
             return this.KNOWN_NON_SECRETS.some(ns => str.toLowerCase().includes(ns.toLowerCase()));
         };
 
-        // 1. Scan for Secrets (Regex)
         for (const { name, regex, severity } of this.SECRET_REGEXES) {
             const matches = content.matchAll(regex);
             for (const m of matches) {
                 const val = m[0];
                 if (val.length > 8 && !isKnown(val)) {
-                    suspicious.push({ 
-                        display: val.substring(0, 30) + (val.length > 30 ? '...' : ''), 
-                        type: name, 
-                        value: val, 
-                        severity, 
-                        method: 'regex' 
-                    });
+                    suspicious.push({ display: val.substring(0, 30) + (val.length > 30 ? '...' : ''), type: name, value: val, severity, method: 'regex' });
                 }
             }
         }
 
-        // 2. Scan for OWASP Vulnerabilities
         for (const { name, regex, severity, category } of this.OWASP_PATTERNS) {
             const matches = content.matchAll(regex);
             for (const m of matches) {
-                suspicious.push({
-                    display: m[0],
-                    type: name,
-                    category,
-                    severity,
-                    method: 'owasp'
-                });
+                suspicious.push({ display: m[0], type: name, category, severity, method: 'owasp' });
             }
         }
 
-        // 3. Entropy Analysis
         const entropyRegex = /(['"])(.*?)(\1)|=\s*([^\s]+)/g;
         let match;
         while ((match = entropyRegex.exec(content)) !== null) {
@@ -108,14 +93,7 @@ class SecretScanner {
             const entropy = this.calculateShannonEntropy(candidate);
             if (entropy >= 4.5 && entropy <= 7.0) {
                 if (!suspicious.some(s => s.value === candidate)) {
-                    suspicious.push({ 
-                        display: candidate.substring(0, 30) + (candidate.length > 30 ? '...' : ''), 
-                        type: 'High Entropy String', 
-                        value: candidate, 
-                        severity: entropy > 5.5 ? 'high' : 'medium', 
-                        entropy: entropy.toFixed(2), 
-                        method: 'entropy' 
-                    });
+                    suspicious.push({ display: candidate.substring(0, 30) + (candidate.length > 30 ? '...' : ''), type: 'High Entropy String', value: candidate, severity: entropy > 5.5 ? 'high' : 'medium', entropy: entropy.toFixed(2), method: 'entropy' });
                 }
             }
         }
@@ -138,15 +116,9 @@ class SecurityExtension {
 
     async handleScan(params) {
         const target = params.args?.[0] || '.';
-        await this.sdk.requestLog({ level: 'info', message: `Starting targeted security scan on: ${target}` });
-        
         try {
             const results = await this._scanRecursive(target);
-            return { 
-                success: true, 
-                output: this._formatScanReport(results, 'TARGETED SCAN'),
-                findings: results
-            };
+            return { success: true, output: this._formatScanReport(results, 'TARGETED SCAN'), findings: results };
         } catch (error) {
             return { success: false, output: `Scan failed: ${error.message}` };
         }
@@ -154,31 +126,13 @@ class SecurityExtension {
 
     async handleAudit(params) {
         const flags = params.flags || {};
-        await this.sdk.requestLog({ level: 'info', message: `Starting comprehensive repository audit` });
-        
         try {
-            // 1. Recursive Scan
             const results = await this._scanRecursive('.');
-            
-            // 2. Configuration Analysis
             const configIssues = await this._auditConfigurations();
-            
-            // 3. AI Validation (if enabled)
             let aiReport = "";
-            if (flags.ai && results.length > 0) {
-                aiReport = await this._validateWithAI(results, params);
-            }
-
-            const output = this._formatScanReport(results, 'FULL REPOSITORY AUDIT') + 
-                           this._formatConfigReport(configIssues) +
-                           (aiReport ? `\n\n${Colors.BOLD}AI VALIDATION ANALYSIS${Colors.ENDC}\n${aiReport}` : "");
-
-            return { 
-                success: true, 
-                output,
-                findings: results,
-                configIssues
-            };
+            if (flags.ai && results.length > 0) aiReport = await this._validateWithAI(results, params);
+            const output = this._formatScanReport(results, 'FULL REPOSITORY AUDIT') + this._formatConfigReport(configIssues) + (aiReport ? `\n\n${Colors.BOLD}AI VALIDATION ANALYSIS${Colors.ENDC}\n${aiReport}` : "");
+            return { success: true, output, findings: results, configIssues };
         } catch (error) {
             return { success: false, output: `Audit failed: ${error.message}` };
         }
@@ -187,57 +141,36 @@ class SecurityExtension {
     async _scanRecursive(target) {
         const findings = [];
         const ignoreDirs = ['.git', 'node_modules', 'dist', 'build', '.migration-backup'];
-        
         const walk = async (currentPath) => {
             try {
                 const stats = await this.sdk.emitIntent({ type: 'filesystem', operation: 'stat', params: { path: currentPath } });
-                
                 if (stats.isDirectory) {
                     if (ignoreDirs.some(d => currentPath.includes(d))) return;
-                    
                     const files = await this.sdk.emitIntent({ type: 'filesystem', operation: 'readdir', params: { path: currentPath } });
-                    for (const file of files) {
-                        await walk(path.join(currentPath, file));
-                    }
+                    for (const file of files) await walk(path.join(currentPath, file));
                 } else {
-                    // Only scan text files or relevant code files
                     const ext = path.extname(currentPath).toLowerCase();
                     const textExtensions = ['.js', '.ts', '.py', '.env', '.json', '.yml', '.yaml', '.md', '.sh', '.txt'];
                     if (textExtensions.includes(ext) || ext === '') {
                         const content = await this.sdk.requestFileRead({ path: currentPath });
                         const issues = this.scanner.scan(content);
-                        if (issues.length > 0) {
-                            findings.push({ file: currentPath, issues });
-                        }
+                        if (issues.length > 0) findings.push({ file: currentPath, issues });
                     }
                 }
-            } catch (e) {
-                // Skip files that can't be read
-            }
+            } catch (e) {}
         };
-
         await walk(target);
         return findings;
     }
 
     async _auditConfigurations() {
         const issues = [];
-        const configFiles = [
-            { path: '.env', type: 'Environment File' },
-            { path: 'package.json', type: 'Node Dependencies' },
-            { path: 'docker-compose.yml', type: 'Docker Configuration' }
-        ];
-
+        const configFiles = [{ path: '.env', type: 'Environment File' }, { path: 'package.json', type: 'Node Dependencies' }, { path: 'docker-compose.yml', type: 'Docker Configuration' }];
         for (const config of configFiles) {
             try {
                 const exists = await this.sdk.emitIntent({ type: 'filesystem', operation: 'stat', params: { path: config.path } });
-                if (exists) {
-                    if (config.path === '.env') {
-                        issues.push({ file: config.path, type: 'Information Exposure', message: '.env file found in repository. This should be ignored by Git.', severity: 'high' });
-                    }
-                    // Add more specific config checks here
-                }
-            } catch (e) { /* ignore */ }
+                if (exists && config.path === '.env') issues.push({ file: config.path, type: 'Information Exposure', message: '.env file found in repository. This should be ignored by Git.', severity: 'high' });
+            } catch (e) {}
         }
         return issues;
     }
@@ -245,59 +178,25 @@ class SecurityExtension {
     async _validateWithAI(findings, params) {
         const flags = params.flags || {};
         const { provider, apiKey, model } = this._resolveAIConfig(flags);
-        
         if (!provider || !apiKey) return `${Colors.WARNING}⚠ AI validation skipped: No API key configured.${Colors.ENDC}`;
-
-        const prompt = `Tu es un expert en cybersécurité. Voici une liste de vulnérabilités potentielles détectées par un scanner automatique.
-        Analyse-les et identifie les vrais risques par rapport aux faux positifs (ex: clés de test, placeholders).
-        
-        DONNÉES : ${JSON.stringify(findings)}
-        
-        Réponds par un résumé concis des risques critiques réels.`;
-
-        try {
-            return await this.callAI(provider, apiKey, model, "Expert en cybersécurité", prompt);
-        } catch (e) {
-            return `${Colors.FAIL}⚠ AI call failed: ${e.message}${Colors.ENDC}`;
-        }
+        const prompt = `Tu es un expert en cybersécurité. Voici une liste de vulnérabilités potentielles détectées par un scanner automatique. Analyse-les et identifie les vrais risques par rapport aux faux positifs (ex: clés de test, placeholders). DONNÉES : ${JSON.stringify(findings)}. Réponds par un résumé concis des risques critiques réels.`;
+        try { return await this.callAI(provider, apiKey, model, "Expert en cybersécurité", prompt); }
+        catch (e) { return `${Colors.FAIL}⚠ AI call failed: ${e.message}${Colors.ENDC}`; }
     }
 
-    _resolveAIConfig(flags) {
-        // Simple mock for resolve - in real impl, read from ghostrc via intent
-        return { 
-            provider: flags.provider || 'anthropic', 
-            apiKey: flags.apiKey || flags['api-key'],
-            model: flags.model 
-        };
-    }
+    _resolveAIConfig(flags) { return { provider: flags.provider || 'anthropic', apiKey: flags.apiKey || flags['api-key'], model: flags.model }; }
 
     async callAI(provider, apiKey, model, systemPrompt, userPrompt, temperature = 0.3) {
         const actualModel = model || this.DEFAULT_MODEL;
         const config = this.AI_PROVIDERS[provider] || this.AI_PROVIDERS.groq;
-        
-        const payload = {
-            model: actualModel,
-            messages: [
-                { role: "system", content: systemPrompt },
-                { role: "user", content: userPrompt }
-            ],
-            temperature
-        };
-
-        const response = await this.sdk.requestNetworkCall({
-            url: `https://${config.hostname}${config.path}`,
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
-
+        const payload = { model: actualModel, messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }], temperature };
+        const response = await this.sdk.requestNetworkCall({ url: `https://${config.hostname}${config.path}`, method: 'POST', headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
         const data = JSON.parse(response);
         return data.choices?.[0]?.message?.content || JSON.stringify(data);
     }
 
     _formatScanReport(results, title) {
         if (results.length === 0) return `${Colors.GREEN}✓ No security issues found in scan.${Colors.ENDC}`;
-        
         let report = `\n${Colors.BOLD}${title}${Colors.ENDC}\n${'='.repeat(30)}\n`;
         for (const res of results) {
             report += `\nFile: ${Colors.CYAN}${res.file}${Colors.ENDC}\n`;
@@ -311,14 +210,28 @@ class SecurityExtension {
 
     _formatConfigReport(issues) {
         if (issues.length === 0) return "";
-        
         let report = `\n\n${Colors.BOLD}CONFIGURATION AUDIT${Colors.ENDC}\n${'='.repeat(30)}\n`;
         for (const issue of issues) {
             const color = issue.severity === 'high' ? Colors.FAIL : Colors.WARNING;
-            report += `\n[${color}${issue.severity.toUpperCase()}${Colors.ENDC}] ${issue.file}: ${issue.type}\n`;
-            report += `  ${issue.message}\n`;
+            report += `\n[${color}${issue.severity.toUpperCase()}${Colors.ENDC}] ${issue.file}: ${issue.type}\n  ${issue.message}\n`;
         }
         return report;
+    }
+
+    async handleCompliance(params) {
+        const report = await this._generateNISTReport();
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const reportPath = `security-reports/NIST-SI-10-${timestamp}.md`;
+        try {
+            await this.sdk.requestFileWrite({ path: reportPath, content: report });
+            return { success: true, output: `${Colors.GREEN}✓ Compliance report generated:${Colors.ENDC} ${reportPath}`, path: reportPath };
+        } catch (error) { return { success: false, output: `Failed to save report: ${error.message}` }; }
+    }
+
+    async _generateNISTReport() {
+        const results = await this._scanRecursive('.');
+        const secretsFound = results.reduce((acc, curr) => acc + curr.issues.length, 0);
+        return `# NIST SI-10 Compliance Report\nGenerated on: ${new Date().toLocaleString()}\nExtension: Ghost Security Master v1.0.0\n\n## Control: SI-10 System and Information Integrity\nThe Ghost CLI enforces SI-10 through a mandatory I/O pipeline and proactive secret scanning.\n\n## Audit Summary\n- **Files Scanned**: ${results.length} files with findings (recursive)\n- **Potential Secrets Detected**: ${secretsFound}\n- **Vulnerability Checks**: OWASP Top 10 Injection, Insecure Storage\n\n## Integrity Verification\n- **Binary Integrity**: Verified by Ghost Core Gateway\n- **Extension Isolation**: Sandbox/Process isolation active\n- **Audit Logging**: Immutable logs captured in ~/.ghost/audit.log\n\n## Detailed Findings\n${results.map(r => `### File: ${r.file}\n${r.issues.map(i => `- [${i.severity}] ${i.type}: ${i.display}`).join('\n')}`).join('\n\n')}\n\n---\n*Report generated automatically by Ghost Security Master.*\n`;
     }
 
     async handleRPCRequest(request) {
@@ -334,53 +247,6 @@ class SecurityExtension {
         } catch (error) {
             return { error: { code: -32603, message: error.message } };
         }
-    }
-
-    async handleCompliance(params) {
-        await this.sdk.requestLog({ level: 'info', message: 'Generating NIST SI-10 Compliance Report' });
-        
-        const report = await this._generateNISTReport();
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const reportPath = `security-reports/NIST-SI-10-${timestamp}.md`;
-        
-        try {
-            await this.sdk.requestFileWrite({ 
-                path: reportPath, 
-                content: report 
-            });
-            return { success: true, output: `${Colors.GREEN}✓ Compliance report generated:${Colors.ENDC} ${reportPath}`, path: reportPath };
-        } catch (error) {
-            return { success: false, output: `Failed to save report: ${error.message}` };
-        }
-    }
-
-    async _generateNISTReport() {
-        const results = await this._scanRecursive('.');
-        const secretsFound = results.reduce((acc, curr) => acc + curr.issues.length, 0);
-        
-        return `# NIST SI-10 Compliance Report
-Generated on: ${new Date().toLocaleString()}
-Extension: Ghost Security Master v1.0.0
-
-## Control: SI-10 System and Information Integrity
-The Ghost CLI enforces SI-10 through a mandatory I/O pipeline and proactive secret scanning.
-
-## Audit Summary
-- **Files Scanned**: ${results.length} files with findings (recursive)
-- **Potential Secrets Detected**: ${secretsFound}
-- **Vulnerability Checks**: OWASP Top 10 Injection, Insecure Storage
-
-## Integrity Verification
-- **Binary Integrity**: Verified by Ghost Core Gateway
-- **Extension Isolation**: Sandbox/Process isolation active
-- **Audit Logging**: Immutable logs captured in ~/.ghost/audit.log
-
-## Detailed Findings
-${results.map(r => `### File: ${r.file}\n${r.issues.map(i => `- [${i.severity}] ${i.type}: ${i.display}`).join('\n')}`).join('\n\n')}
-
----
-*Report generated automatically by Ghost Security Master.*
-`;
     }
 }
 
