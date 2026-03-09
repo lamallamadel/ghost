@@ -2,17 +2,17 @@
 
 Frontend performance and accessibility optimization assistant for the Ghost CLI ecosystem.
 
-## Phase 2: Component Optimization & Accessibility (Completed)
-This phase introduced deep analysis of UI components for better performance and inclusion.
+## Phase 3: Performance Reporting (Completed)
+This final phase enabled global performance auditing and structured reporting.
 
 ### New Features
-- **Component Memoization**: Detects large components that could benefit from `React.memo` or `useMemo`.
-- **Interactive A11y Checks**: Identifies non-semantic interactive elements (e.g., `<div>` with `onClick`) lacking proper roles.
-- **Framework-Specific Advice**: Suggests Next.js optimized components (like `next/image`) where applicable.
-- **Bundle Size Optimization**: Detects excessive inline styles that impact initial load performance.
+- **Core Web Vitals Reporting**: Summarizes LCP, FID, and CLS scores in an easy-to-read table.
+- **Global Scorecard**: Provides overall ratings for Performance, Accessibility, SEO, and Best Practices.
+- **Markdown Artifacts**: Generates professional reports in the `fe-reports/` folder for team sharing.
+- **Proactive Insights**: Identifies performance hotspots and suggests immediate actions.
 
 ### New Commands
-- `ghost fe optimize [path]`: Performs a semantic and performance optimization audit on a specific component file.
+- `ghost fe report`: Generates a comprehensive performance and accessibility audit report.
 
 ## Installation
 ```bash
