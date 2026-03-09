@@ -1,0 +1,43 @@
+{
+  "id": "ghost-marketplace-extension",
+  "name": "Ghost Marketplace",
+  "version": "1.0.0",
+  "description": "Official marketplace for Ghost extensions.",
+  "main": "index.js",
+  "commands": ["browse", "search", "info", "install", "update", "uninstall", "rate", "sync", "refresh"],
+  "capabilities": {
+    "filesystem": {
+      "read": [
+        "~/.ghost/marketplace-cache/**",
+        "extensions/**/manifest.json",
+        "marketplace-registry.json"
+      ],
+      "write": [
+        "~/.ghost/marketplace-cache/**",
+        "extensions/**"
+      ]
+    },
+    "network": {
+      "allowlist": [
+        "https://registry.ghost-cli.dev",
+        "https://api.groq.com",
+        "https://api.openai.com",
+        "https://api.anthropic.com",
+        "https://generativelanguage.googleapis.com"
+      ],
+      "rateLimit": {
+        "cir": 1000,
+        "bc": 5000,
+        "be": 100000
+      }
+    }
+  },
+  "permissions": [
+    "filesystem:read",
+    "filesystem:write",
+    "network:https",
+    "extension:call",
+    "process:spawn",
+    "ui:prompt"
+  ]
+}

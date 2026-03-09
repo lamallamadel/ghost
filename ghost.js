@@ -505,8 +505,16 @@ class GatewayLauncher {
         } else if (parsedArgs.command === 'extension') {
             await this.handleExtensionCommand(parsedArgs);
         } else if (parsedArgs.command === 'marketplace') {
-            await this.handleMarketplaceCommand(parsedArgs);
-        } else if (parsedArgs.command === 'gateway') {
+            try {
+                await this.forwardToExtension({
+                    ...parsedArgs,
+                    extensionId: 'ghost-marketplace-extension'
+                });
+            } catch (e) {
+                // Fallback to legacy internal marketplace logic if extension not loaded
+                await this.handleMarketplaceCommand(parsedArgs);
+            }
+        } else if (parsedArgs.command === 'dev') {
             await this.handleGatewayCommand(parsedArgs);
         } else if (parsedArgs.command === 'audit-log') {
             await this.handleAuditLogCommand(parsedArgs);

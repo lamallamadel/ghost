@@ -1,0 +1,18 @@
+{
+  "name": "@ghost/marketplace-extension",
+  "version": "1.0.0",
+  "description": "Native marketplace extension for Ghost CLI. Manages discovery, installation, and updates of Ghost extensions.",
+  "main": "index.js",
+  "author": "Ghost CLI Team",
+  "license": "MIT",
+  "dependencies": {
+    "@ghost/extension-sdk": "^1.0.0"
+  },
+  "files": [
+    "index.js",
+    "extension.js",
+    "manifest.json",
+    "lib/**/*",
+    "README.md"
+  ]
+}
