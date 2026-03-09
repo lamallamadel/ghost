@@ -1,0 +1,26 @@
+{
+  "id": "ghost-system-extension",
+  "name": "Ghost System Helper",
+  "version": "1.0.0",
+  "description": "System monitoring and environment health management.",
+  "main": "index.js",
+  "commands": ["status", "logs", "sanitize", "doctor"],
+  "capabilities": {
+    "filesystem": {
+      "read": [
+        "~/.ghost/audit.log",
+        "~/.ghost/config/*",
+        "~/.ghost/marketplace-cache/*"
+      ],
+      "write": [
+        "~/.ghost/audit.log*",
+        "~/.ghost/temp/*"
+      ]
+    }
+  },
+  "permissions": [
+    "filesystem:read",
+    "filesystem:write",
+    "process:spawn"
+  ]
+}
