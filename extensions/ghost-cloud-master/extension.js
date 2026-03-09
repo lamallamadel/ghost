@@ -143,13 +143,66 @@ class CloudExtension {
         }
     }
 
+    async handleAudit(params) {
+        const target = params.args?.[0] || 'infra';
+        await this.sdk.requestLog({ level: 'info', message: `Auditing cloud infrastructure at: ${target}` });
+
+        try {
+            // 1. Read IaC files
+            const files = await this.sdk.emitIntent({ type: 'filesystem', operation: 'readdir', params: { path: target } });
+            let combinedContent = "";
+            for (const f of files) {
+                if (f.endsWith('.tf') || f.endsWith('.yml')) {
+                    combinedContent += await this.sdk.requestFileRead({ path: path.join(target, f) });
+                }
+            }
+
+            // 2. Perform Static Analysis
+            const findings = [];
+            if (combinedContent.includes('public-read')) {
+                findings.push({ rule: 'Exposed Storage', severity: 'critical', message: 'Detected S3/Storage bucket with public-read permissions.' });
+            }
+            if (combinedContent.includes('0.0.0.0/0') && combinedContent.includes('port 22')) {
+                findings.push({ rule: 'SSH Exposure', severity: 'high', message: 'Inbound SSH (Port 22) is open to the entire internet.' });
+            }
+
+            // 3. AI Cost & Security Deep-dive
+            const { provider, apiKey, model } = this._resolveAIConfig(params.flags || {});
+            let aiReport = "";
+            if (provider && apiKey) {
+                const prompt = `Analyse ce fichier IaC pour détecter des failles de sécurité et estimer le coût mensuel approximatif sur AWS.\n\nINFRA :\n${combinedContent.substring(0, 3000)}`;
+                aiReport = await this.callAI(provider, apiKey, model, "Expert Sécurité & Coût Cloud", prompt);
+            }
+
+            let output = `\n${Colors.BOLD}${Colors.CYAN}CLOUD-MASTER INFRASTRUCTURE AUDIT${Colors.ENDC}\n${'='.repeat(40)}\n`;
+
+            if (findings.length > 0) {
+                for (const f of findings) {
+                    const color = f.severity === 'critical' ? Colors.FAIL : Colors.WARNING;
+                    output += `[${color}${f.severity.toUpperCase()}${Colors.ENDC}] ${f.rule}: ${f.message}\n`;
+                }
+            } else {
+                output += `${Colors.GREEN}✓ No critical IaC patterns detected via static scan.${Colors.ENDC}\n`;
+            }
+
+            if (aiReport) {
+                output += `\n${Colors.BOLD}AI ANALYSIS (SECURITY & COST):${Colors.ENDC}\n${aiReport}\n`;
+            }
+
+            return { success: true, output, findings };
+
+        } catch (error) {
+            return { success: false, output: `Audit failed: ${error.message}` };
+        }
+    }
+
     async handleRPCRequest(request) {
         const { method, params = {} } = request;
         try {
             switch (method) {
                 case 'cloud.detect': return await this.handleDetect(params);
                 case 'cloud.generate': return await this.handleGenerate(params);
-                case 'cloud.audit': return { success: true, output: 'Cost/Security audit pending Phase 3.' };
+                case 'cloud.audit': return await this.handleAudit(params);
                 default: throw new Error(`Unknown method: ${method}`);
             }
         } catch (error) {
