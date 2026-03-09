@@ -135,7 +135,7 @@ class FilesystemExecutor {
                 fs.readFile(params.path, params.encoding || 'utf8'),
                 params.timeout
             );
-            return { success: true, content };
+            return { success: true, result: content, content };
         } catch (error) {
             throw new ExecutionError(
                 `Failed to read file: ${error.message}`,
@@ -150,7 +150,7 @@ class FilesystemExecutor {
                 fs.writeFile(params.path, params.content, params.encoding || 'utf8'),
                 params.timeout
             );
-            return { success: true, path: params.path };
+            return { success: true, result: true, path: params.path };
         } catch (error) {
             throw new ExecutionError(
                 `Failed to write file: ${error.message}`,
@@ -165,15 +165,17 @@ class FilesystemExecutor {
                 fs.stat(params.path),
                 params.timeout
             );
+            const result = {
+                size: stats.size,
+                isFile: stats.isFile(),
+                isDirectory: stats.isDirectory(),
+                mtime: stats.mtime,
+                ctime: stats.ctime
+            };
             return {
                 success: true,
-                stats: {
-                    size: stats.size,
-                    isFile: stats.isFile(),
-                    isDirectory: stats.isDirectory(),
-                    mtime: stats.mtime,
-                    ctime: stats.ctime
-                }
+                result,
+                stats: result
             };
         } catch (error) {
             throw new ExecutionError(
@@ -193,14 +195,16 @@ class FilesystemExecutor {
                 fs.readdir(params.path, options),
                 params.timeout
             );
+            const result = entries.map(e => ({
+                name: e.name,
+                path: e.path || e.parentPath,
+                isFile: e.isFile(),
+                isDirectory: e.isDirectory()
+            }));
             return {
                 success: true,
-                entries: entries.map(e => ({
-                    name: e.name,
-                    path: e.path || e.parentPath, // Node 20+ uses parentPath, older uses path
-                    isFile: e.isFile(),
-                    isDirectory: e.isDirectory()
-                }))
+                result,
+                entries: result
             };
         } catch (error) {
             throw new ExecutionError(
@@ -216,7 +220,7 @@ class FilesystemExecutor {
                 fs.mkdir(params.path, { recursive: params.recursive || false }),
                 params.timeout
             );
-            return { success: true, path: params.path };
+            return { success: true, result: true, path: params.path };
         } catch (error) {
             throw new ExecutionError(
                 `Failed to create directory: ${error.message}`,
@@ -231,7 +235,7 @@ class FilesystemExecutor {
                 fs.unlink(params.path),
                 params.timeout
             );
-            return { success: true, path: params.path };
+            return { success: true, result: true, path: params.path };
         } catch (error) {
             throw new ExecutionError(
                 `Failed to delete file: ${error.message}`,
@@ -246,7 +250,7 @@ class FilesystemExecutor {
                 fs.rmdir(params.path, { recursive: params.recursive || false }),
                 params.timeout
             );
-            return { success: true, path: params.path };
+            return { success: true, result: true, path: params.path };
         } catch (error) {
             throw new ExecutionError(
                 `Failed to remove directory: ${error.message}`,
@@ -305,6 +309,7 @@ class NetworkExecutor {
                     res.on('end', () => {
                         resolve({
                             success: true,
+                            result: data,
                             statusCode: res.statusCode,
                             headers: res.headers,
                             body: data
@@ -356,7 +361,6 @@ class GitExecutor {
     }
 
     async _executeGitCommand(operation, args, cwd, timeout) {
-        // 'exec' means run args directly as the git subcommand (no operation prefix)
         const gitArgs = operation === 'exec' ? [...args] : [operation, ...args];
         
         try {
@@ -368,6 +372,7 @@ class GitExecutor {
             
             return {
                 success: true,
+                result: result.stdout,
                 stdout: result.stdout,
                 stderr: result.stderr
             };
@@ -423,6 +428,7 @@ class ProcessExecutor {
                 if (code === 0) {
                     resolve({
                         success: true,
+                        result: { exitCode: code, stdout, stderr },
                         exitCode: code,
                         stdout,
                         stderr
@@ -467,6 +473,7 @@ class ProcessExecutor {
             
             return {
                 success: true,
+                result: result.stdout,
                 stdout: result.stdout,
                 stderr: result.stderr
             };
@@ -488,6 +495,10 @@ class ExecutionLayer {
             git: new GitExecutor(),
             process: new ProcessExecutor()
         };
+    }
+
+    registerExecutor(type, executor) {
+        this.executors[type] = executor;
     }
 
     async execute(intent) {
@@ -528,6 +539,23 @@ class ExecutionLayer {
     }
 }
 
+class LogExecutor {
+    constructor(callback) {
+        this.callback = callback;
+        this.circuitBreaker = new CircuitBreaker();
+    }
+
+    async execute(operation, params) {
+        return this.circuitBreaker.execute(async () => {
+            if (this.callback) {
+                return await this.callback(operation, params);
+            }
+            console.log(`[${operation.toUpperCase()}] ${params.message}`, params.meta);
+            return { success: true, result: true };
+        });
+    }
+}
+
 class SystemExecutor {
     constructor(callback) {
         this.callback = callback;
@@ -553,5 +581,6 @@ module.exports = {
     NetworkExecutor,
     GitExecutor,
     ProcessExecutor,
-    SystemExecutor
+    SystemExecutor,
+    LogExecutor
 };

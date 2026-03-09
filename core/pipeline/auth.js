@@ -347,6 +347,33 @@ class AuthorizationLayer {
                 permissionCheck = checker.checkProcessAccess();
                 break;
 
+            case 'log':
+                // Logging is always allowed for registered extensions
+                permissionCheck = { allowed: true };
+                break;
+
+            case 'ui':
+                // UI operations require explicit permission
+                permissionCheck = checker.checkPermission(`ui:${intent.operation}`) 
+                    ? { allowed: true } 
+                    : { allowed: false, reason: `ui:${intent.operation} permission not granted` };
+                break;
+
+            case 'extension':
+                // Calling other extensions requires extension:call permission
+                permissionCheck = checker.checkPermission('extension:call')
+                    ? { allowed: true }
+                    : { allowed: false, reason: 'extension:call permission not granted' };
+                break;
+
+            case 'system':
+                // System intents are restricted - for now, allow if extension is a trusted native one
+                // (In a real impl, we'd have a more robust trust model)
+                permissionCheck = intent.extensionId.startsWith('ghost-')
+                    ? { allowed: true }
+                    : { allowed: false, reason: 'system intents are restricted to native extensions' };
+                break;
+
             default:
                 return {
                     authorized: false,

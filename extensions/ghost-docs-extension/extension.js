@@ -12,6 +12,7 @@ const Colors = {
     GREEN: '\x1b[32m',
     CYAN: '\x1b[36m',
     BOLD: '\x1b[1m',
+    FAIL: '\x1b[31m',
     ENDC: '\x1b[0m'
 };
 
@@ -73,7 +74,6 @@ class ProjectAnalyzer {
         for (const file of jsFiles) {
             try {
                 const content = await this.sdk.requestFileRead({ path: file });
-                // Simple regex to find local requires/imports
                 const requireRegex = /require\(['"](\.\.?\/.*?)['"]\)/g;
                 const importRegex = /from\s+['"](\.\.?\/.*?)['"]/g;
                 
@@ -117,18 +117,18 @@ class DocsExtension {
         const flags = params.flags || {};
         await this.sdk.requestLog({ level: 'info', message: 'Analyzing project for README generation...' });
         
-        const stack = await this.analyzer.detectStack();
-        const files = await this.analyzer.getFileTree();
-        
-        const context = {
-            stack,
-            fileCount: files.length,
-            structure: files.slice(0, 20)
-        };
-
-        const prompt = `Tu es un rédacteur technique expert. Analyse ce projet et génère un README.md professionnel, complet et structuré.\n\nSTACK : ${JSON.stringify(stack)}\nSTRUCTURE : ${JSON.stringify(context.structure)}\n\nInclus : Description, Installation, Usage, et Architecture.\nRéponds UNIQUEMENT avec le contenu du fichier Markdown.`;
-
         try {
+            const stack = await this.analyzer.detectStack();
+            const files = await this.analyzer.getFileTree();
+            
+            const context = {
+                stack,
+                fileCount: files.length,
+                structure: files.slice(0, 20)
+            };
+
+            const prompt = `Tu es un rédacteur technique expert. Analyse ce projet et génère un README.md professionnel, complet et structuré.\n\nSTACK : ${JSON.stringify(stack)}\nSTRUCTURE : ${JSON.stringify(context.structure)}\n\nInclus : Description, Installation, Usage, et Architecture.\nRéponds UNIQUEMENT avec le contenu du fichier Markdown.`;
+
             const { provider, apiKey, model } = this._resolveAIConfig(flags);
             if (!provider || !apiKey) throw new Error('AI Provider not configured. Run ghost setup.');
 
@@ -191,12 +191,10 @@ class DocsExtension {
 
         let conversation = "Tu es un assistant expert sur ce projet. Réponds aux questions de l'utilisateur en utilisant le contexte du code.";
         
-        // Interactive loop simulation (via RPC prompts)
         const question = await this.sdk.emitIntent({ type: 'ui', operation: 'prompt', params: { question: "Sur quel aspect du code avez-vous une question ?" } });
         
         if (!question) return { success: true, output: "Chat session ended." };
 
-        // Analyze relevant files for the question (simplified)
         const files = await this.analyzer.getFileTree();
         const analysisPrompt = `Question de l'utilisateur : "${question}"\n\nStructure du projet : ${JSON.stringify(files.slice(0, 30))}\n\nRéponds de manière concise et technique.`;
 
@@ -206,6 +204,35 @@ class DocsExtension {
         } catch (error) {
             return { success: false, output: `Chat failed: ${error.message}` };
         }
+    }
+
+    _resolveAIConfig(flags) {
+        return { 
+            provider: flags.provider || 'anthropic', 
+            apiKey: flags.apiKey || flags['api-key'],
+            model: flags.model 
+        };
+    }
+
+    async callAI(provider, apiKey, model, systemPrompt, userPrompt) {
+        const actualModel = model || this.DEFAULT_MODEL;
+        const config = this.AI_PROVIDERS[provider] || this.AI_PROVIDERS.groq;
+        
+        const payload = {
+            model: actualModel,
+            messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }],
+            temperature: 0.2
+        };
+
+        const response = await this.sdk.requestNetworkCall({
+            url: `https://${config.hostname}${config.path}`,
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        const data = JSON.parse(response);
+        return data.choices?.[0]?.message?.content || JSON.stringify(data);
     }
 
     async handleRPCRequest(request) {

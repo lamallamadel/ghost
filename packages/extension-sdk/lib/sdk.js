@@ -13,6 +13,10 @@ class ExtensionSDK {
         this.intentBuilder = new IntentBuilder(extensionId);
     }
 
+    setCoreHandler(handler) {
+        this.rpcClient.setCoreHandler(handler);
+    }
+
     async emitIntent(intent) {
         if (!intent || typeof intent !== 'object') {
             throw new ValidationError('Intent must be an object', 'INVALID_INTENT', 'validation');
@@ -25,7 +29,14 @@ class ExtensionSDK {
         };
 
         try {
-            return await this.rpcClient.send(fullIntent);
+            const response = await this.rpcClient.send(fullIntent);
+            
+            // Standardize result extraction
+            if (response && typeof response === 'object' && response.success === true && 'result' in response) {
+                return response.result;
+            }
+
+            return response;
         } catch (error) {
             throw this._handleError(error, fullIntent.requestId);
         }
@@ -357,6 +368,22 @@ class ExtensionSDK {
         }
 
         return await this.requestGitExec({ operation: 'commit', args });
+    }
+
+    async requestLog(params) {
+        const { level = 'info', message, meta = {} } = params;
+        
+        if (!message || typeof message !== 'string') {
+            throw new ValidationError('Log message is required', 'MISSING_LOG_MESSAGE', 'validation');
+        }
+
+        const intent = {
+            type: 'log',
+            operation: level.toLowerCase(),
+            params: { message, meta }
+        };
+        
+        return await this.emitIntent(intent);
     }
 
     buildIntent() {

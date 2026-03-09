@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 const { DocsExtension } = require('./extension.js');
-const { ExtensionSDK } = require('@ghost/extension-sdk');
+const { ExtensionSDK, ExtensionRunner } = require('@ghost/extension-sdk');
 const fs = require('fs');
 const path = require('path');
 
@@ -17,7 +17,11 @@ class ExtensionWrapper {
         this.docs = new DocsExtension(this.sdk);
     }
 
-    async init(params) {
+    async init() {
+        return { success: true };
+    }
+
+    async initialize(params) {
         return await this.docs.handleRPCRequest({ method: 'docs.init', params });
     }
 
@@ -39,3 +43,10 @@ class ExtensionWrapper {
 }
 
 module.exports = ExtensionWrapper;
+
+
+if (require.main === module) {
+    const wrapper = new ExtensionWrapper();
+    const runner = new ExtensionRunner(wrapper);
+    runner.start();
+}

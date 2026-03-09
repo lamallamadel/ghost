@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 const { DependencyExtension } = require('./extension.js');
-const { ExtensionSDK } = require('@ghost/extension-sdk');
+const { ExtensionSDK, ExtensionRunner } = require('@ghost/extension-sdk');
 const fs = require('fs');
 const path = require('path');
 
@@ -14,7 +14,14 @@ class ExtensionWrapper {
         this.deps = new DependencyExtension(this.sdk);
     }
 
-    async init() {
+    async init(options = {}) {
+        if (options.coreHandler) {
+            this.sdk.setCoreHandler(options.coreHandler);
+        }
+        return { success: true };
+    }
+
+    async graph(params) {
         return { success: true };
     }
 
@@ -36,3 +43,10 @@ class ExtensionWrapper {
 }
 
 module.exports = ExtensionWrapper;
+
+
+if (require.main === module) {
+    const wrapper = new ExtensionWrapper();
+    const runner = new ExtensionRunner(wrapper);
+    runner.start();
+}

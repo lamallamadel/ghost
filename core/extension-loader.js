@@ -217,15 +217,10 @@ class ExtensionLoader {
             throw new Error(`Main file not found: ${manifest.main}`);
         }
 
-        // Attempt to instantiate extension module (graceful: allows metadata-only)
-        let instance = null;
-        try {
-            const ExtensionModule = require(mainFile);
-            instance = typeof ExtensionModule === 'function' ? new ExtensionModule() : ExtensionModule;
-        } catch (error) {
-            // Graceful degradation: log warning but continue (allows metadata-only extensions)
-            console.warn(`[ExtensionLoader] Could not instantiate ${manifest.id}:`, error.message);
-        }
+        // GRACEFUL ISOLATION: 
+        // We no longer require() the extension here. 
+        // Instantiation will be handled by the ExtensionRuntime (Sandbox or Subprocess).
+        const instance = null;
 
         return {
             path: extPath,

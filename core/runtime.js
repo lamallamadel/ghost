@@ -56,6 +56,7 @@ class ExtensionProcess extends EventEmitter {
         this.healthState = 'HEALTHY';
         this.lastPingTime = null;
         this.pendingPing = null;
+        this.intentHandler = options.intentHandler || null;
         
         this.validStateTransitions = {
             'STOPPED': ['STARTING'],
@@ -326,7 +327,10 @@ class ExtensionProcess extends EventEmitter {
     }
 
     async call(method, params = {}) {
-        if (this.state !== 'RUNNING') {
+        // Lifecycle methods should be allowed even if not running
+        const isLifecycle = ['cleanup', 'shutdown', 'init'].includes(method);
+        
+        if (this.state !== 'RUNNING' && !isLifecycle) {
             throw new Error(`Extension ${this.extensionId} is not running (state: ${this.state})`);
         }
 
@@ -334,9 +338,17 @@ class ExtensionProcess extends EventEmitter {
             const result = await this._sendRequest(method, params);
             return result;
         } catch (error) {
+            // During shutdown, ignore errors for lifecycle methods
+            if (isLifecycle && this.state === 'STOPPED') {
+                return { success: true };
+            }
             this.emit('error', { method, error: error.message });
             throw error;
         }
+    }
+
+    async executeExtension(method, params) {
+        return await this.call(method, params);
     }
 
     getState() {
@@ -827,6 +839,10 @@ class ExtensionProcess extends EventEmitter {
             this._sendResponse(message.id, { alive: true });
         } else if (message.method === 'pong') {
             this._handlePongResponse(message);
+        } else if (message.method === 'intent' && this.intentHandler) {
+            this.intentHandler(message.params)
+                .then(result => this._sendResponse(message.id, result))
+                .catch(error => this._sendErrorResponse(message.id, -32603, error.message));
         } else {
             this._sendErrorResponse(message.id, -32601, 'Method not found', {
                 method: message.method
@@ -1493,6 +1509,7 @@ class SandboxedExtension extends EventEmitter {
         this.state = 'STOPPED';
         this.extensionModule = null;
         this.extensionInstance = null;
+        this.intentHandler = options.intentHandler || null;
         
         this.startTime = null;
         this.metrics = {
@@ -1662,9 +1679,19 @@ class SandboxedExtension extends EventEmitter {
         }
     }
 
+    async executeExtension(method, params) {
+        return await this.call(method, params);
+    }
+
     _createHostAPI() {
-        const { ExecutionLayer } = require('./pipeline/execute');
-        const executionLayer = new ExecutionLayer();
+        const executionLayer = {
+            execute: async (intent) => {
+                if (this.intentHandler) {
+                    return await this.intentHandler(intent);
+                }
+                throw new Error('Intent handler not configured for sandboxed extension');
+            }
+        };
 
         const api = {};
 
@@ -1869,14 +1896,14 @@ class ExtensionRuntime extends EventEmitter {
                 extensionId,
                 extensionPath,
                 manifest,
-                { ...this.options, ...processOptions }
+                { ...this.options, ...processOptions, intentHandler: this.options.intentHandler }
             );
         } else {
             extension = new ExtensionProcess(
                 extensionId,
                 extensionPath,
                 manifest,
-                { ...this.options, ...processOptions }
+                { ...this.options, ...processOptions, intentHandler: this.options.intentHandler }
             );
         }
 
@@ -2249,6 +2276,21 @@ class ExtensionRuntime extends EventEmitter {
                 this._performHealthCheck();
             }, this.healthCheckFrequency);
         }
+    }
+
+    _createExtensionInterface(extension) {
+        return new Proxy(extension, {
+            get: (target, prop) => {
+                if (prop in target) {
+                    const value = target[prop];
+                    return typeof value === 'function' ? value.bind(target) : value;
+                }
+
+                return async (params) => {
+                    return await target.executeExtension(prop, params);
+                };
+            }
+        });
     }
 
     _stopHealthMonitoring() {

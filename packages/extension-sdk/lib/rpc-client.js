@@ -4,18 +4,114 @@ class RPCClient {
         this.pendingRequests = new Map();
         this.requestCounter = 0;
         this.timeout = options.timeout || 30000;
+        this.coreHandler = options.coreHandler || null;
         
         if (process.send) {
             process.on('message', (message) => this._handleResponse(message));
+        } else {
+            // Listen on stdin for JSON-RPC messages from the core
+            const readline = require('readline');
+            const rl = readline.createInterface({
+                input: process.stdin,
+                terminal: false
+            });
+
+            rl.on('line', (line) => {
+                if (!line.trim()) return;
+                try {
+                    const message = JSON.parse(line);
+                    this._handleResponse(message);
+                } catch (e) {
+                    // Ignore non-JSON output from parent
+                }
+            });
         }
     }
 
-    async send(intent) {
-        if (process.send) {
-            return await this._sendViaIPC(intent);
-        } else {
-            return await this._sendViaStdio(intent);
+    setCoreHandler(handler) {
+        this.coreHandler = handler;
+    }
+
+    _sanitizeParams(params) {
+        if (!params || typeof params !== 'object') return params;
+        
+        // Shallow copy to avoid mutating original
+        const sanitized = Array.isArray(params) ? [...params] : { ...params };
+
+        const maskSecret = (val) => {
+            if (typeof val !== 'string') return val;
+            if (val.length < 12) return val;
+            return val.substring(0, 8) + '...' + val.substring(val.length - 4);
+        };
+
+        // Common sanitization logic
+        for (const key in sanitized) {
+            const lowKey = key.toLowerCase();
+            
+            // Mask common sensitive keys
+            if (['apikey', 'api_key', 'token', 'secret', 'password', 'authorization'].some(k => lowKey.includes(k))) {
+                sanitized[key] = maskSecret(sanitized[key]);
+            } 
+            // Mask keys in URLs
+            else if (lowKey === 'url' && typeof sanitized[key] === 'string') {
+                sanitized[key] = sanitized[key].replace(/(key=)([a-zA-Z0-9_\-]+)/g, (m, p1, p2) => p1 + maskSecret(p2));
+            }
+            // Recurse into objects
+            else if (sanitized[key] && typeof sanitized[key] === 'object') {
+                sanitized[key] = this._sanitizeParams(sanitized[key]);
+            }
         }
+
+        return sanitized;
+    }
+
+    async send(intent) {
+        // Apply sanitization to intent parameters before emission
+        const sanitizedIntent = {
+            ...intent,
+            params: this._sanitizeParams(intent.params)
+        };
+
+        if (this.coreHandler) {
+            return await this._sendViaCoreHandler(sanitizedIntent);
+        } else if (process.send) {
+            return await this._sendViaIPC(sanitizedIntent);
+        } else {
+            return await this._sendViaStdio(sanitizedIntent);
+        }
+    }
+
+    async _sendViaCoreHandler(intent) {
+        return new Promise((resolve, reject) => {
+            const requestId = intent.requestId || `${this.extensionId}-${++this.requestCounter}`;
+            
+            const message = {
+                jsonrpc: '2.0',
+                method: 'intent',
+                params: intent,
+                id: requestId
+            };
+
+            const timeout = setTimeout(() => {
+                reject(new Error('Request timeout (CoreHandler)'));
+            }, this.timeout);
+
+            this.coreHandler(message)
+                .then(response => {
+                    clearTimeout(timeout);
+                    if (response && response.error) {
+                        reject(new Error(response.error.message || 'Request failed'));
+                    } else if (response && typeof response === 'object' && 'result' in response) {
+                        resolve(response.result);
+                    } else {
+                        resolve(response);
+                    }
+                })
+                .catch(error => {
+                    clearTimeout(timeout);
+                    reject(error);
+                });
+        });
     }
 
     async sendBatch(intents) {

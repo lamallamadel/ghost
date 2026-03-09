@@ -12,7 +12,7 @@
     "network": {
       "allowlist": [
         "https://hooks.slack.com",
-        "https://discord.com/api/webhooks",
+        "https://discord.com",
         "https://api.groq.com",
         "https://api.openai.com",
         "https://api.anthropic.com"

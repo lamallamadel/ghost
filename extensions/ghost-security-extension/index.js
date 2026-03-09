@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 const { SecurityExtension } = require('./extension.js');
-const { ExtensionSDK } = require('@ghost/extension-sdk');
+const { ExtensionSDK, ExtensionRunner } = require('@ghost/extension-sdk');
 const fs = require('fs');
 const path = require('path');
 
@@ -17,10 +17,10 @@ class ExtensionWrapper {
         this.security = new SecurityExtension(this.sdk);
     }
 
-    /**
-     * Initialization hook called by core.
-     */
     async init(options = {}) {
+        if (options.coreHandler) {
+            this.sdk.setCoreHandler(options.coreHandler);
+        }
         return { success: true };
     }
 
@@ -73,3 +73,10 @@ class ExtensionWrapper {
 }
 
 module.exports = ExtensionWrapper;
+
+
+if (require.main === module) {
+    const wrapper = new ExtensionWrapper();
+    const runner = new ExtensionRunner(wrapper);
+    runner.start();
+}

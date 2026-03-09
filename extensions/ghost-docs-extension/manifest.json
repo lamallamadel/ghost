@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "AI-powered documentation engine. Generates professional project documentation and architectural diagrams.",
   "main": "index.js",
-  "commands": ["init", "generate", "diagram", "chat"],
+  "commands": ["initialize", "generate", "diagram", "chat"],
   "capabilities": {
     "filesystem": {
       "read": ["**/*"],

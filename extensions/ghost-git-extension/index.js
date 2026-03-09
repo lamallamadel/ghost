@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 const { GitExtension } = require('./extension.js');
-const { ExtensionSDK } = require('@ghost/extension-sdk');
+const { ExtensionSDK, ExtensionRunner } = require('@ghost/extension-sdk');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
@@ -26,7 +26,9 @@ class ExtensionWrapper {
      * Initialization hook called by core.
      */
     async init(options = {}) {
-        // SDK handles IPC automatically via process.stdout/stdin
+        if (options.coreHandler) {
+            this.sdk.setCoreHandler(options.coreHandler);
+        }
         return { success: true };
     }
 
@@ -156,3 +158,10 @@ class ExtensionWrapper {
 }
 
 module.exports = ExtensionWrapper;
+
+
+if (require.main === module) {
+    const wrapper = new ExtensionWrapper();
+    const runner = new ExtensionRunner(wrapper);
+    runner.start();
+}

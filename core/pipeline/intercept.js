@@ -51,13 +51,17 @@ class Intent {
 }
 
 class IntentSchema {
-    static VALID_TYPES = ['filesystem', 'network', 'git', 'process'];
+    static VALID_TYPES = ['filesystem', 'network', 'git', 'process', 'log', 'ui', 'extension', 'system'];
     
     static VALID_OPERATIONS = {
         filesystem: ['read', 'write', 'stat', 'readdir', 'mkdir', 'unlink', 'rmdir'],
         network: ['http', 'https'],
         git: ['status', 'log', 'diff', 'show', 'ls-files', 'commit', 'branch', 'tag', 'push', 'reset', 'exec'],
-        process: ['spawn', 'exec']
+        process: ['spawn', 'exec'],
+        log: ['info', 'warn', 'error', 'debug'],
+        ui: ['prompt', 'alert', 'confirm'],
+        extension: ['call', 'status'],
+        system: ['telemetry-start', 'telemetry-stop', 'policy-update']
     };
 
     // OPTIMIZATION (Sprint 9): Pre-compile Sets for O(1) lookup instead of Array.includes()
@@ -67,7 +71,11 @@ class IntentSchema {
         filesystem: new Set(IntentSchema.VALID_OPERATIONS.filesystem),
         network: new Set(IntentSchema.VALID_OPERATIONS.network),
         git: new Set(IntentSchema.VALID_OPERATIONS.git),
-        process: new Set(IntentSchema.VALID_OPERATIONS.process)
+        process: new Set(IntentSchema.VALID_OPERATIONS.process),
+        log: new Set(IntentSchema.VALID_OPERATIONS.log),
+        ui: new Set(IntentSchema.VALID_OPERATIONS.ui),
+        extension: new Set(IntentSchema.VALID_OPERATIONS.extension),
+        system: new Set(IntentSchema.VALID_OPERATIONS.system)
     };
 
     // OPTIMIZATION (Sprint 9): Cache for URL validation (memoization)

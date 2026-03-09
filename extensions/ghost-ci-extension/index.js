@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 const { CIExtension } = require('./extension.js');
-const { ExtensionSDK } = require('@ghost/extension-sdk');
+const { ExtensionSDK, ExtensionRunner } = require('@ghost/extension-sdk');
 const fs = require('fs');
 const path = require('path');
 
@@ -15,6 +15,13 @@ class ExtensionWrapper {
     constructor() {
         this.sdk = new ExtensionSDK(manifest.id);
         this.ci = new CIExtension(this.sdk);
+    }
+
+    async init(options = {}) {
+        if (options.coreHandler) {
+            this.sdk.setCoreHandler(options.coreHandler);
+        }
+        return { success: true };
     }
 
     async status(params) {
@@ -35,3 +42,10 @@ class ExtensionWrapper {
 }
 
 module.exports = ExtensionWrapper;
+
+
+if (require.main === module) {
+    const wrapper = new ExtensionWrapper();
+    const runner = new ExtensionRunner(wrapper);
+    runner.start();
+}
