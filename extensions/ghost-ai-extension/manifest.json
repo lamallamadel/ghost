@@ -1,0 +1,32 @@
+{
+  "id": "ghost-ai-extension",
+  "name": "Ghost AI Manager",
+  "version": "1.0.0",
+  "description": "Centralized AI orchestration, token tracking, and model switching.",
+  "main": "index.js",
+  "commands": ["status", "models", "usage", "switch"],
+  "capabilities": {
+    "filesystem": {
+      "read": ["~/.ghost/config/ghostrc.json"],
+      "write": ["~/.ghost/config/ghostrc.json"]
+    },
+    "network": {
+      "allowlist": [
+        "https://api.groq.com",
+        "https://api.openai.com",
+        "https://api.anthropic.com",
+        "https://generativelanguage.googleapis.com"
+      ],
+      "rateLimit": {
+        "cir": 100000,
+        "bc": 500000,
+        "be": 1000000
+      }
+    }
+  },
+  "permissions": [
+    "filesystem:read",
+    "filesystem:write",
+    "network:https"
+  ]
+}
