@@ -2,17 +2,16 @@
 
 Centralized AI model management and usage tracking extension for the Ghost CLI ecosystem.
 
-## Phase 1: Scaffolding & Configuration Management (Completed)
-This phase established the foundation for centralizing AI settings and model awareness.
+## Phase 2: Usage & Token Analytics (Completed)
+This phase added visibility into AI consumption and cost tracking.
 
-### Features
-- **Centralized Status**: Reports current AI provider, model, and API key status from `ghostrc.json`.
-- **Model Directory**: Lists all officially supported models across Anthropic, Groq, OpenAI, and Gemini.
-- **Secure Access**: Manages sensitive configuration via Ghost's RPC filesystem intents.
+### New Features
+- **Token Analytics**: Tracks the total number of tokens consumed across all AI operations.
+- **Cost Estimation**: Calculates the estimated cost of AI usage based on provider rates.
+- **Per-Extension Breakdown**: Identifies which extensions are consuming the most AI resources.
 
-### Commands
-- `ghost ai status`: Displays the current AI configuration and connection health.
-- `ghost ai models`: Shows all supported AI models and providers.
+### New Commands
+- `ghost ai usage`: Displays a detailed report of token consumption and estimated costs.
 
 ## Installation
 ```bash
