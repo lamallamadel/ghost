@@ -528,6 +528,22 @@ class ExecutionLayer {
     }
 }
 
+class SystemExecutor {
+    constructor(callback) {
+        this.callback = callback;
+        this.circuitBreaker = new CircuitBreaker();
+    }
+
+    async execute(operation, params) {
+        return this.circuitBreaker.execute(async () => {
+            if (this.callback) {
+                return await this.callback(operation, params);
+            }
+            throw new Error('System executor callback not configured');
+        });
+    }
+}
+
 module.exports = {
     ExecutionLayer,
     ExecutionError,
@@ -536,5 +552,6 @@ module.exports = {
     FilesystemExecutor,
     NetworkExecutor,
     GitExecutor,
-    ProcessExecutor
+    ProcessExecutor,
+    SystemExecutor
 };

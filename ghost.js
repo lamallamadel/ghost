@@ -3,6 +3,7 @@
 const path = require('path');
 const os = require('os');
 const fs = require('fs');
+const { exec } = require('child_process');
 const pkg = require('./package.json');
 const VERSION = pkg.version;
 const Gateway = require('./core/gateway');
@@ -194,6 +195,17 @@ class GatewayLauncher {
 
         // Pure orchestration: delegate extension loading to Gateway
         await this._initializeExtensions();
+
+        // Register System Executor for cross-layer communication
+        const { SystemExecutor } = require('./core/pipeline/execute');
+        this.pipeline.executionLayer.executors.system = new SystemExecutor(async (operation, params) => {
+            if (operation === 'telemetry-start') {
+                return await this.startTelemetryServer(params.port || 9876);
+            } else if (operation === 'telemetry-stop') {
+                return await this.stopTelemetryServer();
+            }
+            throw new Error(`Unknown system operation: ${operation}`);
+        });
     }
 
     _setupDevModeHandlers() {
@@ -496,8 +508,6 @@ class GatewayLauncher {
             await this.handleAuditLogCommand(parsedArgs);
         } else if (parsedArgs.command === 'audit') {
             await this.handleAuditCommand(parsedArgs);
-        } else if (parsedArgs.command === 'console') {
-            await this.handleConsoleCommand(parsedArgs);
         } else if (parsedArgs.command === 'doctor') {
             await this.handleDoctorCommand(parsedArgs);
         } else if (parsedArgs.command === 'completion') {
@@ -2015,6 +2025,11 @@ ${Colors.BOLD}Examples:${Colors.ENDC}
             console.log(`\n${Colors.BOLD}${Colors.CYAN}Telemetry Console${Colors.ENDC}`);
             console.log(`${Colors.DIM}Press Ctrl+C to stop the server${Colors.ENDC}\n`);
             
+            // Automatically launch Desktop Console UI
+            if (!parsedArgs.flags['no-ui']) {
+                this._launchDesktopConsole();
+            }
+            
             return new Promise(() => {});
         } else if (subcommand === 'stop') {
             await this.stopTelemetryServer();
@@ -2022,10 +2037,32 @@ ${Colors.BOLD}Examples:${Colors.ENDC}
             console.error(`${Colors.FAIL}Error: Unknown console subcommand '${subcommand}'${Colors.ENDC}\n`);
             console.log(`Valid subcommands: ${Colors.CYAN}start${Colors.ENDC}, ${Colors.CYAN}stop${Colors.ENDC}`);
             console.log(`\nUsage:`);
-            console.log(`  ${Colors.CYAN}ghost console start${Colors.ENDC} [--port 9876]`);
+            console.log(`  ${Colors.CYAN}ghost console start${Colors.ENDC} [--port 9876] [--no-ui]`);
             console.log(`  ${Colors.CYAN}ghost console stop${Colors.ENDC}\n`);
             process.exit(1);
         }
+    }
+
+    /**
+     * Launch the Desktop Console (Electron app).
+     */
+    _launchDesktopConsole() {
+        const desktopDir = path.join(__dirname, 'desktop');
+        console.log(`${Colors.CYAN}Launching Ghost Desktop Console...${Colors.ENDC}`);
+        
+        // Use npm run desktop:start to launch the production build of the electron app
+        const child = exec('npm run desktop:start', { cwd: desktopDir }, (error) => {
+            if (error) {
+                console.error(`${Colors.FAIL}Failed to launch Desktop Console:${Colors.ENDC} ${error.message}`);
+                console.log(`${Colors.DIM}Make sure you have run 'npm install' in the desktop directory.${Colors.ENDC}`);
+            }
+        });
+
+        child.stdout.on('data', (data) => {
+            if (this._isVerbose()) {
+                process.stdout.write(`${Colors.DIM}[Desktop] ${data}${Colors.ENDC}`);
+            }
+        });
     }
 
     /**

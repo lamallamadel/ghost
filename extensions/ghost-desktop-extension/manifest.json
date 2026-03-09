@@ -1,0 +1,18 @@
+{
+  "id": "ghost-desktop-extension",
+  "name": "Ghost Desktop Console",
+  "version": "1.0.0",
+  "description": "Desktop UI and real-time telemetry console for Ghost CLI.",
+  "main": "index.js",
+  "commands": ["console"],
+  "capabilities": {
+    "process": {
+      "spawn": true
+    }
+  },
+  "permissions": [
+    "filesystem:read",
+    "process:spawn",
+    "network:https"
+  ]
+}
