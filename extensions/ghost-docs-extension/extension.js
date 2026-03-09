@@ -161,14 +161,61 @@ class DocsExtension {
         }
     }
 
+    async handleGenerate(params) {
+        const target = params.args?.[0];
+        if (!target) return { success: false, output: "Please specify a file to generate documentation for." };
+
+        await this.sdk.requestLog({ level: 'info', message: `Generating technical API docs for: ${target}` });
+
+        try {
+            const content = await this.sdk.requestFileRead({ path: target });
+            const prompt = `Analyse ce code source et génère une documentation technique détaillée au format Markdown (JSDoc, types, fonctions, responsabilités).\n\nCODE :\n${content}`;
+
+            const { provider, apiKey, model } = this._resolveAIConfig(params.flags || {});
+            const docs = await this.callAI(provider, apiKey, model, "Expert en documentation technique", prompt);
+
+            const docPath = `docs/API-${path.basename(target, path.extname(target))}.md`;
+            await this.sdk.requestFileWrite({ path: docPath, content: docs });
+
+            return { success: true, output: `${Colors.GREEN}✓ API documentation generated at ${docPath}${Colors.ENDC}` };
+        } catch (error) {
+            return { success: false, output: `Generation failed: ${error.message}` };
+        }
+    }
+
+    async handleChat(params) {
+        const flags = params.flags || {};
+        const { provider, apiKey, model } = this._resolveAIConfig(flags);
+        
+        if (!provider || !apiKey) return { success: false, output: "AI Provider not configured." };
+
+        let conversation = "Tu es un assistant expert sur ce projet. Réponds aux questions de l'utilisateur en utilisant le contexte du code.";
+        
+        // Interactive loop simulation (via RPC prompts)
+        const question = await this.sdk.emitIntent({ type: 'ui', operation: 'prompt', params: { question: "Sur quel aspect du code avez-vous une question ?" } });
+        
+        if (!question) return { success: true, output: "Chat session ended." };
+
+        // Analyze relevant files for the question (simplified)
+        const files = await this.analyzer.getFileTree();
+        const analysisPrompt = `Question de l'utilisateur : "${question}"\n\nStructure du projet : ${JSON.stringify(files.slice(0, 30))}\n\nRéponds de manière concise et technique.`;
+
+        try {
+            const answer = await this.callAI(provider, apiKey, model, conversation, analysisPrompt);
+            return { success: true, output: `\n${Colors.BOLD}ASSISTANT:${Colors.ENDC}\n${answer}\n` };
+        } catch (error) {
+            return { success: false, output: `Chat failed: ${error.message}` };
+        }
+    }
+
     async handleRPCRequest(request) {
         const { method, params = {} } = request;
         try {
             switch (method) {
                 case 'docs.init': return await this.handleInit(params);
                 case 'docs.diagram': return await this.handleDiagram(params);
-                case 'docs.generate': return { success: true, output: 'API generation pending Phase 3.' };
-                case 'docs.chat': return { success: true, output: 'Interactive chat pending Phase 3.' };
+                case 'docs.generate': return await this.handleGenerate(params);
+                case 'docs.chat': return await this.handleChat(params);
                 default: throw new Error(`Unknown method: ${method}`);
             }
         } catch (error) {

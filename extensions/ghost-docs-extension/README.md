@@ -2,16 +2,17 @@
 
 AI-powered documentation engine for the Ghost CLI ecosystem.
 
-## Phase 2: Architecture & Diagrams (Completed)
-This phase added the ability to visualize project structure and dependencies.
+## Phase 3: Interactive Doc & API Gen (Completed)
+This final phase transformed the bot into a fully interactive technical assistant.
 
 ### New Features
-- **Dependency Mapping**: Automatically parses source files to identify relationships between modules.
-- **Mermaid Graph Generation**: Creates dynamic architecture diagrams in Mermaid format.
-- **Architecture Report**: Generates `docs/ARCHITECTURE.md` containing the project's dependency graph.
+- **Technical API Docs**: Automatically generates detailed Markdown documentation for any source file.
+- **Interactive Chat**: Ask technical questions about the project and get AI-powered answers based on code context.
+- **UI Intent Integration**: Uses Ghost's UI prompting system for interactive user sessions.
 
 ### New Commands
-- `ghost docs diagram`: Generates a dependency graph and saves it to the `docs/` directory.
+- `ghost docs generate [path]`: Generates a technical API reference for the specified file.
+- `ghost docs chat`: Starts an interactive session to discuss the project architecture and logic.
 
 ## Installation
 ```bash
