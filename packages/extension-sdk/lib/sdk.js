@@ -386,6 +386,14 @@ class ExtensionSDK {
         return await this.emitIntent(intent);
     }
 
+    async requestConfig() {
+        return await this.emitIntent({
+            type: 'filesystem',
+            operation: 'read',
+            params: { path: 'C:/Users/PRO/.ghost/config/ghostrc.json' }
+        }).then(content => JSON.parse(content));
+    }
+
     buildIntent() {
         return this.intentBuilder;
     }

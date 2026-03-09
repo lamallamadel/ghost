@@ -7,7 +7,7 @@
   "commands": ["detect", "generate", "audit"],
   "capabilities": {
     "filesystem": {
-      "read": ["**/*"],
+      "read": ["**/*", "~/.ghost/config/ghostrc.json"],
       "write": [
         "**/infra/*.tf",
         "**/infra/*.yml",

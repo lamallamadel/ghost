@@ -1,6 +1,6 @@
 {
   "name": "@ghost/test-extension",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "AI-powered test automation and coverage extension for Ghost CLI.",
   "main": "index.js",
   "scripts": {

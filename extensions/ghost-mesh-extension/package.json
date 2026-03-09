@@ -1,6 +1,6 @@
 {
   "name": "@ghost/mesh-extension",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Service mesh and discovery layer for Ghost extensions. Manages dependencies, priorities, and interoperability.",
   "main": "index.js",
   "author": "Ghost CLI Team",

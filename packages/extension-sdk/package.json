@@ -1,6 +1,6 @@
 {
   "name": "@ghost/extension-sdk",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "SDK for building Ghost CLI extensions with typed JSON-RPC helpers",
   "main": "index.js",
   "types": "index.d.ts",

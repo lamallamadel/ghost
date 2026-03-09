@@ -1,6 +1,6 @@
 {
   "name": "@ghost/workbench-extension",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Unified dashboard and visual management console for the Ghost ecosystem.",
   "main": "index.js",
   "author": "Ghost CLI Team",

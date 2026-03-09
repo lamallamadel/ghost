@@ -1,6 +1,6 @@
 {
   "name": "@ghost/security-extension",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Security auditing and secret scanning extension for Ghost CLI",
   "main": "index.js",
   "scripts": {

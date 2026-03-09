@@ -104,7 +104,12 @@ class DocsExtension {
     constructor(sdk) {
         this.sdk = sdk;
         this.analyzer = new ProjectAnalyzer(sdk);
-        this.DEFAULT_MODEL = "llama-3.3-70b-versatile";
+        this.DEFAULT_MODELS = {
+            groq: "llama-3.3-70b-versatile",
+            anthropic: "claude-3-5-sonnet-latest",
+            openai: "gpt-4o",
+            gemini: "gemini-1.5-pro"
+        };
         this.AI_PROVIDERS = {
             groq: { hostname: "api.groq.com", path: "/openai/v1/chat/completions" },
             openai: { hostname: "api.openai.com", path: "/v1/chat/completions" },
@@ -127,9 +132,9 @@ class DocsExtension {
                 structure: files.slice(0, 20)
             };
 
-            const prompt = `Tu es un rédacteur technique expert. Analyse ce projet et génère un README.md professionnel, complet et structuré.\n\nSTACK : ${JSON.stringify(stack)}\nSTRUCTURE : ${JSON.stringify(context.structure)}\n\nInclus : Description, Installation, Usage, et Architecture.\nRéponds UNIQUEMENT avec le contenu du fichier Markdown.`;
+            const prompt = `Tu es un rédacteur technique expert. Analyse ce projet et génère un README.md professionnel, complet et structuré.\n\nSTACK : ${JSON.stringify(stack)}\nSTRUCTURE : ${JSON.stringify(context.structure)}\n\nInclus : Description, Installation, Usage, et Architecture.`;
 
-            const { provider, apiKey, model } = this._resolveAIConfig(flags);
+            const { provider, apiKey, model } = await this._resolveAIConfig(flags);
             if (!provider || !apiKey) throw new Error('AI Provider not configured. Run ghost setup.');
 
             const readmeContent = await this.callAI(provider, apiKey, model, "Rédacteur technique expert", prompt);
@@ -137,6 +142,7 @@ class DocsExtension {
             await this.sdk.requestFileWrite({ path: 'README.md', content: readmeContent });
             return { success: true, output: `${Colors.GREEN}✓ README.md generated successfully.${Colors.ENDC}` };
         } catch (error) {
+            console.error(`${Colors.FAIL}[Docs Bot Error]${Colors.ENDC} ${error.message}`);
             return { success: false, output: `Initialization failed: ${error.message}` };
         }
     }
@@ -171,7 +177,7 @@ class DocsExtension {
             const content = await this.sdk.requestFileRead({ path: target });
             const prompt = `Analyse ce code source et génère une documentation technique détaillée au format Markdown (JSDoc, types, fonctions, responsabilités).\n\nCODE :\n${content}`;
 
-            const { provider, apiKey, model } = this._resolveAIConfig(params.flags || {});
+            const { provider, apiKey, model } = await this._resolveAIConfig(params.flags || {});
             const docs = await this.callAI(provider, apiKey, model, "Expert en documentation technique", prompt);
 
             const docPath = `docs/API-${path.basename(target, path.extname(target))}.md`;
@@ -185,7 +191,7 @@ class DocsExtension {
 
     async handleChat(params) {
         const flags = params.flags || {};
-        const { provider, apiKey, model } = this._resolveAIConfig(flags);
+        const { provider, apiKey, model } = await this._resolveAIConfig(flags);
         
         if (!provider || !apiKey) return { success: false, output: "AI Provider not configured." };
 
@@ -206,33 +212,78 @@ class DocsExtension {
         }
     }
 
-    _resolveAIConfig(flags) {
-        return { 
-            provider: flags.provider || 'anthropic', 
-            apiKey: flags.apiKey || flags['api-key'],
-            model: flags.model 
-        };
+    async _resolveAIConfig(flags) {
+        let provider = flags.provider;
+        let apiKey = flags.apiKey || flags['api-key'];
+        let model = flags.model;
+
+        if (!provider || !apiKey) {
+            try {
+                const config = await this.sdk.requestConfig();
+                if (config && config.ai) {
+                    provider = provider || config.ai.provider;
+                    apiKey = apiKey || config.ai.apiKey;
+                    model = model || config.ai.model;
+                }
+            } catch (e) {
+                // Ignore config read errors
+            }
+        }
+
+        return { provider, apiKey, model };
     }
 
     async callAI(provider, apiKey, model, systemPrompt, userPrompt) {
-        const actualModel = model || this.DEFAULT_MODEL;
+        const actualModel = model || this.DEFAULT_MODELS[provider] || this.DEFAULT_MODELS.groq;
         const config = this.AI_PROVIDERS[provider] || this.AI_PROVIDERS.groq;
+        const isAnthropic = provider === 'anthropic';
         
-        const payload = {
+        let headers = { 'Content-Type': 'application/json' };
+        let payload = {
             model: actualModel,
-            messages: [{ role: "system", content: systemPrompt }, { role: "user", content: userPrompt }],
             temperature: 0.2
         };
+
+        if (isAnthropic) {
+            headers['x-api-key'] = apiKey;
+            headers['anthropic-version'] = '2023-06-01';
+            payload.system = systemPrompt;
+            payload.messages = [{ role: "user", content: userPrompt }];
+            payload.max_tokens = 4096;
+        } else {
+            headers['Authorization'] = `Bearer ${apiKey}`;
+            payload.messages = [
+                { role: "system", content: systemPrompt },
+                { role: "user", content: userPrompt }
+            ];
+        }
 
         const response = await this.sdk.requestNetworkCall({
             url: `https://${config.hostname}${config.path}`,
             method: 'POST',
-            headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+            headers: headers,
             body: JSON.stringify(payload)
         });
 
-        const data = JSON.parse(response);
-        return data.choices?.[0]?.message?.content || JSON.stringify(data);
+        let data;
+        try {
+            data = JSON.parse(response);
+        } catch (e) {
+            throw new Error(`Invalid JSON response from AI provider: ${response.substring(0, 100)}...`);
+        }
+        
+        if (isAnthropic) {
+            if (data.error) {
+                const detailedError = `Anthropic API Error [${data.error.type}]: ${data.error.message}`;
+                throw new Error(detailedError);
+            }
+            return data.content?.[0]?.text || JSON.stringify(data);
+        } else {
+            if (data.error) {
+                throw new Error(data.error.message || 'AI API error');
+            }
+            return data.choices?.[0]?.message?.content || JSON.stringify(data);
+        }
     }
 
     async handleRPCRequest(request) {

@@ -1,6 +1,6 @@
 {
   "name": "@ghost/docs-extension",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "AI-powered documentation bot for Ghost CLI. Generates READMEs, API docs, and architectural diagrams.",
   "main": "index.js",
   "scripts": {

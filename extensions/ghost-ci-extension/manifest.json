@@ -12,7 +12,7 @@
   },
   "capabilities": {
     "filesystem": {
-      "read": ["**/*"],
+      "read": ["**/*", "~/.ghost/config/ghostrc.json"],
       "write": [
         "**/ci-reports/**",
         "**/ghost-results.json"

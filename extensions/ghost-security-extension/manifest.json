@@ -7,7 +7,7 @@
   "commands": ["scan", "audit", "status", "compliance"],
   "capabilities": {
     "filesystem": {
-      "read": ["**/*"],
+      "read": ["**/*", "~/.ghost/config/ghostrc.json"],
       "write": [
         "**/security-reports/**",
         "**/.ghostignore",

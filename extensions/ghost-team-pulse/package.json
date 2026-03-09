@@ -1,6 +1,6 @@
 {
   "name": "@ghost/team-pulse",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Team collaboration and notification extension for Ghost CLI. Connects your dev workflow to Slack and Discord.",
   "main": "index.js",
   "author": "Ghost CLI Team",

@@ -1,6 +1,6 @@
 {
   "name": "@ghost/agent-extension",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Supreme Agent orchestrator for Ghost CLI. Coordinates complex workflows across multiple extensions.",
   "main": "index.js",
   "author": "Ghost CLI Team",

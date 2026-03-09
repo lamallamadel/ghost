@@ -798,7 +798,7 @@ class ExtensionProcess extends EventEmitter {
     }
 
     _isResponse(message) {
-        return ('result' in message || 'error' in message) && 'id' in message;
+        return !message.method && ('result' in message || 'error' in message) && 'id' in message;
     }
 
     _isRequest(message) {
@@ -811,11 +811,8 @@ class ExtensionProcess extends EventEmitter {
 
     _handleResponse(message) {
         if (!this.pendingRequests.has(message.id)) {
-            this.emit('error', {
-                extensionId: this.extensionId,
-                error: 'Received response for unknown request ID',
-                responseId: message.id
-            });
+            // Silently ignore responses for unknown IDs to avoid log pollution
+            // This can happen in the async RPC bridge
             return;
         }
 

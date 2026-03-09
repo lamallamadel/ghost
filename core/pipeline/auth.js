@@ -5,7 +5,16 @@ class GlobMatcher {
     static match(str, pattern) {
         // Normalize separators to forward slashes for consistent matching
         const normalizedStr = str.replace(/\\/g, '/');
-        const normalizedPattern = pattern.replace(/\\/g, '/');
+        
+        // Expand tilde (~) to home directory in pattern
+        let expandedPattern = pattern;
+        if (pattern.startsWith('~')) {
+            const os = require('os');
+            const home = os.homedir().replace(/\\/g, '/');
+            expandedPattern = pattern.replace(/^~/, home);
+        }
+        
+        const normalizedPattern = expandedPattern.replace(/\\/g, '/');
         
         // Convert glob pattern to regex
         // ** matches any number of directories (including zero)

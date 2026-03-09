@@ -7,7 +7,7 @@
   "commands": ["initialize", "generate", "diagram", "chat"],
   "capabilities": {
     "filesystem": {
-      "read": ["**/*"],
+      "read": ["**/*", "~/.ghost/config/ghostrc.json", "~/.ghost/config/ghostrc.json"],
       "write": [
         "**/README.md",
         "**/docs/*.md",

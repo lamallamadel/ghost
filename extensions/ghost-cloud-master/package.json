@@ -1,6 +1,6 @@
 {
   "name": "@ghost/cloud-master",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "AI-powered infrastructure-as-code generator and cloud auditing extension for Ghost CLI.",
   "main": "index.js",
   "author": "Ghost CLI Team",

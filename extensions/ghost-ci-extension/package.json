@@ -1,6 +1,6 @@
 {
   "name": "@ghost/ci-extension",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "CI/CD pipeline orchestrator for Ghost CLI. Automates security gates and project audits in CI environments.",
   "main": "index.js",
   "author": "Ghost CLI Team",

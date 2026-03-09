@@ -7,7 +7,7 @@
   "commands": ["graph", "audit", "solve"],
   "capabilities": {
     "filesystem": {
-      "read": ["**/*"]
+      "read": ["**/*", "~/.ghost/config/ghostrc.json"]
     },
     "network": {
       "allowlist": ["https://registry.npmjs.org"]

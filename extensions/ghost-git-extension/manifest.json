@@ -7,7 +7,7 @@
   "commands": ["add", "commit", "audit", "version", "merge", "history"],
   "capabilities": {
     "filesystem": {
-      "read": ["**/*"],
+      "read": ["**/*", "~/.ghost/config/ghostrc.json"],
       "write": [
         "**/.git/**",
         "**/package.json",

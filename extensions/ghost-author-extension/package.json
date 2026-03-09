@@ -1,6 +1,6 @@
 {
   "name": "@ghost/author-extension",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Developer toolkit for scaffolding, validating, and publishing Ghost CLI extensions.",
   "main": "index.js",
   "author": "Ghost CLI Team",

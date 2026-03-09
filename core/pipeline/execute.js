@@ -282,7 +282,12 @@ class NetworkExecutor {
             const url = new URL(params.url);
             const protocol = url.protocol === 'https:' ? https : http;
             
-            return await this._request(protocol, params);
+            // Map generic operations to standard request
+            if (['post', 'get', 'request', 'http', 'https'].includes(operation)) {
+                return await this._request(protocol, params);
+            }
+            
+            throw new ExecutionError(`Unknown network operation: ${operation}`, 'EXEC_UNKNOWN_OP');
         });
     }
 

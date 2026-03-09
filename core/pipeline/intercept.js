@@ -55,7 +55,7 @@ class IntentSchema {
     
     static VALID_OPERATIONS = {
         filesystem: ['read', 'write', 'stat', 'readdir', 'mkdir', 'unlink', 'rmdir'],
-        network: ['http', 'https'],
+        network: ['http', 'https', 'request', 'get', 'post'],
         git: ['status', 'log', 'diff', 'show', 'ls-files', 'commit', 'branch', 'tag', 'push', 'reset', 'exec'],
         process: ['spawn', 'exec'],
         log: ['info', 'warn', 'error', 'debug'],

@@ -1,6 +1,6 @@
 {
   "name": "@ghost/bridge-extension",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "IDE bridge and RPC connector for Ghost CLI. Enables seamless integration with VS Code and other editors.",
   "main": "index.js",
   "author": "Ghost CLI Team",

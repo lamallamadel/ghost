@@ -1,6 +1,6 @@
 {
   "name": "@ghost/system-extension",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "System utility extension for Ghost CLI. Manages environment health, audit logs, and resource monitoring.",
   "main": "index.js",
   "author": "Ghost CLI Team",

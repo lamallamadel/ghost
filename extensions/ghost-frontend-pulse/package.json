@@ -1,6 +1,6 @@
 {
   "name": "@ghost/frontend-pulse",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Frontend performance and accessibility optimizer for Ghost CLI. Analyzes React, Next.js, and Vue components.",
   "main": "index.js",
   "author": "Ghost CLI Team",

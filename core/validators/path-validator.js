@@ -154,6 +154,15 @@ class PathValidator {
             return false;
         }
 
+        // NIST SI-10 Exception: Allow access to global .ghost directory for configuration
+        const os = require('os');
+        const ghostGlobalDir = path.join(os.homedir(), '.ghost').replace(/\\/g, '/');
+        const normalizedTarget = normalized.replace(/\\/g, '/');
+        
+        if (normalizedTarget.startsWith(ghostGlobalDir)) {
+            return true;
+        }
+
         let realPath;
         try {
             if (fs.existsSync(normalized)) {

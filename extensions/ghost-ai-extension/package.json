@@ -1,6 +1,6 @@
 {
   "name": "@ghost/ai-extension",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Centralized AI model management and usage tracking for Ghost CLI.",
   "main": "index.js",
   "author": "Ghost CLI Team",
