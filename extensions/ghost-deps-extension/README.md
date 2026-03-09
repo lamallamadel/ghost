@@ -2,16 +2,16 @@
 
 Dependency management and visualization extension for the Ghost CLI ecosystem.
 
-## Phase 1: Scaffolding & Dependency Graphing (Completed)
-This phase established the infrastructure for mapping project and extension dependencies.
+## Phase 2: Security & License Audit (Completed)
+This phase added compliance and security scanning for all project dependencies.
 
-### Features
-- **Visual Dependency Graph**: Generates Mermaid-formatted diagrams of the project's dependency tree.
-- **Project Awareness**: Analyzes `package.json` to identify root dependencies.
-- **Extension Mapping**: Identifies installed Ghost extensions and their relationships.
+### New Features
+- **License Compliance**: Scans dependencies to ensure they use approved licenses (MIT, Apache, etc.).
+- **Vulnerability Integration**: Leverages `npm audit` via secure Ghost intents to detect known security threats.
+- **Detailed Reporting**: Generates structured reports on the security posture of the project's dependency tree.
 
-### Commands
-- `ghost deps graph`: Generates and displays a Mermaid dependency graph in the console.
+### New Commands
+- `ghost deps audit`: Performs a full security and license audit of project dependencies.
 
 ## Installation
 ```bash
