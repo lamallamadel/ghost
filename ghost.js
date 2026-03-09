@@ -514,7 +514,7 @@ class GatewayLauncher {
                 // Fallback to legacy internal marketplace logic if extension not loaded
                 await this.handleMarketplaceCommand(parsedArgs);
             }
-        } else if (parsedArgs.command === 'dev') {
+        } else if (parsedArgs.command === 'gateway') {
             await this.handleGatewayCommand(parsedArgs);
         } else if (parsedArgs.command === 'audit-log') {
             await this.handleAuditLogCommand(parsedArgs);
@@ -2018,63 +2018,6 @@ ${Colors.BOLD}Examples:${Colors.ENDC}
             console.log(`Run ${Colors.CYAN}ghost gateway help${Colors.ENDC} to see all gateway commands\n`);
             process.exit(1);
         }
-    }
-
-    /**
-     * Handle telemetry console server commands.
-     * 
-     * ORCHESTRATION ROLE: Correct implementation
-     * - Start/stop telemetry HTTP server through telemetryInstance
-     * - No direct business logic, delegates to telemetryInstance methods
-     */
-    async handleConsoleCommand(parsedArgs) {
-        const subcommand = parsedArgs.subcommand || 'start';
-
-        if (subcommand === 'start') {
-            const port = parseInt(parsedArgs.flags.port) || 9876;
-            await this.startTelemetryServer(port);
-            
-            console.log(`\n${Colors.BOLD}${Colors.CYAN}Telemetry Console${Colors.ENDC}`);
-            console.log(`${Colors.DIM}Press Ctrl+C to stop the server${Colors.ENDC}\n`);
-            
-            // Automatically launch Desktop Console UI
-            if (!parsedArgs.flags['no-ui']) {
-                this._launchDesktopConsole();
-            }
-            
-            return new Promise(() => {});
-        } else if (subcommand === 'stop') {
-            await this.stopTelemetryServer();
-        } else {
-            console.error(`${Colors.FAIL}Error: Unknown console subcommand '${subcommand}'${Colors.ENDC}\n`);
-            console.log(`Valid subcommands: ${Colors.CYAN}start${Colors.ENDC}, ${Colors.CYAN}stop${Colors.ENDC}`);
-            console.log(`\nUsage:`);
-            console.log(`  ${Colors.CYAN}ghost console start${Colors.ENDC} [--port 9876] [--no-ui]`);
-            console.log(`  ${Colors.CYAN}ghost console stop${Colors.ENDC}\n`);
-            process.exit(1);
-        }
-    }
-
-    /**
-     * Launch the Desktop Console (Electron app).
-     */
-    _launchDesktopConsole() {
-        const desktopDir = path.join(__dirname, 'desktop');
-        console.log(`${Colors.CYAN}Launching Ghost Desktop Console...${Colors.ENDC}`);
-        
-        // Use npm run desktop:start to launch the production build of the electron app
-        const child = exec('npm run desktop:start', { cwd: desktopDir }, (error) => {
-            if (error) {
-                console.error(`${Colors.FAIL}Failed to launch Desktop Console:${Colors.ENDC} ${error.message}`);
-                console.log(`${Colors.DIM}Make sure you have run 'npm install' in the desktop directory.${Colors.ENDC}`);
-            }
-        });
-
-        child.stdout.on('data', (data) => {
-            if (this._isVerbose()) {
-                process.stdout.write(`${Colors.DIM}[Desktop] ${data}${Colors.ENDC}`);
-            }
-        });
     }
 
     /**
