@@ -1,0 +1,32 @@
+{
+  "id": "ghost-team-pulse",
+  "name": "Ghost Team-Pulse",
+  "version": "1.0.0",
+  "description": "Team collaboration assistant for Slack and Discord.",
+  "main": "index.js",
+  "commands": ["notify", "status", "config"],
+  "capabilities": {
+    "filesystem": {
+      "read": ["~/.ghost/config/team-pulse.json", "package.json"]
+    },
+    "network": {
+      "allowlist": [
+        "https://hooks.slack.com",
+        "https://discord.com/api/webhooks",
+        "https://api.groq.com",
+        "https://api.openai.com",
+        "https://api.anthropic.com"
+      ],
+      "rateLimit": {
+        "cir": 100,
+        "bc": 500,
+        "be": 10000
+      }
+    }
+  },
+  "permissions": [
+    "filesystem:read",
+    "network:https",
+    "ui:prompt"
+  ]
+}
