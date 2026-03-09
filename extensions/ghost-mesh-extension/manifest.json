@@ -1,0 +1,21 @@
+{
+  "id": "ghost-mesh-extension",
+  "name": "Ghost Mesh Master",
+  "version": "1.0.0",
+  "description": "Dynamic service discovery and dependency management for Ghost extensions.",
+  "main": "index.js",
+  "commands": ["map", "routes", "health"],
+  "capabilities": {
+    "filesystem": {
+      "read": ["extensions/**/manifest.json"]
+    },
+    "extension": {
+      "discovery": true,
+      "routing": true
+    }
+  },
+  "permissions": [
+    "filesystem:read",
+    "process:spawn"
+  ]
+}
