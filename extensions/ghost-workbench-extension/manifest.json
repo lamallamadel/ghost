@@ -1,0 +1,26 @@
+{
+  "id": "ghost-workbench-extension",
+  "name": "Ghost Workbench Master",
+  "version": "1.0.0",
+  "description": "Visual Command Center for managing all Ghost extensions.",
+  "main": "index.js",
+  "commands": ["open", "status", "layout"],
+  "extensionDependencies": {
+    "ghost-desktop-extension": "1.0.0"
+  },
+  "capabilities": {
+    "filesystem": {
+      "read": ["extensions/**/manifest.json", "~/.ghost/config/*.json"]
+    },
+    "ui": {
+      "dashboard": true,
+      "widgets": true
+    }
+  },
+  "permissions": [
+    "filesystem:read",
+    "extension:call",
+    "ui:prompt",
+    "process:spawn"
+  ]
+}
