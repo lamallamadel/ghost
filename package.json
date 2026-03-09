@@ -49,7 +49,7 @@
     "ghost.js",
     "core/",
     "lib/",
-    "extensions/ghost-git-extension/",
+    "extensions/",
     "packages/extension-sdk/",
     "README.md",
     "LICENSE",

@@ -80,12 +80,29 @@ ghost audit --verbose
 
 ---
 
-## 🛡️ Security & Privacy
+## 🛡️ Security Compliance (NIST SI-10 Mapping)
+
+Ghost CLI's architecture is mapped directly to **NIST SP 800-53 SI-10** controls:
+
+| NIST Control | Ghost Mechanism | Technical Implementation |
+| :--- | :--- | :--- |
+| **Input Validation** | JSON-RPC Schema Enforcement | `core/pipeline/intercept.js` |
+| **Path Sanitization** | Glob-based Root Isolation | `core/validators/path-validator.js` |
+| **Data Scruubing** | High-Entropy Secret Masking | `core/pipeline/audit.js` |
+| **Integrity Checks** | Immutable Audit Logging | `core/pipeline/audit.js` |
+| **Fault Isolation** | Process-level Sandboxing | `core/runtime.js` |
+
+---
+
+## 🛡️ Security & Privacy (Zero-Trust)
 
 ### Does Ghost send my code to the internet?
 - **Default**: Ghost is **local-first**. No code exfiltration happens by default.
 - **AI Usage**: Remote providers (Anthropic, OpenAI) are only contacted if **explicitly configured**.
-- **Secret Protection**: The SDK automatically masks keys and tokens before they leave the subprocess.
+- **Secret Protection**: The core's Audit Layer automatically masks keys and tokens before they are recorded in any logs or telemetry.
+
+### Verifiable Security
+All security logic is located in the `core/pipeline/` and `core/validators/` directories for transparent public audit.
 
 ---
 
