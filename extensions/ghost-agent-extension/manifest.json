@@ -1,0 +1,39 @@
+{
+  "id": "ghost-agent-extension",
+  "name": "Ghost Agent Supreme",
+  "version": "1.0.0",
+  "description": "The brain of Ghost CLI. Orchestrates other extensions to achieve high-level goals.",
+  "main": "index.js",
+  "commands": ["solve", "think", "plan"],
+  "extensionDependencies": {
+    "ghost-git-extension": "1.1.1",
+    "ghost-security-extension": "1.0.0",
+    "ghost-docs-extension": "1.0.0",
+    "ghost-test-extension": "1.0.0",
+    "ghost-system-extension": "1.0.0",
+    "ghost-ci-extension": "1.0.0",
+    "ghost-desktop-extension": "1.0.0",
+    "ghost-author-extension": "1.0.0",
+    "ghost-deps-extension": "1.0.0",
+    "ghost-ai-extension": "1.0.0",
+    "ghost-mesh-extension": "1.0.0",
+    "ghost-policy-extension": "1.0.0"
+  },
+  "capabilities": {
+    "filesystem": {
+      "read": ["~/.ghost/agent/history.json"],
+      "write": ["~/.ghost/agent/memory.json"]
+    },
+    "agent": {
+      "orchestration": true,
+      "autonomy": "high"
+    }
+  },
+  "permissions": [
+    "extension:call",
+    "network:https",
+    "ui:prompt",
+    "filesystem:read",
+    "filesystem:write"
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "name": "@ghost/agent-extension",
+  "version": "1.0.0",
+  "description": "Supreme Agent orchestrator for Ghost CLI. Coordinates complex workflows across multiple extensions.",
+  "main": "index.js",
+  "author": "Ghost CLI Team",
+  "license": "MIT",
+  "dependencies": {
+    "@ghost/extension-sdk": "^1.0.0"
+  },
+  "files": [
+    "index.js",
+    "extension.js",
+    "manifest.json",
+    "lib/**/*",
+    "README.md"
+  ]
+}
