@@ -2,16 +2,17 @@
 
 Developer toolkit for scaffolding, validating, and publishing Ghost CLI extensions.
 
-## Phase 1: Scaffolding & Extension Templates (Completed)
-This phase established the foundation for rapid extension development.
+## Phase 2: Validation & Compliance (Completed)
+This phase introduced strict validation rules to ensure extension quality and security.
 
-### Features
-- **Extension Scaffolding**: Instantly creates a new extension directory with all required files.
-- **Automated Manifest Generation**: Creates a compliant `manifest.json` based on the extension name.
-- **Boilerplate Code**: Generates standard `index.js` and `package.json` integrated with `@ghost/extension-sdk`.
+### New Features
+- **Manifest Validator**: Checks for required fields and standard structure.
+- **Permission Auditing**: Detects invalid or excessive permission requests (e.g., write without read).
+- **Collision Detection**: Prevents extensions from overriding reserved core commands.
+- **Detailed Compliance Reporting**: Provides a structured report with errors and warnings.
 
-### Commands
-- `ghost ext init <name>`: Scaffolds a new Ghost extension in the `extensions/` directory.
+### New Commands
+- `ghost ext validate [path]`: Validates an extension's manifest against Ghost standards.
 
 ## Installation
 ```bash

@@ -87,12 +87,74 @@ class AuthorExtension {
         }
     }
 
+    async handleValidate(params) {
+        const target = params.args?.[0] || '.';
+        const manifestPath = target.endsWith('manifest.json') ? target : path.join(target, 'manifest.json');
+        
+        await this.sdk.requestLog({ level: 'info', message: `Validating extension manifest at: ${manifestPath}` });
+
+        try {
+            const content = await this.sdk.requestFileRead({ path: manifestPath });
+            const manifest = JSON.parse(content);
+            const errors = [];
+            const warnings = [];
+
+            // 1. Required Fields Check
+            const required = ['id', 'name', 'version', 'main', 'commands'];
+            for (const field of required) {
+                if (!manifest[field]) errors.push(`Missing required field: ${field}`);
+            }
+
+            // 2. ID Hygiene
+            if (manifest.id && !manifest.id.startsWith('ghost-')) {
+                warnings.push("Extension ID should ideally start with 'ghost-' prefix.");
+            }
+
+            // 3. Permission Audit
+            if (manifest.permissions && manifest.permissions.includes('filesystem:write') && !manifest.permissions.includes('filesystem:read')) {
+                errors.push("Invalid permission set: 'filesystem:write' requires 'filesystem:read'.");
+            }
+
+            if (manifest.permissions && manifest.permissions.length > 5) {
+                warnings.push("High number of permissions requested. Ensure the extension follows the principle of least privilege.");
+            }
+
+            // 4. Command collision check (Simulated)
+            if (manifest.commands && manifest.commands.includes('setup')) {
+                errors.push("Command collision: 'setup' is a reserved Ghost core command.");
+            }
+
+            let output = `\n${Colors.BOLD}EXTENSION VALIDATION REPORT${Colors.ENDC}\n${'='.repeat(30)}\n`;
+            
+            if (errors.length === 0) {
+                output += `${Colors.GREEN}✓ Manifest is valid.${Colors.ENDC}\n`;
+            } else {
+                output += `${Colors.FAIL}✖ Validation failed with ${errors.length} error(s):${Colors.ENDC}\n`;
+                for (const err of errors) output += `  - ${err}\n`;
+            }
+
+            if (warnings.length > 0) {
+                output += `\n${Colors.WARNING}⚠ Warnings:${Colors.ENDC}\n`;
+                for (const warn of warnings) output += `  - ${warn}\n`;
+            }
+
+            return { 
+                success: errors.length === 0, 
+                output,
+                errors,
+                warnings
+            };
+        } catch (error) {
+            return { success: false, output: `${Colors.FAIL}Validation error:${Colors.ENDC} ${error.message}` };
+        }
+    }
+
     async handleRPCRequest(request) {
         const { method, params = {} } = request;
         try {
             switch (method) {
                 case 'author.init': return await this.handleInit(params);
-                case 'author.validate': return { success: true, output: 'Validation pending Phase 2.' };
+                case 'author.validate': return await this.handleValidate(params);
                 case 'author.publish': return { success: true, output: 'Publishing pending Phase 3.' };
                 default: throw new Error(`Unknown method: ${method}`);
             }
