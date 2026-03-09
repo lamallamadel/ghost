@@ -1,0 +1,18 @@
+{
+  "name": "@ghost/docker-hero",
+  "version": "1.0.0",
+  "description": "DevOps assistant for Docker optimization and security. Scans, shrinks, and generates production-ready Dockerfiles.",
+  "main": "index.js",
+  "author": "Ghost CLI Team",
+  "license": "MIT",
+  "dependencies": {
+    "@ghost/extension-sdk": "^1.0.0"
+  },
+  "files": [
+    "index.js",
+    "extension.js",
+    "manifest.json",
+    "lib/**/*",
+    "README.md"
+  ]
+}

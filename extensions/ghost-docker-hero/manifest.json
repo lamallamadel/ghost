@@ -1,0 +1,19 @@
+{
+  "id": "ghost-docker-hero",
+  "name": "Ghost Docker-Hero",
+  "version": "1.0.0",
+  "description": "Container optimization and security engine.",
+  "main": "index.js",
+  "commands": ["scan", "shrink", "generate"],
+  "capabilities": {
+    "filesystem": {
+      "read": ["**/Dockerfile*", "**/docker-compose.yml"],
+      "write": ["**/Dockerfile*", "**/Dockerfile.optimized"]
+    }
+  },
+  "permissions": [
+    "filesystem:read",
+    "filesystem:write",
+    "network:https"
+  ]
+}
