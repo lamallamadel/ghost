@@ -85,6 +85,47 @@ class BridgeExtension {
         return { success: true, output };
     }
 
+    async handleProxy(params) {
+        const { sessionId, method, payload } = params;
+        if (!this.activeSessions.has(sessionId)) {
+            return { success: false, message: 'Invalid or expired session' };
+        }
+
+        await this.sdk.requestLog({ level: 'info', message: `Proxying IDE request: ${method}` });
+
+        try {
+            // ROUTING LOGIC: Determine which extension to call based on method prefix
+            const [extPrefix, extMethod] = method.split('.');
+            const targetExtension = `ghost-${extPrefix}-extension`;
+
+            const result = await this.sdk.emitIntent({
+                type: 'extension',
+                operation: 'call',
+                params: {
+                    extensionId: targetExtension,
+                    method: `${extPrefix}.${extMethod}`,
+                    params: payload
+                }
+            });
+
+            // Notify session of success (Simulated event emission)
+            this._notifyIDE(sessionId, 'intent.success', { method });
+
+            return { success: true, result };
+        } catch (error) {
+            this._notifyIDE(sessionId, 'intent.error', { method, error: error.message });
+            return { success: false, error: error.message };
+        }
+    }
+
+    _notifyIDE(sessionId, event, data) {
+        const session = this.activeSessions.get(sessionId);
+        if (session) {
+            // In real WebSocket, we'd do: session.socket.send(JSON.stringify({ event, data }))
+            console.log(`${Colors.CYAN}[Bridge Event]${Colors.ENDC} Notifying ${session.editor} of ${event}`);
+        }
+    }
+
     async handleRPCRequest(request) {
         const { method, params = {} } = request;
         try {
@@ -92,6 +133,7 @@ class BridgeExtension {
                 case 'bridge.start': return await this.handleStart(params);
                 case 'bridge.status': return await this.handleStatus(params);
                 case 'bridge.auth': return await this.handleAuth(params);
+                case 'bridge.proxy': return await this.handleProxy(params);
                 case 'bridge.stop': 
                     this.server = null;
                     this.activeSessions.clear();

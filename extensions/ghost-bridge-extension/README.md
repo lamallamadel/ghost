@@ -2,17 +2,17 @@
 
 IDE connector and RPC bridge for the Ghost CLI ecosystem.
 
-## Phase 2: Session & Auth Management (Completed)
-This phase secured the bridge and added robust lifecycle management for editor connections.
+## Phase 3: UI Events & Intent Proxy (Completed)
+This final phase enabled full two-way communication between Ghost and external editors.
 
 ### New Features
-- **Token Handshake**: Mandatory authentication for IDEs to prevent unauthorized local access.
-- **Session Tracking**: Manages multiple concurrent editor sessions with unique IDs.
-- **Heartbeat Monitoring**: (Simulated) Ensures connections are alive and cleans up stale sessions.
-- **Security Toggles**: Supports `--no-auth` for local development environments.
+- **Dynamic Intent Proxy**: Relays commands from the IDE to any standard library extension (Git, Security, Docs, etc.).
+- **Automatic Routing**: Resolves extension IDs based on command prefixes (e.g., `test.run` → `ghost-test-extension`).
+- **Real-time Notifications**: Notifies the editor of Ghost system events and intent outcomes.
+- **Bi-directional Bridge**: Provides a unified interface for the IDE to interact with the entire Ghost Standard Library.
 
 ### New Commands
-- `ghost bridge auth --token <t> --editor <name>`: Internal command for IDE handshake.
+- `ghost bridge proxy --sessionId <s> --method <m> --payload <p>`: Relays an IDE request to the appropriate Ghost extension.
 
 ## Installation
 ```bash
