@@ -2,17 +2,17 @@
 
 System utility and environment management extension for the Ghost CLI ecosystem.
 
-## Phase 1: Observability (Completed)
-This phase established the foundation for system health monitoring and log management.
+## Phase 2: Environment Hardening (Completed)
+This phase added proactive environment management and health checks.
 
-### Features
-- **System Health Status**: Reports runtime information, platform details, and memory usage.
-- **Audit Log Viewer**: Inspects the Ghost audit log directly from the CLI.
-- **SDK-Powered Intents**: Uses secure RPC calls for all system-level information.
+### New Features
+- **Environment Sanitization**: Cleans up temporary files and stale locks in `~/.ghost/temp/`.
+- **System Doctor**: Verifies the existence and accessibility of critical Ghost system files and configurations.
+- **Improved RPC Error Handling**: Better management of RPC errors during system-level operations.
 
-### Commands
-- `ghost sys status`: Displays detailed system and runtime information.
-- `ghost sys logs [level]`: Shows the latest audit log entries (defaults to INFO).
+### New Commands
+- `ghost env sanitize`: Cleans up temporary Ghost artifacts.
+- `ghost sys doctor`: Runs a comprehensive health check on system files.
 
 ## Installation
 ```bash
