@@ -66,18 +66,12 @@ class RPCClient {
     }
 
     async send(intent) {
-        // Apply sanitization to intent parameters before emission
-        const sanitizedIntent = {
-            ...intent,
-            params: this._sanitizeParams(intent.params)
-        };
-
         if (this.coreHandler) {
-            return await this._sendViaCoreHandler(sanitizedIntent);
+            return await this._sendViaCoreHandler(intent);
         } else if (process.send) {
-            return await this._sendViaIPC(sanitizedIntent);
+            return await this._sendViaIPC(intent);
         } else {
-            return await this._sendViaStdio(sanitizedIntent);
+            return await this._sendViaStdio(intent);
         }
     }
 

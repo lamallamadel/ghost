@@ -111,24 +111,42 @@ class AuditLogger {
     }
 
     _sanitizeParams(params) {
+        if (!params || typeof params !== 'object') return params;
+        
         const entropyValidator = new EntropyValidator();
-        const sanitized = { ...params };
-        
-        if (sanitized.content && typeof sanitized.content === 'string') {
-            const scanResult = entropyValidator.scanContent(sanitized.content);
-            if (scanResult.hasSecrets) {
-                sanitized.content = '[CONTENT REDACTED - CONTAINS SECRETS]';
-            }
-        }
-        
-        if (sanitized.data && typeof sanitized.data === 'object') {
-            const dataStr = JSON.stringify(sanitized.data);
-            const scanResult = entropyValidator.scanContent(dataStr);
-            if (scanResult.hasSecrets) {
-                sanitized.data = '[DATA REDACTED - CONTAINS SECRETS]';
-            }
-        }
+        // Deep copy to avoid mutating original intent during execution
+        const sanitized = JSON.parse(JSON.stringify(params));
 
+        const maskValue = (val) => {
+            if (typeof val !== 'string') return val;
+            if (val.length < 12) return val;
+            return val.substring(0, 8) + '...' + val.substring(val.length - 4);
+        };
+
+        const traverse = (obj) => {
+            for (const key in obj) {
+                const lowKey = key.toLowerCase();
+                const val = obj[key];
+
+                if (typeof val === 'string') {
+                    // 1. Mask by key name
+                    if (['apikey', 'api_key', 'token', 'secret', 'password', 'authorization', 'x-api-key'].some(k => lowKey.includes(k))) {
+                        obj[key] = maskValue(val);
+                    } 
+                    // 2. Mask by entropy/pattern detection (NIST SI-10)
+                    else {
+                        const scanResult = entropyValidator.scanContent(val);
+                        if (scanResult.hasSecrets) {
+                            obj[key] = '[REDACTED - SENSITIVE DATA DETECTED]';
+                        }
+                    }
+                } else if (val && typeof val === 'object') {
+                    traverse(val);
+                }
+            }
+        };
+
+        traverse(sanitized);
         return sanitized;
     }
 
