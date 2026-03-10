@@ -324,6 +324,11 @@ class GatewayLauncher {
         this.runtime.on('extension-watcher-error', (info) => {
             console.error(`${Colors.FAIL}[Watcher Error] ${info.extensionId}: ${info.error.error}${Colors.ENDC}`);
         });
+
+        this.runtime.on('interactive-exit', () => {
+            if (this._isVerbose()) console.log(`[Gateway] Interactive shell exited. Shutting down...`);
+            this.cleanup().then(() => process.exit(0));
+        });
     }
 
     /**
@@ -336,45 +341,73 @@ class GatewayLauncher {
      * - No direct business logic, only metadata operations
      */
     async _initializeExtensions() {
-        // Phase 1: Discover metadata and manifests (no code execution)
+        // Phase 1: Discover metadata and manifests
         const result = await this.gateway.initialize();
 
-        // Phase 2: Start each extension in an isolated process
-        for (const extId of result.extensions) {
-            const fullExt = this.gateway.getExtension(extId);
+        // Phase 2: BOOTSTRAP - Load the Extension Flow Factory FIRST
+        const factoryId = 'ghost-extflo-extension';
+        const fullExt = this.gateway.getExtension(factoryId);
 
-            if (fullExt && fullExt.manifest) {
-                try {
-                    if (this._isVerbose()) console.log(`[DEBUG] Starting isolated extension: ${extId}...`);
+        if (fullExt && fullExt.manifest) {
+            try {
+                if (this._isVerbose()) console.log(`[Bootstrap] Starting Factory: ${factoryId}...`);
 
-                    // Start the extension via runtime (isolated process or sandbox)
-                    const rawInstance = await this.runtime.startExtension(extId, fullExt.path, fullExt.manifest);
-                    const instance = this.runtime._createExtensionInterface(rawInstance);
-                    fullExt.instance = instance;
+                const rawInstance = await this.runtime.startExtension(factoryId, fullExt.path, fullExt.manifest);
+                const instance = this.runtime._createExtensionInterface(rawInstance);
+                fullExt.instance = instance;
 
-                    this.pipeline.registerExtension(extId, fullExt.manifest);
+                this.pipeline.registerExtension(factoryId, fullExt.manifest);
 
-                    // Initialize instance with core handler for intents
-                    if (typeof instance.init === 'function') {
-                        await instance.init({
-                            coreHandler: async (request) => {
-                                return await this.forwardIntent(extId, request);
-                            }
-                        });
-                    }
-
-                    if (this.devMode && this.devMode.isHotReloadEnabled() && this.runtime.hotReloadManager) {
-                        await this.runtime.enableExtensionHotReload(extId);
-                    }
-                } catch (error) {
-                    console.error(`${Colors.FAIL}✗${Colors.ENDC} Failed to start extension ${Colors.BOLD}${extId}${Colors.ENDC}: ${error.message}`);
+                if (typeof instance.init === 'function') {
+                    await instance.init({
+                        coreHandler: async (request) => {
+                            return await this.forwardIntent(factoryId, request);
+                        }
+                    });
                 }
+
+                // Phase 3: Delegate the rest of the extensions to the Factory
+                // The factory will decide whether to load them Eagerly or Lazily
+                for (const extId of result.extensions) {
+                    if (extId === factoryId) continue;
+
+                    const ext = this.gateway.getExtension(extId);
+                    // For now, core still starts the process, but ExtFlo will manage READY state
+                    // In a more advanced version, ExtFlo would call core to trigger spawn
+                    await this._startExtension(extId, ext);
+                }
+            } catch (error) {
+                console.error(`${Colors.FAIL}✗${Colors.ENDC} Factory bootstrap failed: ${error.message}`);
             }
         }
 
         return result;
     }
-    /**
+
+    async _startExtension(extId, fullExt) {
+        if (!fullExt || !fullExt.manifest) return;
+
+        try {
+            const isInteractive = fullExt.manifest.capabilities?.ui?.shell === true;
+            const rawInstance = await this.runtime.startExtension(extId, fullExt.path, fullExt.manifest, {
+                interactive: isInteractive
+            });
+            const instance = this.runtime._createExtensionInterface(rawInstance);
+            fullExt.instance = instance;
+
+            this.pipeline.registerExtension(extId, fullExt.manifest);
+
+            if (typeof instance.init === 'function') {
+                await instance.init({
+                    coreHandler: async (request) => {
+                        return await this.forwardIntent(extId, request);
+                    }
+                });
+            }
+        } catch (error) {
+            console.error(`${Colors.FAIL}✗${Colors.ENDC} Failed to start extension ${extId}: ${error.message}`);
+        }
+    }    /**
      * Forward an intent from an extension to the security pipeline.
      */
     async forwardIntent(extensionId, request) {
@@ -540,11 +573,13 @@ class GatewayLauncher {
             this._setupVerboseTelemetry(parsedArgs.flags.verbose);
         }
 
-        if (parsedArgs.flags.help || !parsedArgs.command) {
-            // Check if we have a modern shell extension available
+        // Check if we should enter modern shell mode (no command provided)
+        const isDefaultRun = process.argv.length <= 2;
+        if (isDefaultRun && !parsedArgs.flags.help) {
             const shellExt = this._findExtensionForCapability('ui:shell');
-            if (shellExt && !parsedArgs.flags.help) {
+            if (shellExt) {
                 if (this._isVerbose()) console.log(`[Gateway] Entering modern shell mode via ${shellExt.id}...`);
+
                 await this.forwardToExtension({
                     ...parsedArgs,
                     command: shellExt.id,
@@ -552,6 +587,9 @@ class GatewayLauncher {
                 });
                 return;
             }
+        }
+
+        if (parsedArgs.flags.help || !parsedArgs.command) {
             this.showHelp();
             return;
         }
@@ -2905,15 +2943,16 @@ complete -c ghost -l help -s h -d "Show help message"`);
      */
     async forwardToExtension(parsedArgs) {
         let command = parsedArgs.command;
+        if (!command) return;
+
         let subcommand = parsedArgs.subcommand;
         let args = parsedArgs.args;
         
-        // Pure orchestration: find appropriate extension
         const targetExtension = this._findExtensionForCommand(command);
 
         if (!targetExtension) {
             console.error(`${Colors.FAIL}Error: No extension found to handle command '${command}'${Colors.ENDC}\n`);
-            // ... (rest of error handling)
+            process.exit(1);
         }
 
         // If command was an explicit extension ID, shift arguments
@@ -2988,11 +3027,14 @@ complete -c ghost -l help -s h -d "Show help message"`);
             const fullExt = this.gateway.getExtension(ext.id);
             if (fullExt && fullExt.manifest && fullExt.manifest.capabilities) {
                 // Check if the capability exists in the manifest
-                const [category, op] = capability.split(':');
-                if (fullExt.manifest.capabilities[category] && 
-                    (fullExt.manifest.capabilities[category] === true || 
-                     fullExt.manifest.capabilities[category][op])) {
-                    return fullExt;
+                const parts = capability.split(':');
+                const category = parts[0];
+                const op = parts[1];
+                
+                const cat = fullExt.manifest.capabilities[category];
+                if (cat) {
+                    if (cat === true) return fullExt;
+                    if (op && cat[op]) return fullExt;
                 }
             }
         }
@@ -3007,6 +3049,8 @@ complete -c ghost -l help -s h -d "Show help message"`);
      * - No business logic, only routing decisions
      */
     _findExtensionForCommand(command) {
+        if (!command) return null;
+
         // 1. Check if command is an explicit extension ID
         const directExt = this.gateway.getExtension(command);
         if (directExt) return directExt;
@@ -3015,17 +3059,14 @@ complete -c ghost -l help -s h -d "Show help message"`);
         const extensions = this.gateway.listExtensions();
         for (const ext of extensions) {
             const fullExt = this.gateway.getExtension(ext.id);
-            if (fullExt && fullExt.manifest && fullExt.manifest.commands) {
-                if (Array.isArray(fullExt.manifest.commands) && fullExt.manifest.commands.includes(command)) {
+            if (fullExt && fullExt.manifest) {
+                if (fullExt.manifest.commands && Array.isArray(fullExt.manifest.commands) && fullExt.manifest.commands.includes(command)) {
                     return fullExt;
                 }
-            }
-        }
-
-        // Fallback: Dynamic capability-based routing
-        for (const ext of extensions) {
-            if (ext.capabilities && ext.capabilities[command]) {
-                return this.gateway.getExtension(ext.id);
+                // Also check in capabilities
+                if (fullExt.manifest.capabilities && fullExt.manifest.capabilities[command]) {
+                    return fullExt;
+                }
             }
         }
 
