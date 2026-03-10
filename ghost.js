@@ -226,7 +226,11 @@ class GatewayLauncher {
                 }
                 throw new Error(`Unknown extension operation: ${operation}`);
             },
-            circuitBreaker: { execute: async (fn) => await fn() }
+            circuitBreaker: {
+                execute: async (fn) => await fn(),
+                getState: () => ({ state: 'CLOSED', failures: 0 }),
+                reset: () => {}
+            }
         });
 
         const instrumented = instrumentPipeline(basePipeline, {
