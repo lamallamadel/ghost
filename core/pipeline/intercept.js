@@ -61,7 +61,7 @@ class IntentSchema {
         log: ['info', 'warn', 'error', 'debug'],
         ui: ['prompt', 'alert', 'confirm'],
         extension: ['call', 'status'],
-        system: ['telemetry-start', 'telemetry-stop', 'policy-update']
+        system: ['telemetry-start', 'telemetry-stop', 'policy-update', 'registry']
     };
 
     // OPTIMIZATION (Sprint 9): Pre-compile Sets for O(1) lookup instead of Array.includes()

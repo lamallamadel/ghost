@@ -213,6 +213,22 @@ class GatewayLauncher {
             return { success: true };
         }));
 
+        // Extension Executor allows extensions to securely call each other
+        basePipeline.executionLayer.registerExecutor('extension', {
+            execute: async (operation, params) => {
+                if (operation === 'call') {
+                    const targetExt = this.gateway.getExtension(params.extensionId);
+                    if (!targetExt || !targetExt.instance) {
+                        throw new Error(`Extension ${params.extensionId} not found or not running`);
+                    }
+                    const result = await targetExt.instance[params.method](params.params || {});
+                    return { success: true, result };
+                }
+                throw new Error(`Unknown extension operation: ${operation}`);
+            },
+            circuitBreaker: { execute: async (fn) => await fn() }
+        });
+
         const instrumented = instrumentPipeline(basePipeline, {
             enabled: true
         });
@@ -488,7 +504,16 @@ class GatewayLauncher {
         });
 
         this.runtime.on('extension-error', (info) => {
-            console.error(`${Colors.FAIL}[Runtime Error] ${info.extensionId}: ${info.error}${Colors.ENDC}`);
+            if (info.code !== 'EPIPE' && info.error !== 'Channel closed') {
+                console.error(`${Colors.FAIL}[Runtime Error] ${info.extensionId}: ${info.error}${Colors.ENDC}`);
+            }
+        });
+
+        // Catch raw error events bubbled up from ExtensionProcess to prevent Node crashes
+        this.runtime.on('error', (info) => {
+            if (info.code !== 'EPIPE' && info.error !== 'Channel closed') {
+                console.error(`${Colors.FAIL}[Runtime Error] ${info.extensionId}: ${info.error}${Colors.ENDC}`);
+            }
         });
 
         this.runtime.on('extension-restarted', (info) => {
@@ -574,16 +599,17 @@ class GatewayLauncher {
         }
 
         // Check if we should enter modern shell mode (no command provided)
-        const isDefaultRun = process.argv.length <= 2;
+        const isDefaultRun = !parsedArgs.command;
         if (isDefaultRun && !parsedArgs.flags.help) {
             const shellExt = this._findExtensionForCapability('ui:shell');
             if (shellExt) {
-                if (this._isVerbose()) console.log(`[Gateway] Entering modern shell mode via ${shellExt.id}...`);
+                const shellId = shellExt.manifest.id;
+                if (this._isVerbose()) console.log(`[Gateway] Entering modern shell mode via ${shellId}...`);
 
                 await this.forwardToExtension({
                     ...parsedArgs,
-                    command: shellExt.id,
-                    subcommand: 'start'
+                    command: shellId,
+                    subcommand: 'invoke'
                 });
                 return;
             }

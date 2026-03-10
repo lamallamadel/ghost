@@ -62,7 +62,7 @@ class ExtensionProcess extends EventEmitter {
         this.validStateTransitions = {
             'STOPPED': ['STARTING'],
             'STARTING': ['RUNNING', 'FAILED', 'STOPPED'],
-            'RUNNING': ['STOPPING', 'FAILED', 'DEGRADED'],
+            'RUNNING': ['STOPPING', 'STOPPED', 'FAILED', 'DEGRADED'],
             'DEGRADED': ['RUNNING', 'STOPPING', 'FAILED'],
             'STOPPING': ['STOPPED', 'FAILED', 'STARTING'],
             'FAILED': ['STARTING', 'STOPPED', 'STOPPING']
@@ -694,6 +694,10 @@ class ExtensionRuntime extends EventEmitter {
         // Forward critical events from the individual process to the runtime manager
         extension.on('interactive-exit', (info) => {
             this.emit('interactive-exit', info);
+        });
+
+        extension.on('error', (info) => {
+            this.emit('error', info);
         });
 
         this.extensions.set(extensionId, extension);
