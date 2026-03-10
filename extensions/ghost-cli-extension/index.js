@@ -53,7 +53,6 @@ class GhostInteractiveShell {
 
     async start() {
         // Fire and forget registry fetch so autocomplete is ready soon
-        // Do NOT await here, to ensure start() returns instantly to the Gateway
         this.getRegistry().catch(() => {});
 
         console.log(`\n${Colors.GHOST}${Colors.BOLD}Ghost CLI Modern Shell v1.0.0${Colors.RESET}`);
@@ -85,13 +84,14 @@ class GhostInteractiveShell {
             this.rl.prompt();
         });
 
-        this.rl.on('close', () => {
-            console.log(`\n${Colors.DIM}Exiting Ghost Shell. Goodbye!${Colors.RESET}`);
-            process.exit(0);
+        // Resolve ONLY when the shell session ends to keep the parent process actively awaiting
+        return new Promise((resolve) => {
+            this.rl.on('close', () => {
+                console.log(`\n${Colors.DIM}Exiting Ghost Shell. Goodbye!${Colors.RESET}`);
+                resolve({ success: true, output: "" });
+                setTimeout(() => process.exit(0), 100);
+            });
         });
-
-        // Resolve immediately so the core Gateway doesn't timeout waiting for the shell session to end
-        return { success: true, message: "Interactive shell running" };
     }
 
     async handleSlashCommand(input) {

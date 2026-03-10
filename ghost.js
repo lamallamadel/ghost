@@ -219,10 +219,14 @@ class GatewayLauncher {
             execute: async (operation, params) => {
                 if (operation === 'call') {
                     const targetExt = this.gateway.getExtension(params.extensionId);
-                    if (!targetExt || !targetExt.instance) {
-                        throw new Error(`Extension ${params.extensionId} not found or not running`);
+                    if (!targetExt) {
+                        throw new Error(`Unknown extension: ${params.extensionId}`);
                     }
-                    const result = await targetExt.instance[params.method](params.params || {});
+                    
+                    // JIT LOAD IT! If it's not running, start it using the semaphore.
+                    const instance = await this._ensureExtensionRunning(params.extensionId);
+                    
+                    const result = await instance[params.method](params.params || {});
                     return { success: true, result };
                 }
                 throw new Error(`Unknown extension operation: ${operation}`);
@@ -3005,8 +3009,13 @@ complete -c ghost -l help -s h -d "Show help message"`);
             };
 
             // THE KEY OPERATION: Delegate to extension instance
-            // This allows the pipeline to intercept, authenticate, audit, and execute
-            const result = await instance[command](params);
+            // Disable RPC timeout for the interactive shell to prevent the 30s kill
+            let timeout = null;
+            if (command === 'invoke' && ext.manifest.capabilities?.ui?.shell) {
+                timeout = 0; 
+            }
+            
+            const result = await instance[command](params, timeout);
 
             if (this._isVerbose()) {
                 this._logTelemetry('SUCCESS', { command, extension: targetExtension.id });

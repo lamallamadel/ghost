@@ -327,7 +327,7 @@ class ExtensionProcess extends EventEmitter {
         return Math.min(delay, this.backoffMaxDelay);
     }
 
-    async call(method, params = {}) {
+    async call(method, params = {}, timeout = null) {
         const isLifecycle = ['cleanup', 'shutdown', 'init'].includes(method);
         
         if (this.state !== 'RUNNING' && !isLifecycle) {
@@ -335,7 +335,7 @@ class ExtensionProcess extends EventEmitter {
         }
 
         try {
-            const result = await this._sendRequest(method, params);
+            const result = await this._sendRequest(method, params, timeout);
             return result;
         } catch (error) {
             if (isLifecycle && this.state === 'STOPPED') {
@@ -346,8 +346,8 @@ class ExtensionProcess extends EventEmitter {
         }
     }
 
-    async executeExtension(method, params) {
-        return await this.call(method, params);
+    async executeExtension(method, params, timeout = null) {
+        return await this.call(method, params, timeout);
     }
 
     getState() {
@@ -549,13 +549,17 @@ class ExtensionProcess extends EventEmitter {
         return new Promise((resolve, reject) => {
             if (!this.process || this.process.killed) return reject(new Error('Process not running'));
             const requestId = this.nextRequestId++;
-            const requestTimeout = timeout || this.responseTimeout;
-            const timeoutId = setTimeout(() => {
-                if (this.pendingRequests.has(requestId)) {
-                    this.pendingRequests.delete(requestId);
-                    reject(new Error(`Request timeout for ${method}`));
-                }
-            }, requestTimeout);
+            const requestTimeout = timeout !== null ? timeout : this.responseTimeout;
+            
+            let timeoutId = null;
+            if (requestTimeout > 0) {
+                timeoutId = setTimeout(() => {
+                    if (this.pendingRequests.has(requestId)) {
+                        this.pendingRequests.delete(requestId);
+                        reject(new Error(`Request timeout for ${method}`));
+                    }
+                }, requestTimeout);
+            }
 
             this.pendingRequests.set(requestId, { method, resolve, reject, timeoutId, timestamp: Date.now() });
             const envelope = { jsonrpc: '2.0', id: requestId, method, params };
