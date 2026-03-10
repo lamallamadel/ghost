@@ -87,6 +87,7 @@ class GatewayLauncher {
         this.telemetryInstance = null;
         this.telemetryServer = null;
         this.webhookController = null;
+        this.startupLocks = new Map(); // Semaphore locks for JIT loading
         this.telemetry = {
             requests: [],
             startTime: Date.now()
@@ -353,62 +354,35 @@ class GatewayLauncher {
 
     /**
      * Register extensions with pipeline.
-     * 
-     * ORCHESTRATION ROLE:
-     * - Call Gateway.initialize() to load extensions
-     * - Register each extension's manifest with the pipeline
-     * - Initialize extension instances with core RPC handler
-     * - No direct business logic, only metadata operations
      */
     async _initializeExtensions() {
-        // Phase 1: Discover metadata and manifests
+        // Phase 1: Discover metadata and manifests (no code execution)
         const result = await this.gateway.initialize();
-
-        // Phase 2: BOOTSTRAP - Load the Extension Flow Factory FIRST
-        const factoryId = 'ghost-extflo-extension';
-        const fullExt = this.gateway.getExtension(factoryId);
-
-        if (fullExt && fullExt.manifest) {
-            try {
-                if (this._isVerbose()) console.log(`[Bootstrap] Starting Factory: ${factoryId}...`);
-
-                const rawInstance = await this.runtime.startExtension(factoryId, fullExt.path, fullExt.manifest);
-                const instance = this.runtime._createExtensionInterface(rawInstance);
-                fullExt.instance = instance;
-
-                this.pipeline.registerExtension(factoryId, fullExt.manifest);
-
-                if (typeof instance.init === 'function') {
-                    await instance.init({
-                        coreHandler: async (request) => {
-                            return await this.forwardIntent(factoryId, request);
-                        }
-                    });
-                }
-
-                // Phase 3: Delegate the rest of the extensions to the Factory
-                // The factory will decide whether to load them Eagerly or Lazily
-                for (const extId of result.extensions) {
-                    if (extId === factoryId) continue;
-
-                    const ext = this.gateway.getExtension(extId);
-                    // For now, core still starts the process, but ExtFlo will manage READY state
-                    // In a more advanced version, ExtFlo would call core to trigger spawn
-                    await this._startExtension(extId, ext);
-                }
-            } catch (error) {
-                console.error(`${Colors.FAIL}✗${Colors.ENDC} Factory bootstrap failed: ${error.message}`);
-            }
-        }
-
         return result;
     }
 
-    async _startExtension(extId, fullExt) {
-        if (!fullExt || !fullExt.manifest) return;
+    async _ensureExtensionRunning(extId) {
+        const fullExt = this.gateway.getExtension(extId);
+        if (!fullExt) throw new Error(`Unknown extension: ${extId}`);
+        
+        if (fullExt.instance && fullExt.instance.state === 'RUNNING') {
+            return fullExt.instance;
+        }
+
+        // Semaphore / Lock to prevent race conditions during JIT
+        if (this.startupLocks.has(extId)) {
+            await this.startupLocks.get(extId);
+            return fullExt.instance;
+        }
+
+        let resolveLock;
+        const lockPromise = new Promise(r => resolveLock = r);
+        this.startupLocks.set(extId, lockPromise);
 
         try {
+            if (this._isVerbose()) console.log(`[JIT] Starting extension ${extId}...`);
             const isInteractive = fullExt.manifest.capabilities?.ui?.shell === true;
+            
             const rawInstance = await this.runtime.startExtension(extId, fullExt.path, fullExt.manifest, {
                 interactive: isInteractive
             });
@@ -424,8 +398,14 @@ class GatewayLauncher {
                     }
                 });
             }
+            
+            resolveLock();
+            this.startupLocks.delete(extId);
+            return instance;
         } catch (error) {
-            console.error(`${Colors.FAIL}✗${Colors.ENDC} Failed to start extension ${extId}: ${error.message}`);
+            resolveLock();
+            this.startupLocks.delete(extId);
+            throw error;
         }
     }    /**
      * Forward an intent from an extension to the security pipeline.
@@ -2997,20 +2977,22 @@ complete -c ghost -l help -s h -d "Show help message"`);
         }
 
         if (this._isVerbose()) {
-            console.log(`${Colors.DIM}[Gateway] Routing '${command}' to extension '${targetExtension.id}'${Colors.ENDC}`);
-            this._logTelemetry('ROUTE', { command, extension: targetExtension.id });
+            console.log(`${Colors.DIM}[Gateway] Routing '${command}' to extension '${targetExtension.manifest.id}'${Colors.ENDC}`);
+            this._logTelemetry('ROUTE', { command, extension: targetExtension.manifest.id });
         }
 
         try {
+            // JIT LOAD the target extension
+            const instance = await this._ensureExtensionRunning(targetExtension.manifest.id);
             const ext = targetExtension;
             
             // Validation: ensure extension is properly loaded
-            if (!ext.instance) {
+            if (!instance) {
                 console.error(`${Colors.FAIL}Error: Extension ${ext.manifest.id} has no instance${Colors.ENDC}`);
                 process.exit(1);
             }
 
-            if (typeof ext.instance[command] !== 'function') {
+            if (typeof instance[command] !== 'function') {
                 console.error(`${Colors.FAIL}Error: Extension ${ext.manifest.id} does not implement '${command}'${Colors.ENDC}`);
                 process.exit(1);
             }
@@ -3024,7 +3006,7 @@ complete -c ghost -l help -s h -d "Show help message"`);
 
             // THE KEY OPERATION: Delegate to extension instance
             // This allows the pipeline to intercept, authenticate, audit, and execute
-            const result = await ext.instance[command](params);
+            const result = await instance[command](params);
 
             if (this._isVerbose()) {
                 this._logTelemetry('SUCCESS', { command, extension: targetExtension.id });

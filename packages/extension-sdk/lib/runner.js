@@ -9,10 +9,13 @@ const readline = require('readline');
 class ExtensionRunner {
     constructor(wrapper) {
         this.wrapper = wrapper;
-        this.rl = readline.createInterface({
-            input: process.stdin,
-            terminal: false
-        });
+        // Only attach to stdin if we are NOT in interactive IPC mode
+        if (!process.send) {
+            this.rl = readline.createInterface({
+                input: process.stdin,
+                terminal: false
+            });
+        }
     }
 
     start() {
@@ -24,15 +27,17 @@ class ExtensionRunner {
         }
 
         // 2. Listen via stdin (used by standard piped extensions)
-        this.rl.on('line', async (line) => {
-            if (!line.trim()) return;
-            try {
-                const request = JSON.parse(line);
-                await this._processRequest(request);
-            } catch (error) {
-                this._sendError(null, -32700, 'Parse error: ' + error.message);
-            }
-        });
+        if (this.rl) {
+            this.rl.on('line', async (line) => {
+                if (!line.trim()) return;
+                try {
+                    const request = JSON.parse(line);
+                    await this._processRequest(request);
+                } catch (error) {
+                    this._sendError(null, -32700, 'Parse error: ' + error.message);
+                }
+            });
+        }
 
         // Error handling for the process
         process.on('uncaughtException', (error) => {
@@ -41,6 +46,11 @@ class ExtensionRunner {
     }
 
     async _processRequest(request) {
+        if (!request || typeof request !== 'object') return;
+
+        // SECURITY: Ignore responses to prevent infinite loops
+        if (!request.method) return;
+
         try {
             // Special handling for lifecycle methods
             if (request.method === 'init') {

@@ -1,0 +1,22 @@
+{
+  "id": "ghost-extflo-extension",
+  "name": "Ghost Extension Flow Factory",
+  "version": "1.0.0",
+  "main": "index.js",
+  "description": "Adaptive life-cycle orchestrator (Singleton, Lazy/Eager loader)",
+  "capabilities": {
+    "system": {
+      "orchestrator": true,
+      "registry": true
+    },
+    "extension": {
+      "manage": true,
+      "call": true
+    }
+  },
+  "permissions": [
+    "system:registry",
+    "extension:call",
+    "filesystem:read"
+  ]
+}
