@@ -400,6 +400,8 @@ class ProcessExecutor {
         return this.circuitBreaker.execute(async () => {
             if (operation === 'spawn') {
                 return await this._spawn(params);
+            } else if (operation === 'spawn-detached') {
+                return await this._spawnDetached(params);
             } else if (operation === 'exec') {
                 return await this._exec(params);
             } else {
@@ -462,6 +464,38 @@ class ProcessExecutor {
                         'EXEC_TIMEOUT'
                     ));
                 }, params.timeout);
+            }
+        });
+    }
+
+    async _spawnDetached(params) {
+        return new Promise((resolve, reject) => {
+            try {
+                const outFd = fsSync.openSync(params.outLog, 'a');
+                const errFd = fsSync.openSync(params.errLog, 'a');
+
+                const child = spawn(params.command, params.args || [], {
+                    detached: true,
+                    stdio: ['ignore', outFd, errFd],
+                    cwd: params.cwd || process.cwd(),
+                    env: params.env || process.env
+                });
+
+                child.unref();
+
+                fsSync.closeSync(outFd);
+                fsSync.closeSync(errFd);
+
+                resolve({
+                    success: true,
+                    result: { pid: child.pid },
+                    pid: child.pid
+                });
+            } catch (error) {
+                reject(new ExecutionError(
+                    `Failed to spawn detached process: ${error.message}`,
+                    'EXEC_SPAWN_ERROR'
+                ));
             }
         });
     }

@@ -1,0 +1,23 @@
+{
+  "schema": "ghost.extflo.v1",
+  "mode": "prod",
+  "extensions": [
+    {"id": "ghost-security-extension", "version": "1.0.0"},
+    {"id": "ghost-policy-extension",   "version": "1.0.0"},
+    {"id": "ghost-extflo-extension",   "version": "1.0.0"},
+    {"id": "ghost-cli-extension",      "version": "1.0.0"},
+    {"id": "ghost-git-extension",      "version": "1.1.1"},
+    {"id": "ghost-deps-extension",     "version": "1.0.0"},
+    {"id": "ghost-mesh-extension",     "version": "1.0.0"},
+    {"id": "ghost-agent-extension",    "version": "1.0.0"},
+    {"id": "ghost-process-extension",  "version": "1.0.0"}
+  ],
+  "capabilityOwners": {
+    "system:registry": "ghost-extflo-extension",
+    "ui:shell": "ghost-cli-extension",
+    "system:policy": "ghost-policy-extension",
+    "system:process": "ghost-process-extension",
+    "network:mesh": "ghost-mesh-extension",
+    "system:audit": "ghost-security-extension"
+  }
+}

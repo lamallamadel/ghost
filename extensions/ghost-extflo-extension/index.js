@@ -1,134 +1,154 @@
 #!/usr/bin/env node
 
 const { ExtensionSDK, ExtensionRunner } = require('@ghost/extension-sdk');
+const path = require('path');
+
+const Colors = {
+    GHOST: '\x1b[38;5;141m',
+    SOFT_GREEN: '\x1b[38;5;120m',
+    SOFT_BLUE: '\x1b[38;5;117m',
+    YELLOW: '\x1b[33m',
+    DIM: '\x1b[2m',
+    BOLD: '\x1b[1m',
+    RESET: '\x1b[0m'
+};
 
 class ExtensionFlowFactory {
     constructor() {
         this.sdk = new ExtensionSDK('ghost-extflo-extension');
-        this.registry = new Map(); // extensionId -> metadata
-        this.activeExtensions = new Map(); // extensionId -> status
-        this.loadingLocks = new Set(); // Thread-safety singleton locks
+        this.registry = new Map();
+        this.activeExtensions = new Map();
+        this.loadingLocks = new Set();
         
-        // Critical extensions that must be loaded EAGERLY
-        this.CRITICAL_EXTENSIONS = [
-            'ghost-deps-extension',
-            'ghost-security-extension',
-            'ghost-cli-extension'
-        ];
+        this.projectRoot = path.resolve(__dirname, '../../..');
+        this.lockPath = path.join(this.projectRoot, 'extensions.lock.json');
+        this.isBooted = false;
     }
 
     async init() {
+        // Instant response to avoid Gateway deadlock during JIT
+        return { success: true };
+    }
+
+    async _ensureRegistry() {
+        if (this.registry.size > 0) return;
+        const allExtensions = await this.sdk.emitIntent({ type: 'system', operation: 'registry' });
+        for (const ext of allExtensions) {
+            this.registry.set(ext.id, ext);
+        }
+    }
+
+    async _loadLockfile() {
         try {
-            // 1. Fetch global registry from core
-            const allExtensions = await this.sdk.emitIntent({
-                type: 'system',
-                operation: 'registry',
-                params: {}
+            if (await this.sdk.requestFileExists(this.lockPath)) {
+                return await this.sdk.requestFileReadJSON(this.lockPath);
+            }
+        } catch (e) {}
+        return null;
+    }
+
+    /**
+     * THE POWER: Deterministic boot with real-time feedback
+     */
+    async bootShell(params) {
+        if (!process.stdout.isTTY) {
+            return await this.sdk.emitIntent({ type: 'system', operation: 'run-shell', params });
+        }
+
+        console.log(`\n${Colors.GHOST}${Colors.BOLD}👻 Ghost Sovereign AI Platform${Colors.RESET}`);
+        
+        const lockfile = await this._loadLockfile();
+        const criticalExts = lockfile ? lockfile.extensions.map(e => e.id) : ['ghost-security-extension', 'ghost-policy-extension'];
+
+        let currentExt = '';
+        const spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+        let s = 0;
+        
+        const draw = () => {
+            process.stdout.write(`\r${Colors.GHOST}Orchestrating${Colors.RESET} ${Colors.SOFT_GREEN}${spinner[s++]}${Colors.RESET} ${Colors.DIM}${currentExt.padEnd(30)}${Colors.RESET}`);
+            s %= spinner.length;
+        };
+
+        const interval = setInterval(draw, 80);
+
+        try {
+            // 1. Validation de la Policy
+            currentExt = 'Validating Sovereignty...';
+            await this.sdk.emitIntent({
+                type: 'extension',
+                operation: 'call',
+                params: {
+                    extensionId: 'ghost-policy-extension',
+                    method: 'policy.verify-plan',
+                    params: { plan: criticalExts }
+                }
             });
 
-            for (const ext of allExtensions) {
-                this.registry.set(ext.id, ext);
-                this.activeExtensions.set(ext.id, 'STOPPED');
-            }
-
-            // 2. Perform EAGER loading for critical extensions
-            await this._performEagerLoad();
-
-            console.log(`[ExtFlo] Factory initialized. ${this.CRITICAL_EXTENSIONS.length} eager, ${this.registry.size - this.CRITICAL_EXTENSIONS.length} lazy.`);
-            return { success: true };
-        } catch (e) {
-            console.error('[ExtFlo] Initialization failed:', e.message);
-            return { success: false, error: e.message };
-        }
-    }
-
-    async _performEagerLoad() {
-        for (const extId of this.CRITICAL_EXTENSIONS) {
-            if (this.registry.has(extId)) {
+            // 2. Chargement réel de la pile JIT
+            for (const extId of criticalExts) {
+                if (extId === 'ghost-extflo-extension') continue;
+                currentExt = `Loading ${extId.replace('ghost-', '')}...`;
                 await this.load(extId, { strategy: 'eager' });
             }
-        }
-    }
 
-    /**
-     * Singleton / Thread-safe loader
-     */
-    async load(extensionId, options = {}) {
-        if (this.loadingLocks.has(extensionId)) {
-            // Wait for existing load to finish (pseudo thread-safety)
-            while (this.loadingLocks.has(extensionId)) {
-                await new Promise(r => setTimeout(r, 50));
-            }
-            return { success: true, reason: 'already_loading_handled' };
-        }
-
-        if (this.activeExtensions.get(extensionId) === 'RUNNING') {
-            return { success: true, reason: 'already_running' };
-        }
-
-        this.loadingLocks.add(extensionId);
-        try {
-            const strategy = options.strategy || 'lazy';
-            console.log(`[ExtFlo] Loading ${extensionId} (${strategy})...`);
-
-            // Check dependencies first via ghost-deps-extension if not us
-            if (extensionId !== 'ghost-deps-extension') {
-                await this._resolveDependencies(extensionId);
-            }
-
-            // Command to core to start the process (if not already started by core)
-            // In our current architecture, core starts them, but ExtFlo manages the READY state
-            this.activeExtensions.set(extensionId, 'RUNNING');
+            clearInterval(interval);
+            process.stdout.write(`\r${Colors.GHOST}Sovereign Stack Ready. Starting Shell...${Colors.RESET}${' '.repeat(40)}\n`);
             
-            return { success: true };
-        } finally {
-            this.loadingLocks.delete(extensionId);
+            // 3. Delegation to Shell
+            return await this.sdk.emitIntent({
+                type: 'system',
+                operation: 'run-shell',
+                params
+            });
+
+        } catch (e) {
+            clearInterval(interval);
+            console.error(`\n${Colors.YELLOW}Orchestration Error: ${e.message}${Colors.RESET}`);
+            process.exit(1);
         }
     }
 
-    async _resolveDependencies(extensionId) {
-        // Logic to call ghost-deps-extension and verify graph
-        // For now, placeholder for the 'after' / 'find deps' logic
+    async load(extensionId, options = {}) {
+        await this._ensureRegistry();
+        
+        if (this.activeExtensions.get(extensionId) === 'RUNNING') return { success: true };
+        
+        // Simuler le travail OS via ghost-process-extension (Semafore)
+        await this.sdk.emitIntent({
+            type: 'extension',
+            operation: 'call',
+            params: {
+                extensionId: 'ghost-process-extension',
+                method: 'start',
+                params: { args: [extensionId.replace('ghost-', '').replace('-extension', '')] }
+            }
+        }).catch(() => {}); // On continue si déjà locké
+
+        // Handshake JIT avec la Gateway
+        await this.sdk.emitIntent({
+            type: 'extension',
+            operation: 'call',
+            params: {
+                extensionId,
+                method: 'init', // Juste pour forcer le spawn JIT si pas encore fait
+                params: {}
+            }
+        });
+
+        this.activeExtensions.set(extensionId, 'RUNNING');
+        return { success: true };
     }
 
-    /**
-     * Lifecycle Operations
-     */
-    async operate(operation, extensionId, params = {}) {
-        switch (operation) {
-            case 'start': return await this.load(extensionId, { strategy: 'force' });
-            case 'stop': 
-                this.activeExtensions.set(extensionId, 'STOPPED');
-                return { success: true };
-            case 'status':
-                return { 
-                    id: extensionId, 
-                    state: this.activeExtensions.get(extensionId),
-                    metadata: this.registry.get(extensionId)
-                };
-            default:
-                throw new Error(`Unknown operation: ${operation}`);
-        }
-    }
-
-    /**
-     * The Intelligent Interceptor
-     * If an extension is called but not running, load it LAZILY.
-     */
     async handleRPCRequest(request) {
         const { method, params = {} } = request;
 
-        // Management API
-        if (method.startsWith('extflo.')) {
-            const op = method.split('.')[1];
-            return await this.operate(op, params.extensionId, params);
+        if (method === 'boot-shell') return await this.bootShell(params);
+        if (method === 'extflo') {
+             if (params.subcommand === 'plan') {
+                 const lock = await this._loadLockfile();
+                 return { success: true, output: JSON.stringify(lock, null, 2) };
+             }
         }
-
-        // Lazy Proxy Logic: Intercept any call to other extensions
-        if (params.extensionId && this.activeExtensions.get(params.extensionId) === 'STOPPED') {
-            await this.load(params.extensionId, { strategy: 'lazy' });
-        }
-
         return { success: true };
     }
 }
@@ -144,3 +164,4 @@ if (require.main === module) {
 }
 
 module.exports = { ExtensionFlowFactory };
+

@@ -1,0 +1,169 @@
+{
+  "schema": "ghost.compat.v1",
+  "core": {
+    "version": "1.1.2",
+    "node": ">=18.18.0"
+  },
+  "extensions": {
+    "ghost-extflo-extension": {
+      "version": "1.0.0",
+      "core_range": ">=1.0.0 <2.0.0",
+      "capabilities": ["system:orchestrator", "system:registry", "extension:manage", "extension:call", "filesystem:read"],
+      "stability": "stable",
+      "deps": {
+        "node": ">=18.18.0"
+      },
+      "security": {
+        "vuln_status": "clean",
+        "advisories": []
+      },
+      "coexistence": {
+        "conflicts": [],
+        "notes": "Primary owner of system:registry. Responsible for JIT lifecycle."
+      }
+    },
+    "ghost-cli-extension": {
+      "version": "1.0.0",
+      "core_range": ">=1.0.0 <2.0.0",
+      "capabilities": ["system:registry", "ui:shell", "extension:call"],
+      "stability": "stable",
+      "deps": {
+        "node": ">=18.18.0"
+      },
+      "security": {
+        "vuln_status": "clean",
+        "advisories": []
+      },
+      "coexistence": {
+        "conflicts": ["system:registry"],
+        "notes": "Allowed overlap for system:registry (read-only) to build the interactive slash menu."
+      }
+    },
+    "ghost-mesh-extension": {
+      "version": "1.0.0",
+      "core_range": ">=1.0.0 <2.0.0",
+      "capabilities": ["network:mesh", "system:events"],
+      "stability": "stable",
+      "deps": {
+        "node": ">=18.18.0",
+        "ws": "^8.16.0"
+      },
+      "security": {
+        "vuln_status": "clean",
+        "advisories": []
+      },
+      "coexistence": {
+        "conflicts": [],
+        "notes": "Handles P2P agent communication."
+      }
+    },
+    "ghost-security-extension": {
+      "version": "1.0.0",
+      "core_range": ">=1.0.0 <2.0.0",
+      "capabilities": ["system:audit", "pipeline:intercept"],
+      "stability": "stable",
+      "deps": {
+        "node": ">=18.18.0"
+      },
+      "security": {
+        "vuln_status": "clean",
+        "advisories": []
+      },
+      "coexistence": {
+        "conflicts": [],
+        "notes": "NIST SI-10 compliance auditor."
+      }
+    },
+    "ghost-policy-extension": {
+      "version": "1.0.0",
+      "core_range": ">=1.0.0 <2.0.0",
+      "capabilities": ["system:policy", "filesystem:read"],
+      "stability": "stable",
+      "deps": {
+        "node": ">=18.18.0"
+      },
+      "security": {
+        "vuln_status": "clean",
+        "advisories": []
+      },
+      "coexistence": {
+        "conflicts": [],
+        "notes": "The Policy Master. Governs the compatibility matrix and capability overlaps."
+      }
+    },
+    "ghost-agent-extension": {
+      "version": "1.0.0",
+      "core_range": ">=1.0.0 <2.0.0",
+      "capabilities": ["ai:orchestrate", "extension:call"],
+      "stability": "beta",
+      "deps": {
+        "node": ">=18.18.0"
+      },
+      "security": {
+        "vuln_status": "clean",
+        "advisories": []
+      },
+      "coexistence": {
+        "conflicts": [],
+        "notes": "Natural language task orchestrator."
+      }
+    },
+    "ghost-git-extension": {
+      "version": "1.1.1",
+      "core_range": ">=1.0.0 <2.0.0",
+      "capabilities": ["git:read", "git:write", "filesystem:read", "filesystem:write"],
+      "stability": "stable",
+      "deps": {
+        "node": ">=18.18.0"
+      },
+      "security": {
+        "vuln_status": "clean",
+        "advisories": []
+      },
+      "coexistence": {
+        "conflicts": [],
+        "notes": "Isolated execution of Git commands."
+      }
+    },
+    "ghost-deps-extension": {
+      "version": "1.0.0",
+      "core_range": ">=1.0.0 <2.0.0",
+      "capabilities": ["system:dependencies", "filesystem:read"],
+      "stability": "stable",
+      "deps": {
+        "node": ">=18.18.0"
+      },
+      "security": {
+        "vuln_status": "clean",
+        "advisories": []
+      },
+      "coexistence": {
+        "conflicts": [],
+        "notes": "Resolves extension dependency graphs and provides vulnerability reports."
+      }
+    },
+    "ghost-process-extension": {
+      "version": "1.0.0",
+      "core_range": ">=1.0.0 <2.0.0",
+      "capabilities": ["system:process", "filesystem:read", "filesystem:write"],
+      "stability": "stable",
+      "deps": {
+        "node": ">=18.18.0"
+      },
+      "security": {
+        "vuln_status": "clean",
+        "advisories": []
+      },
+      "coexistence": {
+        "conflicts": [],
+        "notes": "Headless daemon manager and process supervisor. Strict singleton OS locks."
+      }
+    }
+  },
+  "policies": {
+    "capability_overlaps": {
+      "system:registry": ["ghost-extflo-extension", "ghost-cli-extension"]
+    },
+    "default_vuln_action": "block"
+  }
+}

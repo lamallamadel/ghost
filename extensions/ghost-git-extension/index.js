@@ -37,10 +37,8 @@ class ExtensionWrapper {
      * Performs a full security audit of the repository.
      */
     async audit(params) {
-        // Migration note: audit was part of GitExtension, now we use performFullAudit logic
-        // For simplicity in this robust refactor, we expose what we have
-        if (typeof this.git.audit === 'function') {
-            return await this.git.audit(params);
+        if (typeof this.git.performFullAudit === 'function') {
+            return await this.git.performFullAudit(params);
         }
         return { success: false, output: 'Audit command not implemented in new architecture yet.' };
     }

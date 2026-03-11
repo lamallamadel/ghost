@@ -1,0 +1,22 @@
+{
+  "id": "ghost-process-extension",
+  "name": "Ghost Process Supervisor",
+  "version": "1.0.0",
+  "description": "Headless process supervision and OS lifecycle management.",
+  "main": "index.js",
+  "commands": ["process"],
+  "capabilities": {
+    "system": {
+      "process": true
+    },
+    "filesystem": {
+      "read": ["**/*"],
+      "write": ["**/*"]
+    }
+  },
+  "permissions": [
+    "system:process",
+    "filesystem:read",
+    "filesystem:write"
+  ]
+}

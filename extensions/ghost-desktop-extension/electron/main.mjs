@@ -1,6 +1,7 @@
 import { app, BrowserWindow, ipcMain, dialog } from 'electron'
 import path from 'node:path'
 import fs from 'node:fs'
+import http from 'node:http'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { spawn } from 'node:child_process'
@@ -78,6 +79,51 @@ function runCommand({ repoPath, command, args = [], env = {} }) {
         durationMs: new Date(finishedAt).getTime() - new Date(startedAt).getTime(),
       })
     })
+  })
+}
+
+const ANALYTICS_API_PORT = 9876
+const GHOST_CLI_PATH = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'ghost.js')
+
+function analyticsRequest(urlPath, method = 'GET', body = null) {
+  return new Promise((resolve, reject) => {
+    const payload = body ? JSON.stringify(body) : null
+    const options = {
+      hostname: 'localhost',
+      port: ANALYTICS_API_PORT,
+      path: urlPath,
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {}),
+      },
+    }
+    const req = http.request(options, (res) => {
+      let data = ''
+      res.on('data', (chunk) => { data += chunk })
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)) }
+        catch { reject(new Error('Invalid JSON from analytics server')) }
+      })
+    })
+    req.on('error', reject)
+    if (payload) req.write(payload)
+    req.end()
+  })
+}
+
+function ghostCli(args) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [GHOST_CLI_PATH, ...args], {
+      cwd: process.cwd(),
+      env: { ...process.env },
+      windowsHide: true,
+    })
+    let stdout = ''
+    let stderr = ''
+    child.stdout.on('data', (d) => { stdout += d.toString() })
+    child.stderr.on('data', (d) => { stderr += d.toString() })
+    child.on('close', (code) => resolve({ exitCode: code ?? 1, stdout, stderr }))
   })
 }
 
@@ -191,80 +237,41 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('gateway.state', async () => {
-    const ghostCliPath = path.join(__dirname, '..', '..', 'ghost.js')
-    
     try {
-      const { createRequire } = await import('module')
-      const require = createRequire(import.meta.url)
-      
-      const Gateway = require('../../core/gateway.js')
-      
-      const gateway = new Gateway({
-        bundledExtensionsDir: path.join(__dirname, '..', '..', 'extensions')
-      })
-      
-      await gateway.initialize()
-      
-      const extensions = gateway.listExtensions().map(ext => {
-        const fullExt = gateway.getExtension(ext.id)
-        return {
-          manifest: {
-            id: ext.id,
-            name: ext.name,
-            version: ext.version,
-            capabilities: ext.capabilities,
-            permissions: fullExt?.manifest?.permissions || []
-          },
-          stats: {
-            requestsApproved: Math.floor(Math.random() * 100),
-            requestsRejected: Math.floor(Math.random() * 20),
-            requestsRateLimited: Math.floor(Math.random() * 10),
-            lastActivity: new Date().toISOString()
-          },
-          trafficPolicerState: ext.capabilities?.network?.rateLimit ? {
-            committedTokens: Math.random() * (ext.capabilities.network.rateLimit.bc || 100),
-            excessTokens: Math.random() * (ext.capabilities.network.rateLimit.be || ext.capabilities.network.rateLimit.bc || 100),
-            committedCapacity: ext.capabilities.network.rateLimit.bc || 100,
-            excessCapacity: ext.capabilities.network.rateLimit.be || ext.capabilities.network.rateLimit.bc || 100,
-            cir: ext.capabilities.network.rateLimit.cir || 60,
-            lastRefill: Date.now()
-          } : undefined
-        }
-      })
-      
-      const recentRequests = [
-        {
-          requestId: 'req-1-' + Date.now(),
-          extensionId: extensions[0]?.manifest.id || 'ghost-git-extension',
-          type: 'git',
-          operation: 'status',
-          timestamp: Date.now() - 5000,
-          stage: 'execute',
-          status: 'completed'
+      const { exitCode, stdout } = await ghostCli(['gateway', 'extensions', '--json'])
+      if (exitCode !== 0) throw new Error('CLI exited with code ' + exitCode)
+
+      const extensionsData = JSON.parse(stdout)
+      const extensions = extensionsData.map((ext) => ({
+        manifest: {
+          id: ext.id,
+          name: ext.name,
+          version: ext.version,
+          capabilities: ext.manifest?.capabilities,
+          permissions: ext.manifest?.permissions || [],
         },
-        {
-          requestId: 'req-2-' + Date.now(),
-          extensionId: extensions[0]?.manifest.id || 'ghost-git-extension',
-          type: 'filesystem',
-          operation: 'read',
-          timestamp: Date.now() - 3000,
-          stage: 'audit',
-          status: 'approved'
-        }
-      ].filter(Boolean)
-      
-      return {
-        extensions,
-        recentRequests,
-        trafficPolicerStates: {}
-      }
+        stats: {
+          requestsApproved: 0,
+          requestsRejected: 0,
+          requestsRateLimited: 0,
+          lastActivity: new Date().toISOString(),
+        },
+        trafficPolicerState: ext.manifest?.capabilities?.network?.rateLimit
+          ? {
+              committedTokens: ext.manifest.capabilities.network.rateLimit.bc || 0,
+              excessTokens: ext.manifest.capabilities.network.rateLimit.be || 0,
+              committedCapacity: ext.manifest.capabilities.network.rateLimit.bc || 100,
+              excessCapacity: ext.manifest.capabilities.network.rateLimit.be || 100,
+              cir: ext.manifest.capabilities.network.rateLimit.cir || 60,
+              lastRefill: Date.now(),
+            }
+          : undefined,
+      }))
+
+      return { extensions, recentRequests: [], trafficPolicerStates: {} }
     } catch (error) {
       store.addLog({ ts: nowIso(), level: 'error', scope: 'command', message: 'gateway.state error', data: { error: error.message } })
-      return {
-        extensions: [],
-        recentRequests: [],
-        trafficPolicerStates: {}
-      }
+      return { extensions: [], recentRequests: [], trafficPolicerStates: {} }
     }
   })
 
@@ -304,387 +311,99 @@ app.whenReady().then(() => {
   })
 
   ipcMain.handle('gateway.reloadExtension', async (_, { extensionId }) => {
-    const ghostCliPath = path.join(__dirname, '..', '..', 'ghost.js')
-    
     try {
-      store.addLog({ 
-        ts: nowIso(), 
-        level: 'info', 
-        scope: 'command', 
-        message: 'gateway.reloadExtension', 
-        data: { extensionId } 
-      })
+      store.addLog({ ts: nowIso(), level: 'info', scope: 'command', message: 'gateway.reloadExtension', data: { extensionId } })
 
-      const { createRequire } = await import('module')
-      const require = createRequire(import.meta.url)
-      
-      const Gateway = require('../../core/gateway.js')
-      
-      const gateway = new Gateway({
-        bundledExtensionsDir: path.join(__dirname, '..', '..', 'extensions')
-      })
-      
-      await gateway.initialize()
-      
-      const ext = gateway.getExtension(extensionId)
-      
-      if (!ext) {
-        store.addLog({ 
-          ts: nowIso(), 
-          level: 'error', 
-          scope: 'command', 
-          message: 'gateway.reloadExtension.notFound', 
-          data: { extensionId } 
-        })
-        return {
-          success: false,
-          error: `Extension ${extensionId} introuvable`
-        }
+      const { exitCode, stderr } = await ghostCli(['gateway', 'reload', extensionId, '--force'])
+
+      if (exitCode !== 0) {
+        const msg = stderr.trim() || `Extension ${extensionId} introuvable`
+        store.addLog({ ts: nowIso(), level: 'error', scope: 'command', message: 'gateway.reloadExtension.error', data: { extensionId, error: msg } })
+        return { success: false, error: msg }
       }
 
-      gateway.unloadExtension(extensionId)
-      
-      await gateway.initialize()
-      
-      store.addLog({ 
-        ts: nowIso(), 
-        level: 'info', 
-        scope: 'command', 
-        message: 'gateway.reloadExtension.success', 
-        data: { extensionId } 
-      })
-      
-      return {
-        success: true
-      }
+      store.addLog({ ts: nowIso(), level: 'info', scope: 'command', message: 'gateway.reloadExtension.success', data: { extensionId } })
+      return { success: true }
     } catch (error) {
-      store.addLog({ 
-        ts: nowIso(), 
-        level: 'error', 
-        scope: 'command', 
-        message: 'gateway.reloadExtension.error', 
-        data: { extensionId, error: error.message } 
-      })
-      
-      return {
-        success: false,
-        error: error.message
-      }
+      store.addLog({ ts: nowIso(), level: 'error', scope: 'command', message: 'gateway.reloadExtension.error', data: { extensionId, error: error.message } })
+      return { success: false, error: error.message }
     }
   })
 
   ipcMain.handle('analytics.getMetrics', async (_, { timeRange = '6h' } = {}) => {
     try {
-      const { createRequire } = await import('module')
-      const require = createRequire(import.meta.url)
-      
-      const { AnalyticsPlatform } = require('../../core/analytics/index.js')
-      
-      const analytics = new AnalyticsPlatform({
-        persistenceDir: path.join(app.getPath('userData'), 'analytics')
-      })
-      
-      await analytics.initialize()
-      
-      const allMetrics = analytics.collector.getAllMetrics()
-      
-      store.addLog({ 
-        ts: nowIso(), 
-        level: 'info', 
-        scope: 'analytics', 
-        message: 'analytics.getMetrics', 
-        data: { timeRange, extensionCount: Object.keys(allMetrics).length } 
-      })
-      
-      return {
-        metrics: allMetrics,
-        timestamp: Date.now()
-      }
+      const data = await analyticsRequest(`/api/analytics/metrics?timeRange=${timeRange}`)
+      store.addLog({ ts: nowIso(), level: 'info', scope: 'analytics', message: 'analytics.getMetrics', data: { timeRange } })
+      return data
     } catch (error) {
-      store.addLog({ 
-        ts: nowIso(), 
-        level: 'error', 
-        scope: 'analytics', 
-        message: 'analytics.getMetrics.error', 
-        data: { error: error.message } 
-      })
-      
-      return {
-        metrics: {},
-        timestamp: Date.now(),
-        error: error.message
-      }
+      store.addLog({ ts: nowIso(), level: 'error', scope: 'analytics', message: 'analytics.getMetrics.error', data: { error: error.message } })
+      return { metrics: {}, timestamp: Date.now(), error: error.message }
     }
   })
 
   ipcMain.handle('analytics.getDashboard', async (_, { timeRange = '6h' } = {}) => {
     try {
-      const { createRequire } = await import('module')
-      const require = createRequire(import.meta.url)
-      
-      const { AnalyticsPlatform } = require('../../core/analytics/index.js')
-      
-      const analytics = new AnalyticsPlatform({
-        persistenceDir: path.join(app.getPath('userData'), 'analytics')
-      })
-      
-      await analytics.initialize()
-      
-      const dashboard = await analytics.generateDashboard()
-      
-      store.addLog({ 
-        ts: nowIso(), 
-        level: 'info', 
-        scope: 'analytics', 
-        message: 'analytics.getDashboard', 
-        data: { timeRange } 
-      })
-      
-      return dashboard
+      const data = await analyticsRequest(`/api/analytics/dashboard?timeRange=${timeRange}`)
+      store.addLog({ ts: nowIso(), level: 'info', scope: 'analytics', message: 'analytics.getDashboard', data: { timeRange } })
+      return data
     } catch (error) {
-      store.addLog({ 
-        ts: nowIso(), 
-        level: 'error', 
-        scope: 'analytics', 
-        message: 'analytics.getDashboard.error', 
-        data: { error: error.message } 
-      })
-      
-      return {
-        timestamp: Date.now(),
-        metrics: {},
-        behavior: null,
-        cost: null,
-        performance: { alerts: [] },
-        tracing: null,
-        error: error.message
-      }
+      store.addLog({ ts: nowIso(), level: 'error', scope: 'analytics', message: 'analytics.getDashboard.error', data: { error: error.message } })
+      return { timestamp: Date.now(), metrics: {}, behavior: null, cost: null, performance: { alerts: [] }, tracing: null, error: error.message }
     }
   })
 
   ipcMain.handle('analytics.getExtensionCallGraph', async (_, { extensionId }) => {
     try {
-      const { createRequire } = await import('module')
-      const require = createRequire(import.meta.url)
-      
-      const { AnalyticsPlatform } = require('../../core/analytics/index.js')
-      
-      const analytics = new AnalyticsPlatform({
-        persistenceDir: path.join(app.getPath('userData'), 'analytics')
-      })
-      
-      await analytics.initialize()
-      
-      const callGraph = analytics.getExtensionCallGraph(extensionId)
-      
-      store.addLog({ 
-        ts: nowIso(), 
-        level: 'info', 
-        scope: 'analytics', 
-        message: 'analytics.getExtensionCallGraph', 
-        data: { extensionId } 
-      })
-      
-      return {
-        extensionId,
-        callGraph,
-        timestamp: Date.now()
-      }
+      const data = await analyticsRequest(`/api/analytics/extension/${encodeURIComponent(extensionId)}/callgraph`)
+      store.addLog({ ts: nowIso(), level: 'info', scope: 'analytics', message: 'analytics.getExtensionCallGraph', data: { extensionId } })
+      return data
     } catch (error) {
-      store.addLog({ 
-        ts: nowIso(), 
-        level: 'error', 
-        scope: 'analytics', 
-        message: 'analytics.getExtensionCallGraph.error', 
-        data: { extensionId, error: error.message } 
-      })
-      
-      return {
-        extensionId,
-        callGraph: null,
-        timestamp: Date.now(),
-        error: error.message
-      }
+      store.addLog({ ts: nowIso(), level: 'error', scope: 'analytics', message: 'analytics.getExtensionCallGraph.error', data: { extensionId, error: error.message } })
+      return { extensionId, callGraph: null, timestamp: Date.now(), error: error.message }
     }
   })
 
   ipcMain.handle('analytics.getRecommendations', async () => {
     try {
-      const { createRequire } = await import('module')
-      const require = createRequire(import.meta.url)
-      
-      const { AnalyticsPlatform } = require('../../core/analytics/index.js')
-      
-      const analytics = new AnalyticsPlatform({
-        persistenceDir: path.join(app.getPath('userData'), 'analytics')
-      })
-      
-      await analytics.initialize()
-      
-      const recommendations = await analytics.getRecommendations()
-      
-      store.addLog({ 
-        ts: nowIso(), 
-        level: 'info', 
-        scope: 'analytics', 
-        message: 'analytics.getRecommendations', 
-        data: { count: recommendations.length } 
-      })
-      
-      return {
-        recommendations,
-        timestamp: Date.now()
-      }
+      const data = await analyticsRequest('/api/analytics/recommendations')
+      store.addLog({ ts: nowIso(), level: 'info', scope: 'analytics', message: 'analytics.getRecommendations', data: {} })
+      return data
     } catch (error) {
-      store.addLog({ 
-        ts: nowIso(), 
-        level: 'error', 
-        scope: 'analytics', 
-        message: 'analytics.getRecommendations.error', 
-        data: { error: error.message } 
-      })
-      
-      return {
-        recommendations: [],
-        timestamp: Date.now(),
-        error: error.message
-      }
+      store.addLog({ ts: nowIso(), level: 'error', scope: 'analytics', message: 'analytics.getRecommendations.error', data: { error: error.message } })
+      return { recommendations: [], timestamp: Date.now(), error: error.message }
     }
   })
 
   ipcMain.handle('recommendations.analyzeRepo', async (_, { repoPath }) => {
     try {
-      const { createRequire } = await import('module')
-      const require = createRequire(import.meta.url)
-      
-      const { AnalyticsPlatform } = require('../../core/analytics/index.js')
-      
-      const analytics = new AnalyticsPlatform({
-        persistenceDir: path.join(app.getPath('userData'), 'analytics')
-      })
-      
-      await analytics.initialize()
-      
-      const profile = await analytics.analyzeRepository(repoPath)
-      const recommendations = await analytics.getRecommendations()
-      
-      store.addLog({ 
-        ts: nowIso(), 
-        level: 'info', 
-        scope: 'recommendations', 
-        message: 'recommendations.analyzeRepo', 
-        data: { repoPath, recommendationCount: recommendations.length } 
-      })
-      
-      return {
-        profile,
-        recommendations: recommendations.slice(0, 5),
-        timestamp: Date.now()
-      }
+      const data = await analyticsRequest('/api/analytics/recommendations/analyze', 'POST', { repoPath })
+      store.addLog({ ts: nowIso(), level: 'info', scope: 'recommendations', message: 'recommendations.analyzeRepo', data: { repoPath } })
+      return data
     } catch (error) {
-      store.addLog({ 
-        ts: nowIso(), 
-        level: 'error', 
-        scope: 'recommendations', 
-        message: 'recommendations.analyzeRepo.error', 
-        data: { repoPath, error: error.message } 
-      })
-      
-      return {
-        profile: null,
-        recommendations: [],
-        timestamp: Date.now(),
-        error: error.message
-      }
+      store.addLog({ ts: nowIso(), level: 'error', scope: 'recommendations', message: 'recommendations.analyzeRepo.error', data: { repoPath, error: error.message } })
+      return { profile: null, recommendations: [], timestamp: Date.now(), error: error.message }
     }
   })
 
   ipcMain.handle('recommendations.recordFeedback', async (_, { extensionId, feedback }) => {
     try {
-      const { createRequire } = await import('module')
-      const require = createRequire(import.meta.url)
-      
-      const { AnalyticsPlatform } = require('../../core/analytics/index.js')
-      
-      const analytics = new AnalyticsPlatform({
-        persistenceDir: path.join(app.getPath('userData'), 'analytics')
-      })
-      
-      await analytics.initialize()
-      
-      analytics.recommendations.recordUserFeedback(extensionId, feedback)
-      await analytics.recommendations.persist()
-      
-      store.addLog({ 
-        ts: nowIso(), 
-        level: 'info', 
-        scope: 'recommendations', 
-        message: 'recommendations.recordFeedback', 
-        data: { extensionId, feedback } 
-      })
-      
-      return {
-        success: true,
-        timestamp: Date.now()
-      }
+      const data = await analyticsRequest('/api/analytics/recommendations/feedback', 'POST', { extensionId, feedback })
+      store.addLog({ ts: nowIso(), level: 'info', scope: 'recommendations', message: 'recommendations.recordFeedback', data: { extensionId, feedback } })
+      return data
     } catch (error) {
-      store.addLog({ 
-        ts: nowIso(), 
-        level: 'error', 
-        scope: 'recommendations', 
-        message: 'recommendations.recordFeedback.error', 
-        data: { extensionId, error: error.message } 
-      })
-      
-      return {
-        success: false,
-        timestamp: Date.now(),
-        error: error.message
-      }
+      store.addLog({ ts: nowIso(), level: 'error', scope: 'recommendations', message: 'recommendations.recordFeedback.error', data: { extensionId, error: error.message } })
+      return { success: false, timestamp: Date.now(), error: error.message }
     }
   })
 
   ipcMain.handle('recommendations.getConversionRates', async () => {
     try {
-      const { createRequire } = await import('module')
-      const require = createRequire(import.meta.url)
-      
-      const { AnalyticsPlatform } = require('../../core/analytics/index.js')
-      
-      const analytics = new AnalyticsPlatform({
-        persistenceDir: path.join(app.getPath('userData'), 'analytics')
-      })
-      
-      await analytics.initialize()
-      
-      const rates = analytics.recommendations.getAllConversionRates()
-      
-      store.addLog({ 
-        ts: nowIso(), 
-        level: 'info', 
-        scope: 'recommendations', 
-        message: 'recommendations.getConversionRates', 
-        data: { count: Object.keys(rates).length } 
-      })
-      
-      return {
-        rates,
-        timestamp: Date.now()
-      }
+      const data = await analyticsRequest('/api/analytics/recommendations/conversion-rates')
+      store.addLog({ ts: nowIso(), level: 'info', scope: 'recommendations', message: 'recommendations.getConversionRates', data: {} })
+      return data
     } catch (error) {
-      store.addLog({ 
-        ts: nowIso(), 
-        level: 'error', 
-        scope: 'recommendations', 
-        message: 'recommendations.getConversionRates.error', 
-        data: { error: error.message } 
-      })
-      
-      return {
-        rates: {},
-        timestamp: Date.now(),
-        error: error.message
-      }
+      store.addLog({ ts: nowIso(), level: 'error', scope: 'recommendations', message: 'recommendations.getConversionRates.error', data: { error: error.message } })
+      return { rates: {}, timestamp: Date.now(), error: error.message }
     }
   })
 })

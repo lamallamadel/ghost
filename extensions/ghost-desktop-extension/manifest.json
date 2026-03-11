@@ -6,13 +6,13 @@
   "main": "index.js",
   "commands": ["console"],
   "capabilities": {
-    "process": {
-      "spawn": true
+    "network": {
+      "mesh": true
     }
   },
   "permissions": [
     "filesystem:read",
-    "process:spawn",
+    "network:mesh",
     "network:https"
   ]
 }

@@ -4,6 +4,7 @@
   "version": "1.0.0",
   "main": "index.js",
   "description": "Adaptive life-cycle orchestrator (Singleton, Lazy/Eager loader)",
+  "commands": ["extflo"],
   "capabilities": {
     "system": {
       "orchestrator": true,

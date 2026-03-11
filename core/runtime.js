@@ -136,40 +136,46 @@ class ExtensionProcess extends EventEmitter {
     }
 
     async start() {
+        if (this.options.verbose || process.env.GHOST_DEBUG) console.log(`[DEBUG]   --> START ExtensionProcess.start(${this.extensionId})`);
         if (this.state === 'RUNNING') {
+            if (this.options.verbose || process.env.GHOST_DEBUG) console.log(`[DEBUG]   <-- END ExtensionProcess.start(${this.extensionId}) - ALREADY RUNNING`);
             throw new Error(`Extension ${this.extensionId} is already running`);
         }
-        
+
         if (this.state === 'STARTING') {
+            if (this.options.verbose || process.env.GHOST_DEBUG) console.log(`[DEBUG]   <-- END ExtensionProcess.start(${this.extensionId}) - ALREADY STARTING`);
             throw new Error(`Extension ${this.extensionId} is already starting`);
         }
 
         this._transitionState('STARTING', 'start_requested');
 
         try {
+            if (this.options.verbose || process.env.GHOST_DEBUG) console.log(`[DEBUG]   ExtensionProcess.start(${this.extensionId}) - Calling _spawnProcess()...`);
             await this._spawnProcess();
+            if (this.options.verbose || process.env.GHOST_DEBUG) console.log(`[DEBUG]   ExtensionProcess.start(${this.extensionId}) - _spawnProcess() returned`);
             this.lastHeartbeat = Date.now();
             this.healthState = 'HEALTHY';
             this.consecutiveHeartbeatFailures = 0;
             this._startHeartbeatMonitoring();
             this.consecutiveRestarts = 0;
-            
+
             if (this.enableResourceLimits && this.process && this.process.pid) {
                 await this._applyResourceLimits();
                 this._startResourceMonitoring();
             }
-            
+
             this._transitionState('RUNNING', 'startup_success', {
                 startupDuration: Date.now() - this.lastHeartbeat
             });
+            if (this.options.verbose || process.env.GHOST_DEBUG) console.log(`[DEBUG]   <-- END ExtensionProcess.start(${this.extensionId}) - SUCCESS`);
         } catch (error) {
+            if (this.options.verbose || process.env.GHOST_DEBUG) console.log(`[DEBUG]   <-- END ExtensionProcess.start(${this.extensionId}) - ERROR: ${error.message}`);
             this._transitionState('FAILED', 'startup_failed', {
                 error: error.message
             });
             throw error;
         }
     }
-
     async stop() {
         if (this.state === 'STOPPED') {
             return;
@@ -693,8 +699,9 @@ class ExtensionRuntime extends EventEmitter {
     }
 
     async startExtension(extensionId, extensionPath, manifest, processOptions = {}) {
+        if (this.options.verbose || process.env.GHOST_DEBUG) console.log(`[DEBUG] --> START startExtension(${extensionId})`);
         const extension = new ExtensionProcess(extensionId, extensionPath, manifest, { ...this.options, ...processOptions });
-        
+
         // Forward critical events from the individual process to the runtime manager
         extension.on('interactive-exit', (info) => {
             this.emit('interactive-exit', info);
@@ -707,10 +714,11 @@ class ExtensionRuntime extends EventEmitter {
         this.extensions.set(extensionId, extension);
         this.extensionPaths.set(extensionId, extensionPath);
         this.extensionManifests.set(extensionId, manifest);
+        if (this.options.verbose || process.env.GHOST_DEBUG) console.log(`[DEBUG] startExtension(${extensionId}) - Calling extension.start()...`);
         await extension.start();
+        if (this.options.verbose || process.env.GHOST_DEBUG) console.log(`[DEBUG] <-- END startExtension(${extensionId}) - SUCCESS`);
         return extension;
     }
-
     async stopExtension(extensionId) {
         const ext = this.extensions.get(extensionId);
         if (ext) await ext.stop();
@@ -719,6 +727,7 @@ class ExtensionRuntime extends EventEmitter {
     _createExtensionInterface(extension) {
         return new Proxy(extension, {
             get: (target, prop) => {
+                if (prop === 'then' || prop === 'catch' || prop === 'finally') return undefined;
                 if (prop in target) return typeof target[prop] === 'function' ? target[prop].bind(target) : target[prop];
                 return async (params) => await target.executeExtension(prop, params);
             }

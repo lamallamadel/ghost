@@ -366,16 +366,23 @@ class GatewayLauncher {
     }
 
     async _ensureExtensionRunning(extId) {
+        if (this._isVerbose() || process.env.GHOST_DEBUG) console.log(`[DEBUG] --> START _ensureExtensionRunning(${extId})`);
         const fullExt = this.gateway.getExtension(extId);
-        if (!fullExt) throw new Error(`Unknown extension: ${extId}`);
-        
+        if (!fullExt) {
+            if (this._isVerbose() || process.env.GHOST_DEBUG) console.log(`[DEBUG] <-- END _ensureExtensionRunning(${extId}) - ERROR: Unknown extension`);
+            throw new Error(`Unknown extension: ${extId}`);
+        }
+
         if (fullExt.instance && fullExt.instance.state === 'RUNNING') {
+            if (this._isVerbose() || process.env.GHOST_DEBUG) console.log(`[DEBUG] <-- END _ensureExtensionRunning(${extId}) - ALREADY RUNNING`);
             return fullExt.instance;
         }
 
         // Semaphore / Lock to prevent race conditions during JIT
         if (this.startupLocks.has(extId)) {
+            if (this._isVerbose() || process.env.GHOST_DEBUG) console.log(`[DEBUG] _ensureExtensionRunning(${extId}) - Waiting for existing lock...`);
             await this.startupLocks.get(extId);
+            if (this._isVerbose() || process.env.GHOST_DEBUG) console.log(`[DEBUG] <-- END _ensureExtensionRunning(${extId}) - LOCK RESOLVED`);
             return fullExt.instance;
         }
 
@@ -384,29 +391,31 @@ class GatewayLauncher {
         this.startupLocks.set(extId, lockPromise);
 
         try {
+            if (this._isVerbose() || process.env.GHOST_DEBUG) console.log(`[DEBUG] _ensureExtensionRunning(${extId}) - Creating instance...`);
             if (this._isVerbose()) console.log(`[JIT] Starting extension ${extId}...`);
             const isInteractive = fullExt.manifest.capabilities?.ui?.shell === true;
-            
+
             const rawInstance = await this.runtime.startExtension(extId, fullExt.path, fullExt.manifest, {
-                interactive: isInteractive
+                interactive: isInteractive,
+                intentHandler: async (request) => {
+                    return await this.forwardIntent(extId, request);
+                }
             });
+            if (this._isVerbose() || process.env.GHOST_DEBUG) console.log(`[DEBUG] _ensureExtensionRunning(${extId}) - Calling _createExtensionInterface...`);
             const instance = this.runtime._createExtensionInterface(rawInstance);
+            if (this._isVerbose() || process.env.GHOST_DEBUG) console.log(`[DEBUG] _ensureExtensionRunning(${extId}) - Proxy created, assigning to fullExt.instance...`);
             fullExt.instance = instance;
 
+            if (this._isVerbose() || process.env.GHOST_DEBUG) console.log(`[DEBUG] _ensureExtensionRunning(${extId}) - Calling pipeline.registerExtension...`);
             this.pipeline.registerExtension(extId, fullExt.manifest);
+            if (this._isVerbose() || process.env.GHOST_DEBUG) console.log(`[DEBUG] _ensureExtensionRunning(${extId}) - Extension registered in pipeline, resolving lock...`);
 
-            if (typeof instance.init === 'function') {
-                await instance.init({
-                    coreHandler: async (request) => {
-                        return await this.forwardIntent(extId, request);
-                    }
-                });
-            }
-            
             resolveLock();
             this.startupLocks.delete(extId);
+            if (this._isVerbose() || process.env.GHOST_DEBUG) console.log(`[DEBUG] <-- END _ensureExtensionRunning(${extId}) - SUCCESS`);
             return instance;
         } catch (error) {
+            if (this._isVerbose() || process.env.GHOST_DEBUG) console.log(`[DEBUG] <-- END _ensureExtensionRunning(${extId}) - ERROR: ${error.message}`);
             resolveLock();
             this.startupLocks.delete(extId);
             throw error;
@@ -576,39 +585,27 @@ class GatewayLauncher {
     async route(parsedArgs) {
         this.verbose = parsedArgs.flags.verbose;
 
-        // Disable colors if --no-color flag is present
         if (parsedArgs.flags.noColor) {
             Colors.disable();
         }
 
-        // Setup verbose telemetry display if enabled
+        // --- PURE ROUTING MODE ---
+        // Default behavior: if no command is provided, show help
+        if (!parsedArgs.command && !parsedArgs.flags.help) {
+            this.showHelp();
+            return;
+        }
+        // Setup verbose telemetry display for regular commands
         if (this._isVerbose()) {
             this._setupVerboseTelemetry(parsedArgs.flags.verbose);
         }
 
-        // Check if we should enter modern shell mode (no command provided)
-        const isDefaultRun = !parsedArgs.command;
-        if (isDefaultRun && !parsedArgs.flags.help) {
-            const shellExt = this._findExtensionForCapability('ui:shell');
-            if (shellExt) {
-                const shellId = shellExt.manifest.id;
-                if (this._isVerbose()) console.log(`[Gateway] Entering modern shell mode via ${shellId}...`);
-
-                await this.forwardToExtension({
-                    ...parsedArgs,
-                    command: shellId,
-                    subcommand: 'invoke'
-                });
-                return;
-            }
-        }
-
-        if (parsedArgs.flags.help || !parsedArgs.command) {
+        if (parsedArgs.flags.help) {
             this.showHelp();
             return;
         }
 
-        // Pure routing: delegate to appropriate handler
+        // Route internal commands
         if (parsedArgs.command === 'setup') {
             await this.handleSetupCommand(parsedArgs);
         } else if (parsedArgs.command === 'extension') {
@@ -643,6 +640,69 @@ class GatewayLauncher {
             // Pure routing: delegate domain commands to extensions
             await this.forwardToExtension(parsedArgs);
         }
+    }
+
+    /**
+     * Handle intents from extensions. 
+     * This is where the Gateway acts as a System Bus.
+     */
+    async forwardIntent(extId, request) {
+        const { type, operation, params } = request;
+        
+        // SYSTEM BUS OPERATIONS
+        if (type === 'system') {
+            switch (operation) {
+                case 'registry':
+                    return this.registry.listExtensions().map(e => ({ id: e.manifest.id, description: e.manifest.description }));
+                case 'log':
+                    if (this._isVerbose()) console.log(`[Extension:${extId}] ${params.message}`);
+                    return { success: true };
+                case 'run-shell':
+                    // The Gateway yields the TTY to the Shell extension
+                    return await this._runShellIntent(params);
+                default:
+                    throw new Error(`Unknown system operation: ${operation}`);
+            }
+        }
+
+        // DIRECT GIT OPERATIONS (to prevent routing loops)
+        if (type === 'git' && operation === 'exec') {
+            return new Promise((resolve, reject) => {
+                const { args, suppressError } = params;
+                const fullCommand = `git ${args.join(' ')}`;
+                if (this._isVerbose()) console.log(`[Gateway:Git] Executing: ${fullCommand}`);
+                
+                exec(fullCommand, { cwd: process.cwd() }, (error, stdout, stderr) => {
+                    if (error && !suppressError) {
+                        reject(new Error(stderr || error.message));
+                    } else {
+                        resolve({ stdout, stderr, code: error ? error.code : 0 });
+                    }
+                });
+            });
+        }
+
+        // EXTENSION-TO-EXTENSION ROUTING
+        const pipelineMessage = {
+            id: Date.now(),
+            extensionId: extId,
+            intent: { type, operation, params }
+        };
+
+        const pipelineResult = await this.pipeline.process(pipelineMessage);
+        return pipelineResult.result;
+    }
+
+    async _runShellIntent(params) {
+        const shellExt = this._findExtensionForCapability('ui:shell');
+        if (!shellExt) throw new Error("No UI Shell extension found in registry.");
+        
+        return await this.forwardToExtension({
+            command: shellExt.manifest.id,
+            subcommand: 'invoke',
+            args: params.args || [],
+            flags: params.flags || {}
+        });
     }
 
     async handleDevCommand(parsedArgs) {
@@ -2481,9 +2541,12 @@ complete -c ghost -l help -s h -d "Show help message"`);
      * - Exit with non-zero if issues found (unless --force)
      */
     async handleAuditCommand(parsedArgs) {
-        // forwardToExtension will handle the routing and the primary output
-        // We call it but we might want to handle the result success state specifically
-        await this.forwardToExtension(parsedArgs);
+        // Force routing to ghost-git-extension for NIST security audit
+        await this.forwardToExtension({
+            ...parsedArgs,
+            command: 'ghost-git-extension',
+            subcommand: 'audit'
+        });
     }
 
     /**
@@ -4578,8 +4641,30 @@ async function main() {
     });
 
     try {
-        await launcher.initialize();
+        // Parse args FIRST so `ghost` and `ghost --help` do not bootstrap runtime/IPC.
         const parsedArgs = launcher.parseArgs();
+
+        // If user asked for help or provided no command, do a minimal bootstrap:
+        // we only need gateway metadata to print dynamic extension commands.
+        if (parsedArgs.flags.help || !parsedArgs.command) {
+            // SAFE MODE CHECK (Early)
+        const isSafeMode = process.env.GHOST_SAFE_MODE === '1' || process.env.GHOST_DISABLE_EXTENSIONS === '1';
+        if (isSafeMode) {
+            console.log(`\n${Colors.BOLD}${Colors.WARNING}⚠ SAFE MODE: Extensions disabled${Colors.ENDC}\n`);
+        }
+
+        // Minimal init: Gateway only (no ExtensionRuntime / no IPC).
+            launcher.gateway = new Gateway({
+                extensionsDir: USER_EXTENSIONS_DIR,
+                bundledExtensionsDir: BUNDLED_EXTENSIONS_DIR
+            });
+            await launcher.gateway.initialize();
+            launcher.showHelp();
+            return;
+        }
+
+        // Full init for real commands
+        await launcher.initialize();
         await launcher.route(parsedArgs);
     } catch (error) {
         console.error(`${Colors.FAIL}Fatal error: ${error.message}${Colors.ENDC}`);

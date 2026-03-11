@@ -443,6 +443,68 @@ class GitExtension {
         return commitMsg.trim().replace(/^['"`]|['"`]$/g, '');
     }
 
+    async loadGhostIgnore() {
+        try {
+            const root = await this.git.getRepoRoot();
+            const result = await this.sdk.emitIntent({
+                type: 'filesystem',
+                operation: 'read',
+                params: { path: path.join(root, '.ghostignore') }
+            });
+            const content = result.content !== undefined ? result.content : result;
+            if (!content || typeof content !== 'string') return [];
+            
+            return content.split('\n')
+                .map(line => line.trim())
+                .filter(line => line && !line.startsWith('#'));
+        } catch (e) {
+            return [];
+        }
+    }
+
+    async performFullAudit() {
+        const ignorePatterns = await this.loadGhostIgnore();
+        
+        let allFiles = [];
+        try {
+            const tracked = await this.git.exec(['ls-files'], true);
+            const untracked = await this.git.exec(['ls-files', '--others', '--exclude-standard'], true);
+            
+            const trackedList = (tracked || '').split('\n').map(f => f.trim()).filter(Boolean);
+            const untrackedList = (untracked || '').split('\n').map(f => f.trim()).filter(Boolean);
+            
+            allFiles = [...new Set([...trackedList, ...untrackedList])];
+        } catch (e) {
+            return { success: false, output: `Git error: ${e.message}`, blocked: true };
+        }
+
+        const filteredFiles = allFiles.filter(file => {
+            return !ignorePatterns.some(pattern => {
+                if (pattern.endsWith('/')) {
+                    return file.startsWith(pattern) || file === pattern.slice(0, -1);
+                }
+                if (pattern.includes('*')) {
+                    const regex = new RegExp('^' + pattern.replace(/\./g, '\\.').replace(/\*/g, '.*') + '$');
+                    return regex.test(file);
+                }
+                return file === pattern;
+            });
+        });
+
+        const findings = await this._scanFilesForSecrets(filteredFiles);
+        
+        if (findings.length === 0) {
+            return { success: true, blocked: false, output: `\x1b[32m✓ Aucun secret détecté dans ${filteredFiles.length} fichiers (No secrets).\x1b[0m` };
+        }
+
+        let output = `\x1b[31m✗ Problème de sécurité: ${findings.length} secrets détectés dans ${filteredFiles.length} fichiers scannés:\x1b[0m\n`;
+        findings.forEach(f => {
+            output += `  [${f.severity.toUpperCase()}] ${f.type} in ${f.file}\n`;
+        });
+
+        return { success: false, blocked: true, output, findings };
+    }
+
     async auditSecurity(diffMap, provider, apiKey, model) {
         const potentialLeaks = {};
         const cleanedDiffMap = {};

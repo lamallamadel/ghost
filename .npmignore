@@ -1,0 +1,19 @@
+# NPM Ignore
+node_modules/
+**/node_modules/
+.git/
+.github/
+.vscode/
+.idea/
+.env
+*.pem
+id_rsa
+scripts/test/
+test/
+temp_*/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store
+Thumbs.db

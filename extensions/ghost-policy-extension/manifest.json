@@ -4,11 +4,11 @@
   "version": "1.0.0",
   "description": "Central authority for Ghost governance and security policies.",
   "main": "index.js",
-  "commands": ["list", "set", "verify"],
+  "commands": ["list", "set", "verify", "compatStatus", "compatExport", "compatCheck"],
   "capabilities": {
     "filesystem": {
-      "read": ["~/.ghost/**/*"],
-      "write": ["~/.ghost/config/ghostrc.json", "~/.ghost/policies/*"]
+      "read": ["**/*"],
+      "write": ["**/*"]
     },
     "system": {
       "policy": true,

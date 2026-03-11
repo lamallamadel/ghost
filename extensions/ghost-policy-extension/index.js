@@ -32,6 +32,19 @@ class ExtensionWrapper {
     async verify(params) {
         return await this.policy.handleRPCRequest({ method: 'policy.verify', params });
     }
+    
+    // --- Compatibility Matrix Commands ---
+    async compatStatus(params) {
+        return await this.policy.handleRPCRequest({ method: 'compat.status', params });
+    }
+
+    async compatExport(params) {
+        return await this.policy.handleRPCRequest({ method: 'compat.export', params });
+    }
+
+    async compatCheck(params) {
+        return await this.policy.handleRPCRequest({ method: 'compat.check', params });
+    }
 
     async handleRPCRequest(request) {
         return await this.policy.handleRPCRequest(request);

@@ -2,6 +2,16 @@
   "name": "atlasia-ghost",
   "version": "1.1.2",
   "description": "Zero-Trust Git governance CLI: verify commits, enforce policy gates, and run sandboxed extensions (sovereign alternative to Husky/Commitlint).",
+  "scripts": {
+    "start": "node ghost.js",
+    "test": "node test.js",
+    "test:smoke": "node scripts/test/smoke-help.mjs",
+    "test:default": "node scripts/test/smoke-default-help.mjs",
+    "test:safe": "node scripts/test/smoke-safe-mode.mjs",
+    "test:pack": "node scripts/test/pack-contents.mjs",
+    "test:all": "node scripts/test/smoke-help.mjs && node scripts/test/smoke-default-help.mjs && node scripts/test/smoke-safe-mode.mjs && node scripts/test/pack-contents.mjs",
+    "console": "node ghost.js console start"
+  },
   "main": "ghost.js",
   "bin": {
     "ghost": "ghost.js"

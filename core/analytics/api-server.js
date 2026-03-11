@@ -66,6 +66,18 @@ class AnalyticsAPIServer {
                 await this._handlePerformanceHistory(req, res, url);
             } else if (url.pathname === '/api/analytics/extensions') {
                 await this._handleExtensionsList(req, res);
+            } else if (url.pathname === '/api/analytics/metrics') {
+                await this._handleMetrics(req, res);
+            } else if (url.pathname === '/api/analytics/recommendations') {
+                await this._handleRecommendations(req, res);
+            } else if (url.pathname === '/api/analytics/recommendations/analyze') {
+                await this._handleRecommendationsAnalyze(req, res);
+            } else if (url.pathname === '/api/analytics/recommendations/feedback') {
+                await this._handleRecommendationsFeedback(req, res);
+            } else if (url.pathname === '/api/analytics/recommendations/conversion-rates') {
+                await this._handleRecommendationsConversionRates(req, res);
+            } else if (url.pathname.startsWith('/api/analytics/extension/') && url.pathname.endsWith('/callgraph')) {
+                await this._handleExtensionCallGraph(req, res, url);
             } else if (url.pathname.startsWith('/api/analytics/extension/')) {
                 await this._handleExtensionDetail(req, res, url);
             } else {
@@ -237,6 +249,69 @@ class AnalyticsAPIServer {
 
         res.writeHead(200);
         res.end(JSON.stringify(metrics));
+    }
+
+    async _handleMetrics(req, res) {
+        const metrics = this.analytics.collector.getAllMetrics();
+        res.writeHead(200);
+        res.end(JSON.stringify({ metrics, timestamp: Date.now() }));
+    }
+
+    async _handleExtensionCallGraph(req, res, url) {
+        const parts = url.pathname.split('/');
+        const extensionId = parts[parts.length - 2];
+        const callGraph = this.analytics.getExtensionCallGraph(extensionId);
+        res.writeHead(200);
+        res.end(JSON.stringify({ extensionId, callGraph, timestamp: Date.now() }));
+    }
+
+    async _handleRecommendations(req, res) {
+        const recommendations = await this.analytics.getRecommendations();
+        res.writeHead(200);
+        res.end(JSON.stringify({ recommendations, timestamp: Date.now() }));
+    }
+
+    async _handleRecommendationsAnalyze(req, res) {
+        if (req.method !== 'POST') {
+            res.writeHead(405);
+            res.end(JSON.stringify({ error: 'Method not allowed' }));
+            return;
+        }
+        const body = await this._readBody(req);
+        const { repoPath } = JSON.parse(body);
+        const profile = await this.analytics.analyzeRepository(repoPath);
+        const recommendations = await this.analytics.getRecommendations();
+        res.writeHead(200);
+        res.end(JSON.stringify({ profile, recommendations: recommendations.slice(0, 5), timestamp: Date.now() }));
+    }
+
+    async _handleRecommendationsFeedback(req, res) {
+        if (req.method !== 'POST') {
+            res.writeHead(405);
+            res.end(JSON.stringify({ error: 'Method not allowed' }));
+            return;
+        }
+        const body = await this._readBody(req);
+        const { extensionId, feedback } = JSON.parse(body);
+        this.analytics.recommendations.recordUserFeedback(extensionId, feedback);
+        await this.analytics.recommendations.persist();
+        res.writeHead(200);
+        res.end(JSON.stringify({ success: true, timestamp: Date.now() }));
+    }
+
+    async _handleRecommendationsConversionRates(req, res) {
+        const rates = this.analytics.recommendations.getAllConversionRates();
+        res.writeHead(200);
+        res.end(JSON.stringify({ rates, timestamp: Date.now() }));
+    }
+
+    _readBody(req) {
+        return new Promise((resolve, reject) => {
+            let data = '';
+            req.on('data', (chunk) => { data += chunk; });
+            req.on('end', () => resolve(data));
+            req.on('error', reject);
+        });
     }
 
     _parseTimeRange(timeRange) {
