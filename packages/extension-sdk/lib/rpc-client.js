@@ -181,23 +181,29 @@ class RPCClient {
     }
 
     _handleResponse(message) {
-        if (!message || !message.id) {
-            return;
+        if (!message) return;
+        // Ignore JSON-RPC request messages here
+        if (message.method) return;
+
+        // Unwrap nested envelopes if present
+        let payload = message;
+        if (payload.result && payload.result.jsonrpc === '2.0' && payload.result.id) {
+            payload = payload.result;
         }
 
-        const pending = this.pendingRequests.get(message.id);
-        
-        if (!pending) {
-            return;
-        }
+        const id = payload.id;
+        if (!id) return;
+
+        const pending = this.pendingRequests.get(id);
+        if (!pending) return;
 
         clearTimeout(pending.timeout);
-        this.pendingRequests.delete(message.id);
+        this.pendingRequests.delete(id);
 
-        if (message.error) {
-            pending.reject(new Error(message.error.message || 'Request failed'));
+        if (payload.error) {
+            pending.reject(new Error(payload.error.message || 'Request failed'));
         } else {
-            pending.resolve(message.result);
+            pending.resolve(payload.result !== undefined ? payload.result : payload);
         }
     }
 }

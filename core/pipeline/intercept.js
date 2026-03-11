@@ -240,16 +240,50 @@ class MessageInterceptor {
 
     deserialize(rawMessage) {
         try {
-            const message = typeof rawMessage === 'string' ? JSON.parse(rawMessage) : rawMessage;
-            
-            if (!message || typeof message !== 'object' || Array.isArray(message)) {
-                throw new Error('Message must be a JSON object');
+            // DEBUG: log raw incoming message (truncate long bodies)
+            try {
+                const preview = typeof rawMessage === 'string' ? rawMessage : JSON.stringify(rawMessage);
+                const short = preview.length > 1000 ? preview.slice(0, 1000) + '...<truncated>' : preview;
+                console.log(`[Intercept:DEBUG] Raw message preview: ${short}`);
+            } catch (e) {
+                console.log('[Intercept:DEBUG] Raw message could not be stringified');
+            }
+
+            // Allow raw intent objects to pass through (backwards compatibility)
+            if (rawMessage && typeof rawMessage === 'object' && !Array.isArray(rawMessage)) {
+                // If it already looks like an intent object, accept it directly
+                if (rawMessage.type && rawMessage.operation && rawMessage.extensionId) {
+                    return rawMessage;
+                }
+
+                // If it contains an 'intent' field (legacy shape), accept it
+                if (rawMessage.intent && rawMessage.extensionId) {
+                    return rawMessage;
+                }
+            }
+
+            let message;
+            if (typeof rawMessage === 'string') {
+                try {
+                    message = JSON.parse(rawMessage);
+                } catch (e) {
+                    console.log(`[Intercept:DEBUG] JSON.parse failed: ${e.message}`);
+                    throw e;
+                }
+            } else {
+                message = rawMessage;
+            }
+
+            // If this message already seems like an intent (not JSON-RPC), accept it
+            if (message.type && message.operation) {
+                return message;
             }
 
             this._validateJsonRpc2(message);
 
             return message;
         } catch (error) {
+            try { console.log(`[Intercept:ERROR] Deserialization failed for rawMessage: ${typeof rawMessage === 'string' ? rawMessage.slice(0,500) : JSON.stringify(rawMessage).slice(0,500)} -- ${error.message}`); } catch(e) {}
             throw new Error(`JSON-RPC deserialization failed: ${error.message}`);
         }
     }

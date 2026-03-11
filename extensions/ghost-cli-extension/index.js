@@ -390,7 +390,7 @@ class CommandPalette {
             if (end < this.filtered.length) {
                 out += `    ${C.DIM}… ${this.filtered.length - end} more${C.RESET}\n`;
             }
-            this.lines = (i => i)(end - start) * 2 + 2;
+            this.lines = (end - start) * 2 + 2;
         }
 
         process.stdout.write(`\x1b7\x1b[J${out}\x1b8`);
@@ -781,7 +781,13 @@ class ExtensionWrapper {
 
     async handleRPCRequest(request) {
         const { method, params = {} } = request;
-        if (method === 'invoke' || method === 'cli.start') return await this.shell.start();
+        if (method === 'invoke' || method === 'cli.start') {
+            // Start the shell asynchronously and return immediately to acknowledge invoke
+            this.shell.start().catch(err => {
+                console.error('[Shell] failed to start:', err && err.message ? err.message : err);
+            });
+            return { success: true, output: 'Shell starting' };
+        }
         return { error: { code: -32601, message: `Method not found: ${method}` } };
     }
 }

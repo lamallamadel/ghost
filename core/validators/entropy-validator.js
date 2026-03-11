@@ -1,5 +1,6 @@
 const fs = require('fs');
 const path = require('path');
+const minimatch = require('minimatch');
 
 class EntropyValidator {
     constructor(options = {}) {
@@ -96,16 +97,19 @@ class EntropyValidator {
         if (!fs.existsSync(ghostIgnorePath)) {
             this.ghostIgnorePatterns = [];
             this.ghostIgnoreLoaded = true;
+            try { console.log('[DEBUG] Loaded .ghostignore patterns:', JSON.stringify(this.ghostIgnorePatterns)); } catch(e) {}
             return;
         }
 
         try {
             const content = fs.readFileSync(ghostIgnorePath, 'utf8');
             this.ghostIgnorePatterns = content
-                .split('\n')
+                .split(/\r?\n/)
                 .map(line => line.trim())
-                .filter(line => line && !line.startsWith('#'));
+                .filter(line => line && !line.startsWith('#'))
+                .map(p => p.replace(/\\/g, '/'));
             this.ghostIgnoreLoaded = true;
+            try { console.log('[DEBUG] Loaded .ghostignore patterns:', JSON.stringify(this.ghostIgnorePatterns)); } catch(e) {}
         } catch (error) {
             this.ghostIgnorePatterns = [];
             this.ghostIgnoreLoaded = true;
@@ -158,6 +162,47 @@ class EntropyValidator {
             const digitCount = (content.match(/[0-9]/g) || []).length;
             if (alphaCount === 0 || digitCount === 0) {
                 return true;
+            }
+        }
+
+        return false;
+    }
+
+    // Check whether a given filesystem path should be ignored according to .ghostignore patterns
+    _isPathIgnored(filePath) {
+        if (!filePath || typeof filePath !== 'string') return false;
+        const normalized = filePath.replace(/\\/g, '/'); // normalize to forward slashes
+
+        if (!this.ghostIgnorePatterns || this.ghostIgnorePatterns.length === 0) return false;
+
+        for (let rawPattern of this.ghostIgnorePatterns) {
+            const pattern = rawPattern.trim();
+            if (!pattern) continue;
+
+            const pat = pattern.replace(/\\/g, '/');
+
+            try {
+                // Directory-only patterns (e.g., docs/)
+                if (pat.endsWith('/')) {
+                    const dirPat = pat.slice(0, -1);
+                    if (minimatch(normalized, `${dirPat}/**`, { nocase: true })) return true;
+                    continue;
+                }
+
+                // Exact match against the full path
+                if (minimatch(normalized, pat, { nocase: true })) return true;
+
+                // Match against basename
+                const base = path.basename(normalized);
+                if (minimatch(base, pat, { nocase: true })) return true;
+
+                // Match anywhere in the path (allow patterns like "secrets.js" to match nested files)
+                if (minimatch(normalized, `**/${pat}`, { nocase: true })) return true;
+            } catch (e) {
+                // Fallback: simple checks
+                const base = path.basename(normalized);
+                if (base === pattern) return true;
+                if (normalized.includes(`/${pattern}`)) return true;
             }
         }
 
@@ -350,12 +395,9 @@ class EntropyValidator {
     }
 
     scanContentForIntent(content, ghostIgnorePath = null) {
-        if (!this.ghostIgnoreLoaded && ghostIgnorePath) {
-            const repoRoot = ghostIgnorePath ? path.dirname(ghostIgnorePath) : null;
-            this.loadGhostIgnore(repoRoot);
-        } else if (!this.ghostIgnoreLoaded) {
-            this.loadGhostIgnore(process.cwd());
-        }
+        // Always reload .ghostignore for each audit invocation so tests and dynamic updates are respected
+        const repoRoot = ghostIgnorePath ? path.dirname(ghostIgnorePath) : process.cwd();
+        this.loadGhostIgnore(repoRoot);
 
         const scanResult = this.scanContent(content, { useRegex: true, useEntropy: true });
 
@@ -421,6 +463,9 @@ class EntropyValidator {
                         scanRecursive(fullPath);
                     }
                 } else if (entry.isFile()) {
+                    // Skip files matched by .ghostignore path patterns
+                    if (this._isPathIgnored(fullPath)) continue;
+
                     const ext = path.extname(entry.name);
                     if (extensions.includes(ext)) {
                         try {
