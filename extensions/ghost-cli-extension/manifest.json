@@ -1,21 +1,29 @@
 {
   "id": "ghost-cli-extension",
-  "name": "Ghost Modern Shell",
-  "version": "1.0.0",
+  "name": "Ghost Interactive Shell",
+  "version": "2.0.0",
   "main": "index.js",
-  "description": "Interactive shell with slash commands and auto-completion",
+  "description": "Beautiful interactive shell with command palette, fuzzy autocomplete, history, and smart NL routing",
+  "commands": ["start"],
   "capabilities": {
+    "filesystem": {
+      "read":  ["~/.ghost/cli-history.json", "~/.ghost/config/ghostrc.json"],
+      "write": ["~/.ghost/cli-history.json"]
+    },
+    "git": {
+      "read": true
+    },
     "system": {
       "registry": true
-    },
-    "ui": {
-      "shell": true
     },
     "extension": {
       "call": true
     }
   },
   "permissions": [
+    "filesystem:read",
+    "filesystem:write",
+    "git:read",
     "system:registry",
     "extension:call"
   ]

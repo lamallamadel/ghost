@@ -1,133 +1,460 @@
 #!/usr/bin/env node
 
+/**
+ * Ghost CLI Extension — Interactive Shell
+ * The Beautiful Monster: a full-featured terminal UX for the Ghost gateway.
+ *
+ * IO-to-Boundary compliant: all filesystem ops go through the SDK.
+ * Terminal interaction (readline, process.stdout) is the UI layer — exempt.
+ */
+
 const { ExtensionSDK, ExtensionRunner } = require('@ghost/extension-sdk');
 const readline = require('readline');
+const os = require('os');
+const path = require('path');
 
-const Colors = {
-    GHOST: '\x1b[38;5;141m',
-    SOFT_GREEN: '\x1b[38;5;120m',
-    SOFT_BLUE: '\x1b[38;5;117m',
-    DIM: '\x1b[2m',
-    BOLD: '\x1b[1m',
-    RESET: '\x1b[0m'
+// ─── Paths (string ops only — no fs) ─────────────────────────────────────────
+const HISTORY_PATH = path.join(os.homedir(), '.ghost', 'cli-history.json');
+const CONFIG_PATH  = path.join(os.homedir(), '.ghost', 'config', 'ghostrc.json');
+const MAX_HISTORY  = 200;
+
+// ─── ANSI Color Palette ───────────────────────────────────────────────────────
+const C = {
+    GHOST:      '\x1b[38;5;141m',
+    GREEN:      '\x1b[38;5;120m',
+    BLUE:       '\x1b[38;5;117m',
+    YELLOW:     '\x1b[38;5;220m',
+    RED:        '\x1b[38;5;203m',
+    CYAN:       '\x1b[38;5;87m',
+    MAGENTA:    '\x1b[38;5;213m',
+    DIM:        '\x1b[2m',
+    BOLD:       '\x1b[1m',
+    UNDERLINE:  '\x1b[4m',
+    RESET:      '\x1b[0m',
+    BG_DARK:    '\x1b[48;5;236m',
 };
 
-class GhostInteractiveShell {
+// ─── Spinner ──────────────────────────────────────────────────────────────────
+class Spinner {
     constructor() {
-        this.sdk = new ExtensionSDK('ghost-cli-extension');
-        this.rl = null;
-        this.cachedRegistry = null;
-        this.filteredCommands = [];
-        this.selectedIndex = 0;
-        this.menuLines = 0;
+        this._frames = ['⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏'];
+        this._timer  = null;
+        this._i      = 0;
+    }
+
+    start(msg = '') {
+        if (!process.stdout.isTTY) return;
+        this._i = 0;
+        this._timer = setInterval(() => {
+            process.stdout.write(`\r${C.GHOST}${this._frames[this._i++ % this._frames.length]}${C.RESET} ${C.DIM}${msg}${C.RESET}  `);
+        }, 80);
+    }
+
+    stop(finalMsg = '') {
+        if (this._timer) {
+            clearInterval(this._timer);
+            this._timer = null;
+            process.stdout.write(`\r${' '.repeat(finalMsg.length + 4)}\r`);
+            if (finalMsg) process.stdout.write(`${finalMsg}\n`);
+        }
+    }
+}
+
+// ─── Output Formatter ─────────────────────────────────────────────────────────
+const Fmt = {
+    width() { return process.stdout.columns || 80; },
+
+    banner(title, subtitle = '') {
+        const w = this.width();
+        const line = '─'.repeat(w);
+        let out = `\n${C.GHOST}${line}${C.RESET}\n`;
+        out += `${C.GHOST}${C.BOLD}  👻  ${title}${C.RESET}\n`;
+        if (subtitle) out += `${C.DIM}     ${subtitle}${C.RESET}\n`;
+        out += `${C.GHOST}${line}${C.RESET}\n`;
+        return out;
+    },
+
+    box(title, lines, color = C.BLUE) {
+        const w = Math.min(this.width() - 2, 78);
+        const inner = w - 4;
+        const top    = `${color}┌─ ${C.BOLD}${title}${C.RESET}${color} ${'─'.repeat(Math.max(0, inner - title.length - 1))}┐${C.RESET}`;
+        const bottom = `${color}└${'─'.repeat(w - 2)}┘${C.RESET}`;
+        const body = lines.map(l => {
+            const visible = l.replace(/\x1b\[[0-9;]*m/g, '');
+            const pad = Math.max(0, inner - visible.length);
+            return `${color}│${C.RESET}  ${l}${' '.repeat(pad)} ${color}│${C.RESET}`;
+        });
+        return [top, ...body, bottom].join('\n');
+    },
+
+    table(headers, rows, colors = []) {
+        const cols = headers.map((h, i) => {
+            const maxData = Math.max(...rows.map(r => String(r[i] ?? '').replace(/\x1b\[[0-9;]*m/g, '').length));
+            return Math.max(h.length, maxData);
+        });
+        const sep = `${C.DIM}${'─'.repeat(cols.reduce((a, c) => a + c + 3, 1))}${C.RESET}`;
+        const hdr = headers.map((h, i) => `${C.BOLD}${h.padEnd(cols[i])}${C.RESET}`).join(`  ${C.DIM}│${C.RESET}  `);
+        const body = rows.map((r, ri) => {
+            const rowC = colors[ri] || C.RESET;
+            return r.map((cell, i) => {
+                const visible = String(cell ?? '').replace(/\x1b\[[0-9;]*m/g, '');
+                const pad = cols[i] - visible.length;
+                return `${rowC}${cell}${C.RESET}${' '.repeat(Math.max(0, pad))}`;
+            }).join(`  ${C.DIM}│${C.RESET}  `);
+        });
+        return [`  ${hdr}`, `  ${sep}`, ...body.map(r => `  ${r}`)].join('\n');
+    },
+
+    section(title, content) {
+        return `\n${C.CYAN}${C.BOLD}▸ ${title}${C.RESET}\n${content}\n`;
+    },
+
+    success(msg) { return `${C.GREEN}✓${C.RESET}  ${msg}`; },
+    error(msg)   { return `${C.RED}✗${C.RESET}  ${msg}`; },
+    warn(msg)    { return `${C.YELLOW}⚠${C.RESET}  ${msg}`; },
+    info(msg)    { return `${C.BLUE}ℹ${C.RESET}  ${msg}`; },
+};
+
+// ─── History Manager (SDK-backed) ─────────────────────────────────────────────
+class HistoryManager {
+    constructor(sdk) {
+        this.sdk = sdk;
+        this.entries = [];
+        this.loaded  = false;
+    }
+
+    async load() {
+        if (this.loaded) return;
+        try {
+            const exists = await this.sdk.requestFileExists(HISTORY_PATH);
+            if (exists) {
+                const data = await this.sdk.requestFileReadJSON(HISTORY_PATH);
+                this.entries = Array.isArray(data.entries) ? data.entries : [];
+            }
+        } catch (_) {}
+        this.loaded = true;
+    }
+
+    async push(line) {
+        if (!line || line === this.entries[this.entries.length - 1]) return;
+        this.entries.push(line);
+        if (this.entries.length > MAX_HISTORY) this.entries = this.entries.slice(-MAX_HISTORY);
+        try {
+            await this.sdk.requestFileWriteJSON(HISTORY_PATH, {
+                version: 1,
+                updated: new Date().toISOString(),
+                entries: this.entries
+            });
+        } catch (_) {}
+    }
+
+    last(n = 20) { return this.entries.slice(-n); }
+    all()        { return [...this.entries]; }
+}
+
+// ─── Context Provider (SDK-backed git) ────────────────────────────────────────
+class ContextProvider {
+    constructor(sdk) {
+        this.sdk    = sdk;
+        this.branch = null;
+        this.extCount = 0;
+    }
+
+    async refresh() {
+        try {
+            this.branch = (await this.sdk.requestGitCurrentBranch()).trim();
+        } catch (_) { this.branch = null; }
+    }
+
+    setExtCount(n) { this.extCount = n; }
+
+    prompt() {
+        const parts = [];
+        if (this.branch) parts.push(`${C.DIM}[${C.GREEN}${this.branch}${C.RESET}${C.DIM}]${C.RESET}`);
+        const count = this.extCount > 0 ? `${C.DIM}(${this.extCount})${C.RESET}` : '';
+        return `${parts.join(' ')}${parts.length ? ' ' : ''}${C.GHOST}${C.BOLD}👻 ghost${C.RESET}${count}${C.GHOST}>${C.RESET} `;
+    }
+}
+
+// ─── Command Catalog ──────────────────────────────────────────────────────────
+const CATALOG = {
+    git: {
+        icon: '🌿', description: 'AI-powered Git workflow assistant',
+        extId: 'ghost-git-extension',
+        sub: {
+            commit:  { d: 'AI commit message + security audit', hint: '[--provider <groq|openai|anthropic>] [--skip-audit]' },
+            add:     { d: 'Stage files for commit',             hint: '[files...]' },
+            audit:   { d: 'Audit staged changes for issues',    hint: '' },
+            merge:   { d: 'Intelligent conflict resolution',    hint: '[status|--accept-ours|--accept-theirs]' },
+            history: { d: 'AI analysis of commit history',      hint: '' },
+            version: { d: 'Semantic version management',        hint: '' },
+        }
+    },
+    security: {
+        icon: '🔒', description: 'Security scanning & NIST compliance',
+        extId: 'ghost-security-extension',
+        sub: {
+            scan:       { d: 'Scan for secrets, API keys, vulnerabilities', hint: '[path]' },
+            audit:      { d: 'AI-validated deep security audit',            hint: '[--ai] [--provider <name>]' },
+            status:     { d: 'Current security posture summary',            hint: '' },
+            compliance: { d: 'NIST SP 800-53 compliance report',            hint: '' },
+        }
+    },
+    policy: {
+        icon: '📋', description: 'Governance and compatibility matrix',
+        extId: 'ghost-policy-extension',
+        sub: {
+            list:         { d: 'List active governance policies',      hint: '' },
+            set:          { d: 'Update a policy rule',                 hint: '<rule> <value>' },
+            verify:       { d: 'Verify environment compliance',        hint: '' },
+            compatStatus: { d: 'Extension compatibility matrix',       hint: '' },
+            compatExport: { d: 'Export matrix to docs/',               hint: '' },
+            compatCheck:  { d: 'CI compatibility enforcement check',   hint: '' },
+        }
+    },
+    process: {
+        icon: '⚙️ ', description: 'Background service supervisor',
+        extId: 'ghost-process-extension',
+        sub: {
+            list:    { d: 'List all managed services',    hint: '' },
+            status:  { d: 'Status of a specific service', hint: '<service>' },
+            start:   { d: 'Start a background service',   hint: '<service>' },
+            stop:    { d: 'Stop a running service',       hint: '<service>' },
+            restart: { d: 'Restart a service',            hint: '<service>' },
+        }
+    },
+    sys: {
+        icon: '🖥️ ', description: 'System diagnostics and maintenance',
+        extId: 'ghost-system-extension',
+        sub: {
+            status:   { d: 'System health overview',         hint: '' },
+            logs:     { d: 'View audit log entries',         hint: '[info|warn|error]' },
+            sanitize: { d: 'Clean up temp files',            hint: '' },
+            doctor:   { d: 'Full health check',              hint: '' },
+        }
+    },
+    docs: {
+        icon: '📚', description: 'AI documentation generation',
+        extId: 'ghost-docs-extension',
+        sub: {
+            initialize: { d: 'Bootstrap project documentation', hint: '' },
+            generate:   { d: 'AI-generate README and API docs', hint: '' },
+            diagram:    { d: 'Generate architecture diagrams',  hint: '' },
+            chat:       { d: 'Chat with your codebase',        hint: '' },
+        }
+    },
+    agent: {
+        icon: '🤖', description: 'Autonomous AI agent with cognitive loop',
+        extId: 'ghost-agent-extension',
+        sub: {
+            solve: { d: 'Solve a complex engineering goal', hint: '<goal description>' },
+            think: { d: 'Analyze current mission state',   hint: '' },
+            plan:  { d: 'Decompose goal into task plan',   hint: '' },
+        }
+    },
+    ai: {
+        icon: '🧠', description: 'AI provider management',
+        extId: 'ghost-ai-extension',
+        sub: {
+            status:  { d: 'Current provider and model',    hint: '' },
+            models:  { d: 'List all available models',     hint: '' },
+            switch:  { d: 'Switch AI provider',            hint: '<groq|anthropic|openai|gemini> [--model <name>]' },
+            usage:   { d: 'Token usage analytics',         hint: '' },
+        }
+    },
+    desktop: {
+        icon: '🖥️ ', description: 'Ghost telemetry monitoring console',
+        extId: 'ghost-desktop-extension',
+        sub: {
+            console: { d: 'Launch the telemetry web console', hint: '[--port <9876>] [--no-ui]' },
+        }
+    },
+};
+
+// ─── Flag & Argument Parser ───────────────────────────────────────────────────
+function parseArgs(tokens) {
+    const flags = {};
+    const args  = [];
+    let i = 0;
+    while (i < tokens.length) {
+        if (tokens[i].startsWith('--')) {
+            const key = tokens[i].slice(2);
+            if (i + 1 < tokens.length && !tokens[i + 1].startsWith('--')) {
+                flags[key] = tokens[i + 1];
+                i += 2;
+            } else {
+                flags[key] = true;
+                i++;
+            }
+        } else {
+            args.push(tokens[i]);
+            i++;
+        }
+    }
+    return { args, flags };
+}
+
+// ─── Command Palette (fuzzy dropdown) ────────────────────────────────────────
+class CommandPalette {
+    constructor() {
+        this.items      = [];
+        this.filtered   = [];
+        this.selected   = 0;
+        this.lines      = 0;
+        this._buildItems();
+    }
+
+    _buildItems() {
+        // Built-ins first
+        this.items = [
+            { slash: 'help',    desc: 'Show all commands',                  hint: '[filter]',  builtin: true },
+            { slash: 'status',  desc: 'Extension health grid',              hint: '',          builtin: true },
+            { slash: 'history', desc: 'Show command history',               hint: '[n]',       builtin: true },
+            { slash: 'clear',   desc: 'Clear terminal',                     hint: '',          builtin: true },
+            { slash: 'exit',    desc: 'Exit Ghost Shell',                   hint: '',          builtin: true },
+        ];
+        for (const [cmd, def] of Object.entries(CATALOG)) {
+            this.items.push({ slash: cmd, desc: def.description, icon: def.icon, catalog: def });
+            for (const [sub, sdef] of Object.entries(def.sub)) {
+                this.items.push({ slash: `${cmd} ${sub}`, desc: sdef.d, hint: sdef.hint, parent: cmd });
+            }
+        }
+    }
+
+    _fuzzy(query, str) {
+        if (!query) return true;
+        let qi = 0;
+        for (let i = 0; i < str.length && qi < query.length; i++) {
+            if (str[i].toLowerCase() === query[qi].toLowerCase()) qi++;
+        }
+        return qi === query.length;
+    }
+
+    update(input) {
+        // input is after the leading '/'
+        const parts  = input.split(' ');
+        const query  = parts[0].toLowerCase();
+        const hasArg = parts.length > 1;
+
+        if (hasArg) {
+            // Showing argument hints for a selected top-level command
+            const topCmd  = CATALOG[query];
+            if (topCmd) {
+                const subQuery = parts[1].toLowerCase();
+                this.filtered = Object.entries(topCmd.sub)
+                    .filter(([sub]) => sub.toLowerCase().includes(subQuery))
+                    .map(([sub, sdef]) => ({
+                        slash: `${query} ${sub}`,
+                        desc:  sdef.d,
+                        hint:  sdef.hint
+                    }));
+                if (this.selected >= this.filtered.length)
+                    this.selected = Math.max(0, this.filtered.length - 1);
+                this._render(input);
+                return;
+            }
+            this.clear();
+            return;
+        }
+
+        this.filtered = this.items.filter(item =>
+            !item.parent && this._fuzzy(query, item.slash)
+        );
+        if (this.selected >= this.filtered.length)
+            this.selected = Math.max(0, this.filtered.length - 1);
+        this._render(input);
+    }
+
+    _render(input) {
+        if (!process.stdout.isTTY) return;
+        const LIMIT = 7;
+        const start = Math.max(0, this.selected - Math.floor(LIMIT / 2));
+        const end   = Math.min(this.filtered.length, start + LIMIT);
+        let out     = '\n';
+
+        if (this.filtered.length === 0) {
+            out += `  ${C.DIM}No commands match — try natural language${C.RESET}\n`;
+            this.lines = 2;
+        } else {
+            for (let i = start; i < end; i++) {
+                const item = this.filtered[i];
+                const icon = item.icon ? `${item.icon} ` : '   ';
+                const hint = item.hint ? `${C.DIM} ${item.hint}${C.RESET}` : '';
+                if (i === this.selected) {
+                    out += `  ${C.GREEN}❯${C.RESET} ${C.BOLD}/${item.slash}${C.RESET}${hint}`;
+                    out += `\n    ${C.DIM}${icon}${item.desc}${C.RESET}\n`;
+                } else {
+                    out += `    ${C.DIM}/${item.slash}${C.RESET}${C.DIM} — ${item.desc}${C.RESET}\n`;
+                }
+            }
+            if (end < this.filtered.length) {
+                out += `    ${C.DIM}… ${this.filtered.length - end} more${C.RESET}\n`;
+            }
+            this.lines = (i => i)(end - start) * 2 + 2;
+        }
+
+        process.stdout.write(`\x1b7\x1b[J${out}\x1b8`);
+    }
+
+    clear() {
+        if (this.lines > 0 && process.stdout.isTTY) {
+            process.stdout.write('\x1b7\x1b[J\x1b8');
+            this.lines = 0;
+        }
+        this.selected = 0;
+    }
+
+    moveUp()   { this.selected = Math.max(0, this.selected - 1); }
+    moveDown() { this.selected = Math.min(Math.max(0, this.filtered.length - 1), this.selected + 1); }
+
+    complete() {
+        if (this.filtered.length === 0) return null;
+        return '/' + this.filtered[this.selected].slash + ' ';
+    }
+}
+
+// ─── Ghost Shell ──────────────────────────────────────────────────────────────
+class GhostShell {
+    constructor(sdk) {
+        this.sdk      = sdk;
+        this.history  = new HistoryManager(sdk);
+        this.context  = new ContextProvider(sdk);
+        this.palette  = new CommandPalette();
+        this.spinner  = new Spinner();
+        this.rl       = null;
+        this._registry = [];
     }
 
     async init() {
+        await this.history.load();
+        await this.context.refresh().catch(() => {});
         return { success: true };
     }
 
-    async getRegistry() {
-        if (this.cachedRegistry) return this.cachedRegistry;
+    // ── Registry ──
+    async _fetchRegistry() {
         try {
-            const registry = await this.sdk.emitIntent({
-                type: 'system',
-                operation: 'registry',
-                params: {}
-            });
-            this.cachedRegistry = registry || [];
-            return this.cachedRegistry;
-        } catch (e) {
-            return [];
-        }
+            this._registry = await this.sdk.emitIntent({ type: 'system', operation: 'registry', params: {} }) || [];
+            this.context.setExtCount(this._registry.length);
+        } catch (_) { this._registry = []; }
+        return this._registry;
     }
 
-    getAvailableCommands() {
-        const registry = this.cachedRegistry || [];
-        const cmds = [
-            { name: 'help', description: 'Afficher toutes les commandes disponibles', extId: 'ghost-cli-extension' },
-            { name: 'clear', description: 'Nettoyer le terminal', extId: 'ghost-cli-extension' }
-        ];
-        
-        registry.forEach(ext => {
-            if (ext.id === 'ghost-cli-extension' || ext.id === 'ghost-extflo-extension') return;
-            const shortName = ext.id.replace('ghost-', '').replace('-extension', '');
-            cmds.push({
-                name: shortName,
-                description: ext.description || `Exécuter via ${ext.id}`,
-                extId: ext.id
-            });
-        });
-        
-        return cmds.sort((a, b) => a.name.localeCompare(b.name));
+    // ── Startup banner ──
+    _printBanner() {
+        const w = process.stdout.columns || 80;
+        console.log(`\n${C.GHOST}${'═'.repeat(w)}${C.RESET}`);
+        console.log(`${C.GHOST}${C.BOLD}   👻  Ghost Sovereign CLI  ${C.DIM}v2.0.0 — Interactive Shell${C.RESET}`);
+        console.log(`${C.DIM}   Zero-Trust Gateway  •  IO-to-Boundary Enforced  •  AI-Powered${C.RESET}`);
+        console.log(`${C.GHOST}${'═'.repeat(w)}${C.RESET}`);
+        console.log(`\n${C.DIM}  Type ${C.RESET}${C.BOLD}/${C.RESET}${C.DIM} to open the command palette`);
+        console.log(`  Type ${C.RESET}${C.BOLD}/help${C.RESET}${C.DIM} for all commands  •  ${C.RESET}${C.BOLD}Ctrl+C${C.RESET}${C.DIM} to exit${C.RESET}\n`);
     }
 
-    renderMenu(input) {
-        if (!process.stdout.isTTY) return;
-        
-        const commands = this.getAvailableCommands();
-        
-        // Remove slash and split args
-        const parts = input.substring(1).split(' ');
-        const query = parts[0].toLowerCase();
-        
-        // If user is already typing arguments (there is a space), we don't show the command menu
-        if (parts.length > 1) {
-            this.clearMenu();
-            return;
-        }
-        
-        this.filteredCommands = commands.filter(c => c.name.toLowerCase().includes(query));
-        
-        if (this.selectedIndex >= this.filteredCommands.length) {
-            this.selectedIndex = Math.max(0, this.filteredCommands.length - 1);
-        }
-
-        let output = '\n';
-        
-        if (this.filteredCommands.length === 0) {
-            output += `  ${Colors.DIM}Aucune commande trouvée.${Colors.RESET}\n`;
-            this.menuLines = 2;
-        } else {
-            const displayLimit = 6;
-            const startIdx = Math.max(0, this.selectedIndex - Math.floor(displayLimit / 2));
-            const endIdx = Math.min(this.filteredCommands.length, startIdx + displayLimit);
-            
-            for (let i = startIdx; i < endIdx; i++) {
-                const cmd = this.filteredCommands[i];
-                if (i === this.selectedIndex) {
-                    output += `  ${Colors.SOFT_GREEN}❯ /${cmd.name.padEnd(15)} ${Colors.DIM}- ${cmd.description}${Colors.RESET}\n`;
-                } else {
-                    output += `    /${cmd.name.padEnd(15)} ${Colors.DIM}- ${cmd.description}${Colors.RESET}\n`;
-                }
-            }
-            
-            if (endIdx < this.filteredCommands.length) {
-                output += `    ${Colors.DIM}... et ${this.filteredCommands.length - endIdx} autres${Colors.RESET}\n`;
-                this.menuLines = (endIdx - startIdx) + 2;
-            } else {
-                this.menuLines = (endIdx - startIdx) + 1;
-            }
-        }
-
-        // \x1b7: Save cursor
-        // \x1b[J: Clear screen down
-        // \x1b8: Restore cursor
-        process.stdout.write(`\x1b7\x1b[J${output}\x1b8`);
-    }
-
-    clearMenu() {
-        if (this.menuLines > 0 && process.stdout.isTTY) {
-            process.stdout.write(`\x1b7\x1b[J\x1b8`);
-            this.menuLines = 0;
-        }
-    }
-
+    // ── Start interactive loop ──
     async start() {
-        // Pre-fetch registry for fast autocomplete
-        this.getRegistry().catch(() => {});
-
-        console.log(`\n${Colors.GHOST}${Colors.BOLD}👻 Ghost CLI Modern Shell v1.0.0${Colors.RESET}`);
-        console.log(`${Colors.DIM}Tapez ${Colors.RESET}/${Colors.DIM} pour ouvrir le menu interactif ou posez une question en langage naturel.${Colors.RESET}\n`);
+        this._printBanner();
+        this._fetchRegistry().catch(() => {});
 
         if (process.stdin.isTTY) {
             readline.emitKeypressEvents(process.stdin);
@@ -135,181 +462,327 @@ class GhostInteractiveShell {
         }
 
         this.rl = readline.createInterface({
-            input: process.stdin,
-            output: process.stdout,
-            prompt: `${Colors.GHOST}ghost> ${Colors.RESET}`,
-            completer: () => [[], this.rl.line] // Disable default completer
+            input:     process.stdin,
+            output:    process.stdout,
+            prompt:    this.context.prompt(),
+            completer: () => [[], this.rl ? this.rl.line : ''],
         });
 
-        // Intercept keys for the visual dropdown menu
-        process.stdin.prependListener('keypress', (str, key) => {
-            if (!key) return;
-
-            // Handle exit shortcuts
-            if (key.ctrl && (key.name === 'c' || key.name === 'd')) {
-                process.exit(0);
-            }
-
-            if (this.rl.line.startsWith('/')) {
-                const hasSpace = this.rl.line.includes(' ');
-                
-                if (!hasSpace) {
-                    if (key.name === 'up') {
-                        if (this.filteredCommands.length > 0) {
-                            this.selectedIndex = Math.max(0, this.selectedIndex - 1);
-                            this.renderMenu(this.rl.line);
-                        }
-                        key.name = 'null'; // Stop readline processing (history)
-                    } else if (key.name === 'down') {
-                        if (this.filteredCommands.length > 0) {
-                            this.selectedIndex = Math.min(this.filteredCommands.length - 1, this.selectedIndex + 1);
-                            this.renderMenu(this.rl.line);
-                        }
-                        key.name = 'null'; // Stop readline processing (history)
-                    } else if (key.name === 'tab' || key.name === 'right') {
-                        if (this.filteredCommands.length > 0) {
-                            const selectedCmd = this.filteredCommands[this.selectedIndex];
-                            // clear line using internal readline methods safely
-                            this.rl.write(null, {ctrl: true, name: 'u'}); 
-                            this.rl.write('/' + selectedCmd.name + ' ');
-                            this.clearMenu();
-                        }
-                        key.name = 'null'; // Prevent default tab
-                    }
-                }
-            }
-
-            if (key.name === 'return') {
-                this.clearMenu();
-            } else if (key.name !== 'null') {
-                // Let readline process the key, then update the menu
-                setImmediate(() => {
-                    if (this.rl.line.startsWith('/')) {
-                        if (key.name !== 'up' && key.name !== 'down') {
-                            this.selectedIndex = 0; // Reset index on type
-                        }
-                        this.renderMenu(this.rl.line);
-                    } else {
-                        this.clearMenu();
-                    }
-                });
-            }
-        });
-
+        this._installKeypressHandler();
         this.rl.prompt();
 
         this.rl.on('line', async (line) => {
             const input = line.trim();
-            this.clearMenu();
-            
-            if (!input) {
+            this.palette.clear();
+            await this.history.push(input);
+
+            if (!input) { this.rl.prompt(); return; }
+
+            if (input === '/clear' || input === '/c') {
+                process.stdout.write('\x1b[2J\x1b[H');
+                this._printBanner();
                 this.rl.prompt();
                 return;
             }
-
-            if (input === '/clear') {
-                console.clear();
-                this.rl.prompt();
+            if (input === '/exit' || input === '/quit') {
+                this.rl.close();
                 return;
             }
 
             if (input.startsWith('/')) {
-                await this.handleSlashCommand(input.substring(1));
+                await this._handleSlash(input.slice(1));
             } else {
-                await this.handleNaturalLanguage(input);
+                await this._handleNL(input);
             }
 
+            // Refresh prompt context after each command
+            await this.context.refresh().catch(() => {});
+            this.rl.setPrompt(this.context.prompt());
             this.rl.prompt();
         });
 
-        return new Promise((resolve) => {
+        return new Promise(resolve => {
             this.rl.on('close', () => {
-                this.clearMenu();
-                console.log(`\n${Colors.DIM}Fermeture du terminal Ghost. À bientôt !${Colors.RESET}`);
-                resolve({ success: true, output: "" });
-                setTimeout(() => process.exit(0), 100);
+                this.palette.clear();
+                console.log(`\n${C.DIM}Ghost Shell closed. Until next time! 👻${C.RESET}\n`);
+                resolve({ success: true, output: '' });
+                setTimeout(() => process.exit(0), 80);
             });
         });
     }
 
-    async handleSlashCommand(input) {
-        const [cmd, ...args] = input.split(' ');
-        
-        if (cmd === 'help' || cmd === '?') {
-            await this.showHelp();
+    _installKeypressHandler() {
+        process.stdin.prependListener('keypress', (str, key) => {
+            if (!key) return;
+            if (key.ctrl && (key.name === 'c' || key.name === 'd')) process.exit(0);
+            if (key.ctrl && key.name === 'l') {
+                process.stdout.write('\x1b[2J\x1b[H');
+                this._printBanner();
+                this.rl.prompt(true);
+                key.name = 'null';
+                return;
+            }
+
+            const line = this.rl ? this.rl.line : '';
+            if (!line.startsWith('/')) { this.palette.clear(); return; }
+
+            const hasSpace = line.includes(' ');
+            if (key.name === 'up') {
+                this.palette.moveUp();
+                this.palette.update(line.slice(1));
+                key.name = 'null';
+            } else if (key.name === 'down') {
+                this.palette.moveDown();
+                this.palette.update(line.slice(1));
+                key.name = 'null';
+            } else if ((key.name === 'tab' || key.name === 'right') && !hasSpace) {
+                const completion = this.palette.complete();
+                if (completion) {
+                    this.rl.write(null, { ctrl: true, name: 'u' });
+                    this.rl.write(completion);
+                    this.palette.clear();
+                }
+                key.name = 'null';
+            } else if (key.name === 'return') {
+                this.palette.clear();
+            } else if (key.name !== 'null') {
+                setImmediate(() => {
+                    const current = this.rl ? this.rl.line : '';
+                    if (current.startsWith('/')) {
+                        if (key.name !== 'up' && key.name !== 'down') this.palette.selected = 0;
+                        this.palette.update(current.slice(1));
+                    } else {
+                        this.palette.clear();
+                    }
+                });
+            }
+        });
+    }
+
+    // ── Slash command routing ──
+    async _handleSlash(raw) {
+        const tokens  = raw.trim().split(/\s+/);
+        const cmd     = tokens[0].toLowerCase();
+        const rest    = tokens.slice(1);
+        const { args, flags } = parseArgs(rest);
+        const subcmd  = args[0] || null;
+        const subArgs = args.slice(1);
+
+        // Built-ins
+        if (cmd === 'help' || cmd === '?') { await this._showHelp(subcmd); return; }
+        if (cmd === 'status')              { await this._showStatus(); return; }
+        if (cmd === 'history')             { this._showHistory(parseInt(subcmd) || 20); return; }
+
+        // Catalog-routed extension commands
+        const def = CATALOG[cmd];
+        if (def) {
+            const extId   = def.extId;
+            const method  = subcmd ? `${cmd}.${subcmd}` : `${cmd}.list`;
+            const params  = { subcommand: subcmd, args: subArgs, flags };
+
+            this.spinner.start(`${def.icon || ''}  ${cmd}${subcmd ? ' ' + subcmd : ''}…`);
+            try {
+                const result = await this.sdk.emitIntent({
+                    type: 'extension', operation: 'call',
+                    params: { extensionId: extId, method, params }
+                });
+                this.spinner.stop();
+                this._printResult(result);
+            } catch (e) {
+                this.spinner.stop();
+                console.log(Fmt.error(`${cmd}: ${e.message}`));
+            }
             return;
         }
 
-        const registry = await this.getRegistry();
-        const extension = registry.find(ext => {
-            const id = ext.id.toLowerCase();
-            const targetId = id.replace('ghost-', '').replace('-extension', '');
-            return targetId === cmd.toLowerCase() || id === cmd.toLowerCase();
+        // Fallback: try registry lookup by short name
+        await this._fetchRegistry();
+        const ext = this._registry.find(e => {
+            const short = e.id.replace('ghost-', '').replace('-extension', '');
+            return short === cmd || e.id === cmd;
         });
-        
-        if (extension) {
-            console.log(`${Colors.DIM}Exécution de ${Colors.SOFT_GREEN}${extension.id}${Colors.RESET}...\n`);
+
+        if (ext) {
+            const method = subcmd ? `${cmd}.${subcmd}` : cmd;
+            const params = { subcommand: subcmd, args: subArgs, flags };
+            this.spinner.start(`${cmd}…`);
             try {
                 const result = await this.sdk.emitIntent({
-                    type: 'extension',
-                    operation: 'call',
-                    params: {
-                        extensionId: extension.id,
-                        method: cmd,
-                        params: { subcommand: args[0], args: args.slice(1) }
-                    }
+                    type: 'extension', operation: 'call',
+                    params: { extensionId: ext.id, method, params }
                 });
-                
-                if (result && result.output) {
-                    console.log(result.output);
-                } else if (result) {
-                    console.log(JSON.stringify(result, null, 2));
-                }
+                this.spinner.stop();
+                this._printResult(result);
             } catch (e) {
-                console.error(`${Colors.BOLD}Erreur :${Colors.RESET} ${e.message}`);
+                this.spinner.stop();
+                console.log(Fmt.error(`${e.message}`));
             }
-        } else {
-            console.log(`${Colors.DIM}Commande inconnue : /${cmd}. Tapez /help pour la liste.${Colors.RESET}`);
+            return;
         }
+
+        console.log(Fmt.warn(`Unknown command: /${cmd}  — type /help to see all commands`));
     }
 
-    async handleNaturalLanguage(input) {
-        console.log(`${Colors.DIM}Analyse en cours...${Colors.RESET}`);
+    // ── Natural language routing ──
+    async _handleNL(input) {
+        // Smart local routing: try to match keywords to extension commands
+        const lower = input.toLowerCase();
+        const shortcuts = [
+            [['commit', 'push', 'git'], 'git', 'commit'],
+            [['scan', 'secret', 'vuln', 'leak'], 'security', 'scan'],
+            [['security', 'audit', 'owasp'], 'security', 'audit'],
+            [['doc', 'readme', 'generate doc'], 'docs', 'generate'],
+            [['policy', 'govern', 'compliance'], 'policy', 'list'],
+            [['service', 'process', 'start', 'stop'], 'process', 'list'],
+            [['system', 'health', 'doctor'], 'sys', 'doctor'],
+            [['ai ', 'model', 'provider'], 'ai', 'status'],
+        ];
+
+        for (const [keywords, cmd, sub] of shortcuts) {
+            if (keywords.some(kw => lower.includes(kw))) {
+                console.log(Fmt.info(`Routing to ${C.BOLD}/${cmd} ${sub}${C.RESET}${C.DIM} — or use /help for full control${C.RESET}`));
+                await this._handleSlash(`${cmd} ${sub}`);
+                return;
+            }
+        }
+
+        // Delegate to AI agent
+        this.spinner.start('Thinking…');
         try {
             const result = await this.sdk.emitIntent({
-                type: 'extension',
-                operation: 'call',
+                type: 'extension', operation: 'call',
                 params: {
                     extensionId: 'ghost-agent-extension',
-                    method: 'solve',
+                    method: 'agent.solve',
                     params: { prompt: input }
                 }
             });
-            console.log(result.output || JSON.stringify(result, null, 2));
-        } catch (e) {
-            console.log(`${Colors.DIM}L'agent IA n'est pas disponible pour le moment.${Colors.RESET}`);
+            this.spinner.stop();
+            this._printResult(result);
+        } catch (_) {
+            this.spinner.stop();
+            console.log(Fmt.warn('AI agent unavailable — type /help to browse commands'));
         }
     }
 
-    async showHelp() {
-        console.log(`\n${Colors.BOLD}Commandes Disponibles :${Colors.RESET}`);
-        const cmds = this.getAvailableCommands();
-        cmds.forEach(cmd => {
-            console.log(`  ${Colors.SOFT_BLUE}/${cmd.name.padEnd(15)}${Colors.RESET} ${Colors.DIM}${cmd.description}${Colors.RESET}`);
+    // ── Output renderer ──
+    _printResult(result) {
+        if (!result) return;
+        if (typeof result === 'string') { console.log(result); return; }
+        if (result.output) { console.log(result.output); return; }
+        if (result.result && typeof result.result === 'string') { console.log(result.result); return; }
+        if (result.error || result.success === false) {
+            console.log(Fmt.error(result.error?.message || result.output || 'Command failed'));
+            return;
+        }
+        if (Object.keys(result).length > 0) console.log(JSON.stringify(result, null, 2));
+    }
+
+    // ── Built-in: /help ──
+    async _showHelp(filter) {
+        const flt = filter ? filter.toLowerCase() : null;
+        let out = Fmt.banner('Ghost CLI Command Reference', 'Zero-Trust Orchestration Shell');
+        out += `${C.DIM}Slash syntax:  ${C.RESET}${C.BOLD}/<command> [subcommand] [args] [--flags]${C.RESET}\n`;
+        out += `${C.DIM}Natural lang:  ${C.RESET}Just type your goal in plain English\n`;
+        out += `${C.DIM}Keyboard:      ${C.RESET}${C.BOLD}↑↓${C.RESET} navigate  ${C.BOLD}Tab${C.RESET} complete  ${C.BOLD}Ctrl+L${C.RESET} clear  ${C.BOLD}Ctrl+C${C.RESET} exit\n\n`;
+
+        out += Fmt.section('Built-in Commands',
+            [
+                `  ${C.BOLD}/help${C.RESET} ${C.DIM}[filter]${C.RESET}       — This help screen`,
+                `  ${C.BOLD}/status${C.RESET}               — Extension health grid`,
+                `  ${C.BOLD}/history${C.RESET} ${C.DIM}[n]${C.RESET}         — Last n commands`,
+                `  ${C.BOLD}/clear${C.RESET}  ${C.DIM}(Ctrl+L)${C.RESET}     — Clear terminal`,
+                `  ${C.BOLD}/exit${C.RESET}                 — Exit shell`,
+            ].join('\n')
+        );
+
+        for (const [cmd, def] of Object.entries(CATALOG)) {
+            if (flt && !cmd.includes(flt) && !def.description.toLowerCase().includes(flt)) continue;
+            const rows = Object.entries(def.sub).map(([sub, s]) => [
+                `  ${C.BOLD}/${cmd} ${sub}${C.RESET}`,
+                s.hint ? `${C.DIM}${s.hint}${C.RESET}` : '',
+                `${C.DIM}${s.d}${C.RESET}`
+            ]);
+            out += Fmt.section(
+                `${def.icon || ''} ${cmd}  ${C.DIM}— ${def.description}${C.RESET}`,
+                Fmt.table(['Command', 'Arguments', 'Description'], rows)
+            );
+        }
+
+        console.log(out);
+    }
+
+    // ── Built-in: /status ──
+    async _showStatus() {
+        this.spinner.start('Checking extension health…');
+        const registry = await this._fetchRegistry();
+        this.spinner.stop();
+
+        if (registry.length === 0) {
+            console.log(Fmt.warn('No extensions registered — is the gateway running?'));
+            return;
+        }
+
+        const rows   = [];
+        const colors = [];
+        for (const ext of registry) {
+            const short = ext.id.replace('ghost-', '').replace('-extension', '');
+            const known = CATALOG[short];
+            const online = true; // In-registry means loaded and live
+            rows.push([
+                online ? `${C.GREEN}●${C.RESET}` : `${C.RED}●${C.RESET}`,
+                `${C.BOLD}${ext.id}${C.RESET}`,
+                ext.version || '?',
+                ext.description || (known ? known.description : ''),
+            ]);
+            colors.push(online ? C.RESET : C.DIM);
+        }
+
+        console.log('\n' + Fmt.box(
+            `Extension Health  (${registry.length} active)`,
+            [''],
+            C.GHOST
+        ));
+        console.log(Fmt.table(['', 'Extension', 'Version', 'Description'], rows, colors));
+        console.log('');
+    }
+
+    // ── Built-in: /history ──
+    _showHistory(n) {
+        const entries = this.history.last(n);
+        if (entries.length === 0) {
+            console.log(Fmt.info('No history yet.'));
+            return;
+        }
+        console.log(Fmt.section(`Last ${entries.length} Commands`, ''));
+        entries.forEach((e, i) => {
+            const idx = String(entries.length - i).padStart(3, ' ');
+            console.log(`  ${C.DIM}${idx}${C.RESET}  ${e}`);
         });
         console.log('');
     }
 }
 
-const shell = new GhostInteractiveShell();
-
+// ─── Extension Wrapper (gateway-compatible) ───────────────────────────────────
 class ExtensionWrapper {
-    constructor() { this.sdk = shell.sdk; }
-    async init(opts) { return await shell.init(opts); }
-    async start(opts) { return await shell.start(opts); }
-    async handleRPCRequest(req) {
-        if (req.method === 'invoke') return await shell.start(req.params);
-        return { error: 'Method not found' };
+    constructor() {
+        this.sdk   = new ExtensionSDK('ghost-cli-extension');
+        this.shell = new GhostShell(this.sdk);
+    }
+
+    async init(options = {}) {
+        if (options.coreHandler) this.sdk.setCoreHandler(options.coreHandler);
+        return await this.shell.init();
+    }
+
+    async start(params = {}) {
+        return await this.shell.start();
+    }
+
+    async handleRPCRequest(request) {
+        const { method, params = {} } = request;
+        if (method === 'invoke' || method === 'cli.start') return await this.shell.start();
+        return { error: { code: -32601, message: `Method not found: ${method}` } };
     }
 }
 
@@ -318,3 +791,6 @@ if (require.main === module) {
 }
 
 module.exports = ExtensionWrapper;
+
+// Expose internals for unit testing (not part of the public API)
+module.exports._internals = { HistoryManager, CommandPalette, parseArgs, CATALOG, HISTORY_PATH };
