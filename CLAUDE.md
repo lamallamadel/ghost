@@ -9,6 +9,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 npm install          # Install root dependencies
 npm test             # Run test.js smoke tests + all integration tests in test/
 npm start            # Run the CLI (node ghost.js)
+node test/<file>.test.js               # Run a single test
+node test/gateway/<file>.test.js       # Tests are also in subdirectories
+npm run test:all     # All smoke tests (help, default, safe-mode, pack-contents)
 ```
 
 ### Desktop App
@@ -20,11 +23,6 @@ npm run lint         # ESLint on all TS/TSX files
 npm run check        # TypeScript type-check only (no emit)
 npm test             # Vitest unit tests
 npm run test:e2e     # Playwright E2E tests
-```
-
-### Single test (root)
-```bash
-node test/<test-file>.test.js
 ```
 
 ## Known Test Failure (Pre-existing)
@@ -41,7 +39,11 @@ node test/<test-file>.test.js
 ### Pipeline (`core/pipeline/`)
 Every command flows through 4 stages, **fail-closed** (any failure denies execution):
 ```
-Raw message → INTERCEPT → AUTH → AUDIT → EXECUTE → Response
+CLI args → GatewayLauncher (ghost.js)
+         → Gateway (core/gateway.js) — extension registry & routing
+         → IOPipeline (core/pipeline/) — 4-stage security enforcement
+             INTERCEPT → AUTH → AUDIT → EXECUTE
+         → ExtensionProcess (core/runtime.js) — subprocess over JSON-RPC stdio
 ```
 - `intercept.js` — Parse/validate raw JSON-RPC → Intent
 - `auth.js` — Capability-based authorization + rate limiting
@@ -52,38 +54,59 @@ Raw message → INTERCEPT → AUTH → AUDIT → EXECUTE → Response
 - `gateway.js` — Extension registry: discovers, registers, and routes to extensions
 - `extension-loader.js` — Filesystem discovery + manifest validation (fail-closed); uses `DependencyResolver` to determine load order
 - `runtime.js` — `ExtensionProcess`: subprocess lifecycle over JSON-RPC with state machine (`STOPPED → STARTING → RUNNING → STOPPING`), heartbeat monitoring, exponential backoff restarts
+- `dependency-resolver.js` — Topological sort (Kahn's algorithm) + cycle detection (Tarjan's SCC) + semver version constraint validation for extension load ordering
 - `telemetry.js` — Metrics; wires OTLP/Prometheus exporters (`core/exporters/`)
 - `qos/` — Rate limiting suite: `token-bucket.js` (CIR/BC), `advanced-rate-limiter.js`, `enhanced-circuit-breaker.js`, `fair-queuing.js`, `global-rate-limiter.js`
-
-### Additional Core Systems
-- `dependency-resolver.js` — Topological sort (Kahn's algorithm) + cycle detection (Tarjan's SCC) + semver version constraint validation for extension load ordering
-- `hot-reload.js` + `dev-mode.js` — File watching with debounce, graceful shutdown, state preservation (`serialize`/`deserialize` hooks), request queuing, rollback on failure. CLI: `ghost dev enable|disable|status`, `ghost gateway reload <id>`
-- `marketplace.js` — Extension registry client (`GHOST_MARKETPLACE_URL` env var); caches responses in `~/.ghost/marketplace-cache/`; signature verification via public key
-- `marketplace-backend/` — Standalone Express server for hosting a private registry (separate `package.json`, not bundled in CLI)
-- `webhooks/` — Event delivery system with routing, transform pipeline, delivery queue, and event store
-- `sandbox.js` — Extension process isolation
-- `analytics/` — `AnalyticsPlatform` aggregating behavior analytics, cost attribution, performance regression detection, distributed tracing, and recommendation engine; WebSocket server on port 9877 for real-time streaming to desktop
-- `mesh/` — Multi-agent mesh network: `AgentMeshNetwork`, `AgentDiscoveryService`, `CRDTStateSync`, `WorkflowOrchestrator`, `DistributedTelemetryCollector`
-- `template-wizard.js` — Interactive gallery for scaffolding extensions from pre-built templates (`templates/` directory)
 - `validators/` — Input validators: `path-validator.js`, `command-validator.js`, `network-validator.js`, `entropy-validator.js`
-- Security: `security-hardening.js`, `security-policy-engine.js`, `intrusion-detection.js`, `code-signing.js`, `secrets-manager.js`
+- `hot-reload.js` + `dev-mode.js` — File watching with debounce, graceful shutdown, state preservation (`serialize`/`deserialize` hooks), request queuing, rollback on failure
+- `analytics/` — `AnalyticsPlatform` with WebSocket server on port 9877; desktop connects here for real-time metrics
+- `mesh/` — Multi-agent mesh network: `AgentMeshNetwork`, `AgentDiscoveryService`, `CRDTStateSync`, `WorkflowOrchestrator`
+- Security: `security-hardening.js`, `security-policy-engine.js`, `intrusion-detection.js`, `code-signing.js`, `secrets-manager.js`, `sandbox.js`
 
 ### Extensions
 Extensions are Node.js subprocesses communicating via JSON-RPC over stdio. Extension discovery order:
 1. `~/.ghost/extensions/` (user extensions, take precedence on ID collision)
 2. `extensions/` (bundled, e.g. `ghost-git-extension`)
 
-Each extension has a `manifest.json` validated against `core/manifest-schema.json` declaring capabilities (`filesystem`, `network`, `git`, `hooks`). Manifests may declare `dependencies` (resolved by `DependencyResolver` before loading).
+Each extension has a `manifest.json` validated against `core/manifest-schema.json`:
+```json
+{
+  "id": "my-extension",
+  "name": "My Extension",
+  "version": "1.0.0",
+  "main": "index.js",
+  "commands": ["cmd1", "cmd2"],
+  "capabilities": {
+    "filesystem": { "read": ["**/*"], "write": ["**/.git/**"] },
+    "network": { "allowlist": ["https://api.example.com"] },
+    "git": { "read": true, "write": true },
+    "hooks": ["pre-commit", "commit-msg"]
+  },
+  "permissions": ["filesystem:read", "network:https", "git:read"]
+}
+```
+`extensionDependencies` can declare version-constrained deps resolved at load time.
 
-New extensions: `ghost extension init <name>` | Validate: `ghost extension validate [path]`
+Scaffold: `ghost extension init <name>` | Validate: `ghost extension validate [path]` | Hot-reload: `ghost gateway reload <id>` | Dev mode: `ghost dev enable|disable|status`
 
 ### Extension SDK (`packages/extension-sdk/` → `@ghost/extension-sdk`)
-For third-party extension authors. Key classes: `ExtensionSDK` (high-level API), `IntentBuilder`, `RPCClient`. Full TypeScript definitions included. Documentation in `docs/`.
+For third-party extension authors. Key classes: `ExtensionSDK` (high-level API: `requestFileRead`, `requestNetworkCall`, `requestGitExec`), `IntentBuilder`, `RPCClient`. Full TypeScript definitions included. Documentation in `docs/`.
 
 ### Desktop App (`desktop/`)
 Electron monitoring console — **not published to NPM, dev tooling only**. React 18 SPA, Zustand state, React Router, Vite build. Connects to the analytics WebSocket (port 9877) for real-time metrics. References the local CLI via `"atlasia-ghost": "file:.."`.
 
 ## Code Style
-- **Root/Core:** CommonJS modules, minimal comments, ANSI color output
+- **Root/Core:** CommonJS modules (`require`/`module.exports`), ANSI escape codes for color output (no logging library), minimal comments
 - **Desktop:** ESLint flat config, strict TypeScript, functional React components with hooks
 - **SDK:** CommonJS with TypeScript `.d.ts` definitions alongside JS files
+
+## Testing Conventions
+- Root tests use Node's built-in `assert` module — no test framework
+- `test.js` is a custom runner that auto-discovers all `test/**/*.test.js` files (including subdirectories: `test/gateway/`, `test/extensions/`, `test/e2e/`)
+- Desktop uses Vitest (unit) and Playwright (E2E in `desktop/e2e/`)
+
+## Critical Pitfalls
+- **Manifest write patterns** must use `**/` prefix (e.g. `**/package.json`, `**/.git/**`) — relative patterns like `package.json` won't match absolute paths via `GlobMatcher.match()`
+- **Test credential patterns** must be scanner-safe fakes to avoid GitHub push protection blocks: use `rk_test_FAKEKEYFORTESTING...` (not `rk_live_`), `SKxxxxxxxx...` (not hex-looking SIDs)
+- **`git rev-parse` output** has trailing `\n` — always `.trim()` the result
+- **Pipeline is fail-closed** — all input must be sanitized by a validator in `core/validators/`; every security-relevant event must be logged via `AuditLogger`; when in doubt, deny and log

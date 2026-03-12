@@ -365,7 +365,7 @@ class AuditLayer {
 
             const entropyResult = this.entropyValidator.scanContentForIntent(paramsStr);
             
-            if (!entropyResult.valid && entropyResult.violations.length > 0) {
+            if (entropyResult.violations && entropyResult.violations.length > 0) {
                 result.violations.push(...entropyResult.violations);
                 result.valid = false;
             }
@@ -420,8 +420,8 @@ class AuditLayer {
                 return;
             }
             const contentValidation = this.entropyValidator.scanContentForIntent(contentStr);
-            
-            if (!contentValidation.valid) {
+
+            if (contentValidation.violations && contentValidation.violations.length > 0) {
                 for (const violation of contentValidation.violations) {
                     result.violations.push({
                         rule: 'SI-10-CONTENT-SECRETS',
