@@ -8,6 +8,8 @@
 
 const { ExtensionSDK, RPCClient } = require('@ghost/extension-sdk');
 const path = require('path');
+const fs = require('fs');
+const { minimatch } = require('minimatch');
 
 const Colors = {
     GREEN: '\x1b[32m',
@@ -184,8 +186,8 @@ class GitWrapper {
 
 class GitExtension {
     constructor(sdk) {
-        this.sdk = sdk;
-        this.git = new GitWrapper(sdk);
+        this.sdk = this._normalizeSdk(sdk);
+        this.git = new GitWrapper(this.sdk);
         this.DEFAULT_MODEL = "llama-3.3-70b-versatile";
         
         this.SECRET_REGEXES = [
@@ -210,6 +212,61 @@ class GitExtension {
             anthropic: { hostname: "api.anthropic.com", path: "/v1/messages" },
             gemini: { hostname: "generativelanguage.googleapis.com", path: "/v1beta/models/" }
         };
+    }
+
+    _normalizeSdk(sdk) {
+        if (sdk && typeof sdk.emitIntent === 'function') {
+            return sdk;
+        }
+
+        if (!sdk || typeof sdk.call !== 'function') {
+            return sdk;
+        }
+
+        return {
+            ...sdk,
+            emitIntent: async (intent) => sdk.call('intent', intent),
+            requestLog: async (params) => sdk.call('intent', {
+                type: 'log',
+                operation: 'write',
+                params
+            }),
+            requestFileRead: async (params) => sdk.call('intent', {
+                type: 'filesystem',
+                operation: 'read',
+                params
+            }),
+            requestFileExists: async (filePath) => sdk.call('intent', {
+                type: 'filesystem',
+                operation: 'exists',
+                params: { path: filePath }
+            }),
+            requestNetworkCall: async (params) => sdk.call('intent', {
+                type: 'network',
+                operation: 'request',
+                params
+            })
+        };
+    }
+
+    async _fileExists(filePath) {
+        if (this.sdk && typeof this.sdk.requestFileExists === 'function') {
+            try {
+                return await this.sdk.requestFileExists(filePath);
+            } catch (e) {
+            }
+        }
+        return fs.existsSync(filePath);
+    }
+
+    async _readFile(filePath, encoding = 'utf8') {
+        if (this.sdk && typeof this.sdk.requestFileRead === 'function') {
+            try {
+                return await this.sdk.requestFileRead({ path: filePath, encoding });
+            } catch (e) {
+            }
+        }
+        return fs.readFileSync(filePath, encoding);
     }
 
     semverParse(input) {
@@ -336,18 +393,32 @@ class GitExtension {
         }
     }
 
+    async checkGitRepo() {
+        return await this.git.isRepo();
+    }
+
+    _getUserCwd() {
+        return process.env.GHOST_USER_CWD || process.cwd();
+    }
+
     async _scanFilesForSecrets(files) {
         const findings = [];
+        let repoRoot;
+        try {
+            repoRoot = await this.git.getRepoRoot();
+        } catch (e) {
+            repoRoot = this._getUserCwd();
+        }
         for (const file of files) {
             try {
-                // Use intent to read file content safely through core
-                const result = await this.sdk.emitIntent({
-                    type: 'filesystem',
-                    operation: 'read',
-                    params: { path: file }
-                });
-                const content = result.content || result;
-                const secrets = this.scanForSecrets(content);
+                // Resolve file path to absolute (git ls-files yields repo-relative paths)
+                let readPath = file;
+                if (!path.isAbsolute(readPath)) {
+                    readPath = path.join(repoRoot, readPath);
+                }
+
+                const content = fs.readFileSync(readPath, 'utf8');
+                const secrets = this.scanForSecrets(content || '');
                 if (secrets.length > 0) {
                     for (const s of secrets) {
                         findings.push({ file, type: s.type, severity: s.severity });
@@ -443,58 +514,168 @@ class GitExtension {
         return commitMsg.trim().replace(/^['"`]|['"`]$/g, '');
     }
 
+    readPackageJsonVersionFromText(content) {
+        if (!content || typeof content !== 'string') return null;
+        try {
+            const parsed = JSON.parse(content);
+            return this.semverParse(parsed.version);
+        } catch (e) {
+            return null;
+        }
+    }
+
+    setPackageJsonVersionText(content, version) {
+        const parsed = JSON.parse(content);
+        parsed.version = version;
+        return JSON.stringify(parsed, null, 2);
+    }
+
+    async handleVersionBump(bumpType, flags = {}) {
+        const packageJsonPath = path.join(this._getUserCwd(), 'package.json');
+        const packageJson = await this._readFile(packageJsonPath, 'utf8');
+        const current = this.readPackageJsonVersionFromText(packageJson);
+        if (!current) {
+            throw new Error('Unable to parse version from package.json');
+        }
+
+        const next = this.semverBump(current, bumpType || 'patch');
+        const nextVersion = this.semverString(next);
+
+        if (flags.dryRun) {
+            return { dryRun: true, current: this.semverString(current), next: nextVersion };
+        }
+
+        const updated = this.setPackageJsonVersionText(packageJson, nextVersion);
+        fs.writeFileSync(packageJsonPath, updated);
+        return { dryRun: false, current: this.semverString(current), next: nextVersion };
+    }
+
+    async handleVersionCheck() {
+        const packageJsonPath = path.join(this._getUserCwd(), 'package.json');
+        const packageJson = await this._readFile(packageJsonPath, 'utf8');
+        const version = this.readPackageJsonVersionFromText(packageJson);
+        if (!version) {
+            throw new Error('Unable to parse version from package.json');
+        }
+        return { version: this.semverString(version) };
+    }
+
     async loadGhostIgnore() {
+        const parseIgnore = (content) => {
+            if (!content || typeof content !== 'string') return [];
+            return content.split(/\r?\n/)
+                .map(line => line.trim())
+                .filter(line => line && !line.startsWith('#'))
+                .map(p => p.replace(/\\/g, '/'));
+        };
+
+        // Try .ghostignore in user's working directory first
+        try {
+            const cwdPath = path.join(this._getUserCwd(), '.ghostignore');
+            if (await this._fileExists(cwdPath)) {
+                return parseIgnore(await this._readFile(cwdPath, 'utf8'));
+            }
+        } catch (e) {
+            // Fallback to git root
+        }
+
         try {
             const root = await this.git.getRepoRoot();
-            const result = await this.sdk.emitIntent({
-                type: 'filesystem',
-                operation: 'read',
-                params: { path: path.join(root, '.ghostignore') }
-            });
-            const content = result.content !== undefined ? result.content : result;
-            if (!content || typeof content !== 'string') return [];
-            
-            return content.split('\n')
-                .map(line => line.trim())
-                .filter(line => line && !line.startsWith('#'));
+            const rootPath = path.join(root, '.ghostignore');
+            if (await this._fileExists(rootPath)) {
+                return parseIgnore(await this._readFile(rootPath, 'utf8'));
+            }
         } catch (e) {
-            return [];
+            // No .ghostignore found
+        }
+
+        return [];
+    }
+
+    _matchesIgnorePattern(filePath, pattern) {
+        const normalized = filePath.replace(/\\/g, '/');
+        const pat = pattern.replace(/\\/g, '/');
+        const matchOptions = { nocase: true, dot: true };
+
+        try {
+            if (pat.endsWith('/')) {
+                const dirPat = pat.slice(0, -1);
+                return normalized === dirPat || normalized.startsWith(dirPat + '/');
+            }
+
+            if (minimatch(normalized, pat, matchOptions)) return true;
+
+            const base = path.basename(normalized);
+            if (minimatch(base, pat, matchOptions)) return true;
+
+            return minimatch(normalized, `**/${pat}`, matchOptions);
+        } catch (e) {
+            const base = path.basename(normalized);
+            return normalized === pat || base === pat || normalized.endsWith('/' + pat);
         }
     }
 
     async performFullAudit() {
         const ignorePatterns = await this.loadGhostIgnore();
-        
+
         let allFiles = [];
         try {
             const tracked = await this.git.exec(['ls-files'], true);
             const untracked = await this.git.exec(['ls-files', '--others', '--exclude-standard'], true);
-            
+
             const trackedList = (tracked || '').split('\n').map(f => f.trim()).filter(Boolean);
             const untrackedList = (untracked || '').split('\n').map(f => f.trim()).filter(Boolean);
-            
+
             allFiles = [...new Set([...trackedList, ...untrackedList])];
         } catch (e) {
-            return { success: false, output: `Git error: ${e.message}`, blocked: true };
+            // If git fails, fall through to filesystem scan fallback
+            allFiles = [];
         }
 
+        // If git didn't return anything (or failed), walk the filesystem
+        if (!allFiles || allFiles.length === 0) {
+            try {
+                const walk = (dir, base = '') => {
+                    const results = [];
+                    const items = fs.readdirSync(dir, { withFileTypes: true });
+                    for (const it of items) {
+                        if (it.name === '.git' || it.name === 'node_modules') continue;
+                        const full = path.join(dir, it.name);
+                        const rel = base ? `${base}/${it.name}` : it.name;
+                        if (it.isDirectory()) {
+                            results.push(...walk(full, rel));
+                        } else if (it.isFile()) {
+                            results.push(rel.replace(/\\/g, '/'));
+                        }
+                    }
+                    return results;
+                };
+                allFiles = walk(this._getUserCwd());
+            } catch (e) {
+                allFiles = [];
+            }
+        }
+
+        // Always exclude node_modules and .git regardless of .ghostignore
+        const autoExclude = ['node_modules', '.git'];
         const filteredFiles = allFiles.filter(file => {
-            return !ignorePatterns.some(pattern => {
-                if (pattern.endsWith('/')) {
-                    return file.startsWith(pattern) || file === pattern.slice(0, -1);
-                }
-                if (pattern.includes('*')) {
-                    const regex = new RegExp('^' + pattern.replace(/\./g, '\\.').replace(/\*/g, '.*') + '$');
-                    return regex.test(file);
-                }
-                return file === pattern;
-            });
+            const normalized = file.replace(/\\/g, '/');
+            if (autoExclude.some(d => normalized === d || normalized.startsWith(d + '/'))) return false;
+            for (const pattern of ignorePatterns) {
+                if (this._matchesIgnorePattern(normalized, pattern)) return false;
+            }
+            return true;
         });
 
         const findings = await this._scanFilesForSecrets(filteredFiles);
-        
+
         if (findings.length === 0) {
-            return { success: true, blocked: false, output: `\x1b[32m✓ Aucun secret détecté dans ${filteredFiles.length} fichiers (No secrets).\x1b[0m` };
+            return {
+                success: true,
+                blocked: false,
+                issues: 0,
+                output: `\x1b[32m✓ Aucun secret détecté dans ${filteredFiles.length} fichiers (No secrets).\x1b[0m`
+            };
         }
 
         let output = `\x1b[31m✗ Problème de sécurité: ${findings.length} secrets détectés dans ${filteredFiles.length} fichiers scannés:\x1b[0m\n`;
@@ -502,7 +683,7 @@ class GitExtension {
             output += `  [${f.severity.toUpperCase()}] ${f.type} in ${f.file}\n`;
         });
 
-        return { success: false, blocked: true, output, findings };
+        return { success: false, blocked: true, issues: findings.length, output, findings };
     }
 
     async auditSecurity(diffMap, provider, apiKey, model) {
@@ -542,6 +723,9 @@ class GitExtension {
                 case 'git.getStagedDiff': result = await this.getStagedDiff(); break;
                 case 'git.generateCommit': result = await this.generateCommit(params.diffText, params.customPrompt, params.provider, params.apiKey, params.model); break;
                 case 'git.auditSecurity': result = await this.auditSecurity(params.diffMap, params.provider, params.apiKey, params.model); break;
+                case 'git.performFullAudit': result = await this.performFullAudit(params.flags); break;
+                case 'git.version.bump': result = await this.handleVersionBump(params.bumpType, params.flags); break;
+                case 'git.version.check': result = await this.handleVersionCheck(); break;
                 case 'git.merge.getConflicts': result = await this.git.getConflicts(); break;
                 case 'git.merge.resolve': result = await this.handleMergeResolve(params.strategy); break;
                 default: throw new Error(`Unknown method: ${method}`);
@@ -587,7 +771,7 @@ function createExtension(coreHandler) {
     }
 
     const extension = new GitExtension(sdk);
-    return { handleRequest: (req) => extension.handleRPCRequest(req), extension };
+    return { handleRequest: (req) => extension.handleRPCRequest(req), extension, rpcClient: sdk.rpcClient };
 }
 
 module.exports = { createExtension, GitExtension, GitWrapper, ExtensionRPCClient };

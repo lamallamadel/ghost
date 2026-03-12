@@ -61,7 +61,7 @@ class ExtensionProcess extends EventEmitter {
         
         this.validStateTransitions = {
             'STOPPED': ['STARTING'],
-            'STARTING': ['RUNNING', 'FAILED', 'STOPPED'],
+            'STARTING': ['RUNNING', 'FAILED', 'STOPPED', 'STOPPING'],
             'RUNNING': ['STOPPING', 'STOPPED', 'FAILED', 'DEGRADED'],
             'DEGRADED': ['RUNNING', 'STOPPING', 'FAILED'],
             'STOPPING': ['STOPPED', 'FAILED', 'STARTING'],
@@ -164,12 +164,19 @@ class ExtensionProcess extends EventEmitter {
                 this._startResourceMonitoring();
             }
 
+            if (this.state !== 'STARTING') {
+                return;
+            }
+
             this._transitionState('RUNNING', 'startup_success', {
                 startupDuration: Date.now() - this.lastHeartbeat
             });
             if (this.options.verbose || process.env.GHOST_DEBUG) console.log(`[DEBUG]   <-- END ExtensionProcess.start(${this.extensionId}) - SUCCESS`);
         } catch (error) {
             if (this.options.verbose || process.env.GHOST_DEBUG) console.log(`[DEBUG]   <-- END ExtensionProcess.start(${this.extensionId}) - ERROR: ${error.message}`);
+            if (this.state === 'STOPPING' || this.state === 'STOPPED') {
+                return;
+            }
             this._transitionState('FAILED', 'startup_failed', {
                 error: error.message
             });
@@ -192,6 +199,11 @@ class ExtensionProcess extends EventEmitter {
         
         for (const [requestId, request] of this.pendingRequests) {
             clearTimeout(request.timeoutId);
+            if (['init', 'shutdown', 'cleanup'].includes(request.method)) {
+                request.resolve({ success: true, stopped: true });
+                continue;
+            }
+
             const error = new Error('Extension process stopped');
             error.code = -32603;
             error.data = { reason: 'Extension shutdown' };
@@ -439,7 +451,7 @@ class ExtensionProcess extends EventEmitter {
                 this.process = spawn('node', [mainFile], {
                     stdio,
                     cwd: this.extensionPath,
-                    env: { ...process.env, GHOST_EXTENSION_ID: this.extensionId, GHOST_EXTENSION_MODE: 'subprocess' }
+                    env: { ...process.env, GHOST_EXTENSION_ID: this.extensionId, GHOST_EXTENSION_MODE: 'subprocess', GHOST_USER_CWD: process.cwd() }
                 });
 
                 this.process.on('message', (message) => this._handleMessage(message));
@@ -496,6 +508,15 @@ class ExtensionProcess extends EventEmitter {
         try {
             message = typeof line === 'string' ? JSON.parse(line) : line;
         } catch (error) {
+            this._emitProtocolError('Parse error: invalid JSON from extension', {
+                raw: line
+            });
+            return;
+        }
+
+        const validationError = this._validateJsonRpcMessage(message);
+        if (validationError) {
+            this._emitProtocolError(validationError, { message });
             return;
         }
 
@@ -506,6 +527,51 @@ class ExtensionProcess extends EventEmitter {
         } else if (this._isNotification(message)) {
             this._handleNotification(message);
         }
+    }
+
+    _validateJsonRpcMessage(message) {
+        if (!message || typeof message !== 'object' || Array.isArray(message)) {
+            return 'Invalid Request: JSON-RPC payload must be an object';
+        }
+
+        if (message.jsonrpc !== '2.0') {
+            return 'Invalid Request: jsonrpc must be "2.0"';
+        }
+
+        if ('method' in message) {
+            if (typeof message.method !== 'string' || message.method.length === 0) {
+                return 'Invalid Request: method must be a non-empty string';
+            }
+            return null;
+        }
+
+        const hasResult = Object.prototype.hasOwnProperty.call(message, 'result');
+        const hasError = Object.prototype.hasOwnProperty.call(message, 'error');
+        const hasId = Object.prototype.hasOwnProperty.call(message, 'id');
+
+        if (!hasId || (!hasResult && !hasError)) {
+            return 'Invalid Request: response messages require id and either result or error';
+        }
+
+        if (hasResult && hasError) {
+            return 'Response validation error: response cannot contain both result and error';
+        }
+
+        if (hasError) {
+            if (!message.error || typeof message.error !== 'object' || Array.isArray(message.error)) {
+                return 'Response validation error: error must be an object';
+            }
+
+            if (typeof message.error.code !== 'number') {
+                return 'Response validation error: error.code must be a number';
+            }
+
+            if (typeof message.error.message !== 'string') {
+                return 'Response validation error: error.message must be a string';
+            }
+        }
+
+        return null;
     }
 
     _isResponse(message) {
@@ -521,15 +587,47 @@ class ExtensionProcess extends EventEmitter {
     }
 
     _handleResponse(message) {
-        if (!this.pendingRequests.has(message.id)) return;
+        if (!this.pendingRequests.has(message.id)) {
+            this._emitProtocolError('Response validation error: unknown request id', {
+                message
+            });
+            return;
+        }
         const request = this.pendingRequests.get(message.id);
         clearTimeout(request.timeoutId);
         this.pendingRequests.delete(message.id);
         if (message.error) {
+            if (request.method === 'heartbeat') {
+                this.heartbeatMetrics.totalFailures++;
+                this._updateHeartbeatSuccessRate();
+            }
             const error = new Error(message.error.message || 'Unknown error');
             error.code = message.error.code;
+            if (message.error.data !== undefined) {
+                error.data = message.error.data;
+            }
             request.reject(error);
         } else {
+            if (request.method === 'heartbeat') {
+                const responseTime = Date.now() - request.timestamp;
+                this.lastHeartbeat = Date.now();
+                this.consecutiveHeartbeatFailures = 0;
+                this.heartbeatMetrics.totalPongs++;
+                this.heartbeatMetrics.lastResponseTime = responseTime;
+                this.heartbeatMetrics.minResponseTime = this.heartbeatMetrics.minResponseTime === null
+                    ? responseTime
+                    : Math.min(this.heartbeatMetrics.minResponseTime, responseTime);
+                this.heartbeatMetrics.maxResponseTime = this.heartbeatMetrics.maxResponseTime === null
+                    ? responseTime
+                    : Math.max(this.heartbeatMetrics.maxResponseTime, responseTime);
+                this.heartbeatMetrics.responseTimes.push(responseTime);
+                if (this.heartbeatMetrics.responseTimes.length > 100) {
+                    this.heartbeatMetrics.responseTimes.shift();
+                }
+                const totalResponseTime = this.heartbeatMetrics.responseTimes.reduce((sum, value) => sum + value, 0);
+                this.heartbeatMetrics.avgResponseTime = totalResponseTime / this.heartbeatMetrics.responseTimes.length;
+                this._updateHeartbeatSuccessRate();
+            }
             request.resolve(message.result);
         }
     }
@@ -548,7 +646,9 @@ class ExtensionProcess extends EventEmitter {
     }
 
     _handleNotification(message) {
-        this.emit('notification', { extensionId: this.extensionId, method: message.method, params: message.params });
+        const info = { extensionId: this.extensionId, method: message.method, params: message.params };
+        this.emit('notification', info);
+        this.emit('extension-notification', info);
     }
 
     _sendRequest(method, params = {}, timeout = null) {
@@ -562,40 +662,51 @@ class ExtensionProcess extends EventEmitter {
                 timeoutId = setTimeout(() => {
                     if (this.pendingRequests.has(requestId)) {
                         this.pendingRequests.delete(requestId);
-                        reject(new Error(`Request timeout for ${method}`));
+                        const error = new Error(`Request timeout for ${method}`);
+                        error.code = -32603;
+                        error.data = { reason: 'timeout', method };
+                        reject(error);
                     }
                 }, requestTimeout);
             }
 
             this.pendingRequests.set(requestId, { method, resolve, reject, timeoutId, timestamp: Date.now() });
             const envelope = { jsonrpc: '2.0', id: requestId, method, params };
-            
-            if (this.process.send) {
-                this.process.send(envelope);
-            } else {
-                this.process.stdin.write(JSON.stringify(envelope) + '\n');
-            }
+
+            this._writeEnvelope(envelope);
         });
     }
 
     _sendResponse(id, result) {
         if (!this.process || this.process.killed || id == null) return;
         const envelope = { jsonrpc: '2.0', id, result };
-        if (this.process.send) {
-            this.process.send(envelope);
-        } else {
-            this.process.stdin.write(JSON.stringify(envelope) + '\n');
-        }
+        this._writeEnvelope(envelope);
     }
 
     _sendErrorResponse(id, code, message) {
         if (!this.process || this.process.killed) return;
         const envelope = { jsonrpc: '2.0', id: id !== undefined ? id : null, error: { code, message } };
+        this._writeEnvelope(envelope);
+    }
+
+    _writeEnvelope(envelope) {
+        if (!this.process || this.process.killed) return;
+
         if (this.process.send) {
             this.process.send(envelope);
-        } else {
+        }
+
+        if (this.process.stdin && !this.process.stdin.destroyed && this.process.stdin.writable) {
             this.process.stdin.write(JSON.stringify(envelope) + '\n');
         }
+    }
+
+    _emitProtocolError(error, metadata = {}) {
+        this.emit('error', {
+            extensionId: this.extensionId,
+            error,
+            ...metadata
+        });
     }
 
     _startHeartbeatMonitoring() {
@@ -604,10 +715,25 @@ class ExtensionProcess extends EventEmitter {
 
     _sendPing() {
         if (this.state !== 'RUNNING') return;
+        this.lastPingTime = Date.now();
+        this.heartbeatMetrics.totalPings++;
+        this._updateHeartbeatSuccessRate();
         this._sendRequest('heartbeat', {}, this.heartbeatPongTimeout).catch(() => {
             this.consecutiveHeartbeatFailures++;
+            this.heartbeatMetrics.totalFailures++;
+            this.heartbeatMetrics.totalTimeouts++;
+            this._updateHeartbeatSuccessRate();
             if (this.consecutiveHeartbeatFailures >= this.consecutiveFailureLimit) this.restart('heartbeat_failure');
         });
+    }
+
+    _updateHeartbeatSuccessRate() {
+        if (this.heartbeatMetrics.totalPings === 0) {
+            this.heartbeatMetrics.successRate = null;
+            return;
+        }
+
+        this.heartbeatMetrics.successRate = this.heartbeatMetrics.totalPongs / this.heartbeatMetrics.totalPings;
     }
 
     _stopHeartbeatMonitoring() {
@@ -703,12 +829,36 @@ class ExtensionRuntime extends EventEmitter {
         const extension = new ExtensionProcess(extensionId, extensionPath, manifest, { ...this.options, ...processOptions });
 
         // Forward critical events from the individual process to the runtime manager
+        extension.on('state-change', (info) => {
+            this.emit('extension-state-change', info);
+        });
+
         extension.on('interactive-exit', (info) => {
             this.emit('interactive-exit', info);
         });
 
         extension.on('error', (info) => {
-            this.emit('error', info);
+            this.emit('extension-error', info);
+            if (this.listenerCount('error') > 0) {
+                this.emit('error', info);
+            }
+        });
+
+        extension.on('notification', (info) => {
+            this.emit('extension-notification', info);
+            this.emit('notification', info);
+        });
+
+        extension.on('exit', (info) => {
+            if (info.code !== 0 || info.signal) {
+                this.emit('extension-crashed', {
+                    extensionId,
+                    code: info.code,
+                    signal: info.signal,
+                    pendingRequestCount: extension.pendingRequests.size,
+                    crashType: info.signal ? 'signal' : 'exit'
+                });
+            }
         });
 
         this.extensions.set(extensionId, extension);
@@ -724,6 +874,14 @@ class ExtensionRuntime extends EventEmitter {
         if (ext) await ext.stop();
     }
 
+    async callExtension(extensionId, method, params = {}, timeout = null) {
+        const ext = this.extensions.get(extensionId);
+        if (!ext) {
+            throw new Error(`Extension ${extensionId} is not running`);
+        }
+        return await ext.call(method, params, timeout);
+    }
+
     _createExtensionInterface(extension) {
         return new Proxy(extension, {
             get: (target, prop) => {
@@ -737,6 +895,7 @@ class ExtensionRuntime extends EventEmitter {
     getHealthStatus() {
         const stats = {
             total: this.extensions.size,
+            totalExtensions: this.extensions.size,
             running: 0,
             degraded: 0,
             failed: 0,
@@ -762,8 +921,24 @@ class ExtensionRuntime extends EventEmitter {
         return stats;
     }
 
+    getExtensionState(extensionId) {
+        const ext = this.extensions.get(extensionId);
+        return ext ? ext.getState() : null;
+    }
+
+    getAllExtensionStates() {
+        const states = {};
+        for (const [id, ext] of this.extensions) {
+            states[id] = ext.getState();
+        }
+        return states;
+    }
+
     async shutdown() {
         for (const ext of this.extensions.values()) await ext.stop();
+        this.extensions.clear();
+        this.extensionPaths.clear();
+        this.extensionManifests.clear();
     }
 }
 

@@ -14,8 +14,14 @@ console.log('🧪 Testing Gateway Pipeline Integration (Zero Trust Properties)..
 
 // Test 1: Full pipeline with valid filesystem read intent
 console.log('▶ Test 1: Valid filesystem read through full pipeline');
+const auditLogPath = path.join(os.tmpdir(), `ghost-test-audit-${process.pid}.log`);
+try {
+    fs.rmSync(auditLogPath, { force: true });
+} catch (error) {
+    // Ignore cleanup failures for test isolation.
+}
 const pipeline = new IOPipeline({
-    auditLogPath: path.join(os.tmpdir(), 'ghost-test-audit.log')
+    auditLogPath
 });
 
 const manifest = {
@@ -82,17 +88,21 @@ fs.writeFileSync(testFile, 'test content', 'utf8');
         // Test 3: Unauthorized filesystem write
         console.log('▶ Test 3: Unauthorized filesystem write (no permission)');
         const unauthorizedWriteIntent = {
-            type: 'filesystem',
-            operation: 'write',
-            params: { path: path.join(testDir, 'test-write.txt'), content: 'data' },
-            extensionId: 'test-extension-1',
-            requestId: 'req-002'
+            jsonrpc: '2.0',
+            id: 'msg-002',
+            method: 'filesystem.write',
+            params: {
+                type: 'filesystem',
+                operation: 'write',
+                params: { path: path.join(testDir, 'test-write.txt'), content: 'data' },
+                extensionId: 'test-extension-1',
+                requestId: 'req-002'
+            }
         };
 
         const unauthorizedResult = await pipeline.process(unauthorizedWriteIntent);
         assert.strictEqual(unauthorizedResult.success, false, 'Unauthorized write should fail');
-        // It may fail at INTERCEPT or AUTHORIZATION depending on validation order
-        assert.ok(['INTERCEPT', 'AUTHORIZATION'].includes(unauthorizedResult.stage), `Should fail at INTERCEPT or AUTHORIZATION stage, got: ${unauthorizedResult.stage}`);
+        assert.strictEqual(unauthorizedResult.stage, 'AUTHORIZATION', `Should fail at AUTHORIZATION stage, got: ${unauthorizedResult.stage}`);
         assert.ok(unauthorizedResult.code, 'Should have error code');
         console.log('✅ Unauthorized write blocked (fail-closed)\n');
 
@@ -110,20 +120,24 @@ fs.writeFileSync(testFile, 'test content', 'utf8');
         pipeline.registerExtension('test-extension-2', manifest2);
 
         const traversalIntent = {
-            type: 'filesystem',
-            operation: 'read',
-            params: { path: '../../../etc/passwd' },
-            extensionId: 'test-extension-2',
-            requestId: 'req-003'
+            jsonrpc: '2.0',
+            id: 'msg-003',
+            method: 'filesystem.read',
+            params: {
+                type: 'filesystem',
+                operation: 'read',
+                params: { path: '../../../etc/passwd' },
+                extensionId: 'test-extension-2',
+                requestId: 'req-003'
+            }
         };
 
         const traversalResult = await pipeline.process(traversalIntent);
         assert.strictEqual(traversalResult.success, false, 'Path traversal should fail');
-        // PathValidator detects traversal early, may fail at INTERCEPT or AUDIT
-        assert.ok(['INTERCEPT', 'AUDIT'].includes(traversalResult.stage), `Should fail at INTERCEPT or AUDIT stage, got: ${traversalResult.stage}`);
+        assert.strictEqual(traversalResult.stage, 'AUDIT', `Should fail at AUDIT stage, got: ${traversalResult.stage}`);
         assert.ok(traversalResult.violations || traversalResult.error, 'Should have violations or error');
         if (traversalResult.violations) {
-            assert.ok(traversalResult.violations.some(v => v.rule.includes('PATH-TRAVERSAL') || v.rule.includes('PATH')), 
+            assert.ok(traversalResult.violations.some(v => v.rule.includes('PATH-TRAVERSAL') || v.rule.includes('PATH')),
                 'Should detect path traversal');
         }
         console.log('✅ Path traversal blocked (fail-closed)\n');
@@ -146,14 +160,19 @@ fs.writeFileSync(testFile, 'test content', 'utf8');
         pipeline.registerExtension('test-extension-3', manifest3);
 
         const networkIntent = {
-            type: 'network',
-            operation: 'https',
-            params: { 
-                url: 'https://api.example.com/data',
-                method: 'GET'
-            },
-            extensionId: 'test-extension-3',
-            requestId: 'req-004'
+            jsonrpc: '2.0',
+            id: 'msg-004',
+            method: 'network.https',
+            params: {
+                type: 'network',
+                operation: 'https',
+                params: {
+                    url: 'https://api.example.com/data',
+                    method: 'GET'
+                },
+                extensionId: 'test-extension-3',
+                requestId: 'req-004'
+            }
         };
 
         // First request should succeed (or fail at execution due to real network)
@@ -178,21 +197,25 @@ fs.writeFileSync(testFile, 'test content', 'utf8');
         pipeline.registerExtension('test-extension-4', manifest4);
 
         const injectionIntent = {
-            type: 'process',
-            operation: 'spawn',
-            params: { 
-                command: 'ls && cat /etc/passwd'
-            },
-            extensionId: 'test-extension-4',
-            requestId: 'req-005'
+            jsonrpc: '2.0',
+            id: 'msg-005',
+            method: 'process.spawn',
+            params: {
+                type: 'process',
+                operation: 'spawn',
+                params: {
+                    command: 'ls && cat /etc/passwd'
+                },
+                extensionId: 'test-extension-4',
+                requestId: 'req-005'
+            }
         };
 
         const injectionResult = await pipeline.process(injectionIntent);
         assert.strictEqual(injectionResult.success, false, 'Command injection should fail');
-        // May fail at INTERCEPT or AUDIT depending on validation order (both are correct fail-closed behavior)
-        assert.ok(['INTERCEPT', 'AUDIT'].includes(injectionResult.stage), `Should fail, got stage: ${injectionResult.stage}`);
+        assert.strictEqual(injectionResult.stage, 'AUDIT', `Should fail at AUDIT stage, got: ${injectionResult.stage}`);
         if (injectionResult.violations) {
-            assert.ok(injectionResult.violations.some(v => v.rule.includes('COMMAND-INJECTION') || v.rule.includes('COMMAND')), 
+            assert.ok(injectionResult.violations.some(v => v.rule.includes('COMMAND-INJECTION') || v.rule.includes('COMMAND')),
                 'Should detect command injection');
         }
         console.log('✅ Command injection blocked (fail-closed)\n');
@@ -211,21 +234,26 @@ fs.writeFileSync(testFile, 'test content', 'utf8');
         pipeline.registerExtension('test-extension-5', manifest5);
 
         const secretIntent = {
-            type: 'filesystem',
-            operation: 'write',
-            params: { 
-                path: 'config/secrets.txt',
-                content: 'API_KEY=AKIAIOSFODNN7EXAMPLE'
-            },
-            extensionId: 'test-extension-5',
-            requestId: 'req-006'
+            jsonrpc: '2.0',
+            id: 'msg-006',
+            method: 'filesystem.write',
+            params: {
+                type: 'filesystem',
+                operation: 'write',
+                params: {
+                    path: 'config/secrets.txt',
+                    content: 'API_KEY=AKIA1234567890ABCDEF'
+                },
+                extensionId: 'test-extension-5',
+                requestId: 'req-006'
+            }
         };
 
         const secretResult = await pipeline.process(secretIntent);
         assert.strictEqual(secretResult.success, false, 'Secret in content should be blocked');
-        assert.ok(['INTERCEPT', 'AUDIT', 'AUTHORIZATION'].includes(secretResult.stage), 'Should fail closed');
+        assert.ok(['AUDIT', 'AUTHORIZATION'].includes(secretResult.stage), 'Should fail closed');
         if (secretResult.violations) {
-            assert.ok(secretResult.violations.some(v => v.rule.includes('SECRET') || v.rule.includes('CONTENT')), 
+            assert.ok(secretResult.violations.some(v => v.rule.includes('SECRET') || v.rule.includes('CONTENT')),
                 'Should detect secrets in content');
         }
         console.log('✅ Secret detection working (fail-closed)\n');

@@ -1,6 +1,6 @@
 const fs = require('fs');
 const path = require('path');
-const minimatch = require('minimatch');
+const { minimatch } = require('minimatch');
 
 class EntropyValidator {
     constructor(options = {}) {
@@ -36,8 +36,9 @@ class EntropyValidator {
             { name: 'Google Cloud Private Key ID', regex: /"private_key_id"\s*:\s*"[a-f0-9]{40}"/gi, severity: 'critical' },
             { name: 'Stripe Live Secret Key', regex: /sk_live_[a-zA-Z0-9]{24,}/g, severity: 'critical' },
             { name: 'Stripe Test Secret Key', regex: /sk_test_[a-zA-Z0-9]{24,}/g, severity: 'high' },
-            { name: 'Stripe Live Restricted Key', regex: /rk_live_[a-zA-Z0-9]{24,}/g, severity: 'critical' },
-            { name: 'Twilio API Key', regex: /SK[a-f0-9]{32}/g, severity: 'critical' },
+            { name: 'Stripe Restricted Key', regex: /rk_(?:live|test)_[a-zA-Z0-9]{24,}/g, severity: 'critical' },
+            { name: 'Twilio API Key', regex: /SK[a-zA-Z0-9]{32}/g, severity: 'critical' },
+            { name: 'Twilio Account SID', regex: /(?:AC|SK)[a-zA-Z0-9]{32}/g, severity: 'critical' },
             { name: 'Azure Storage Connection String', regex: /DefaultEndpointsProtocol=https?;.*AccountName=[^;]+;.*AccountKey=[a-zA-Z0-9+/=]{88}/gi, severity: 'critical' },
             { name: 'Azure Shared Access Signature', regex: /\?sv=\d{4}-\d{2}-\d{2}&[^\s"']+/g, severity: 'high' }
         ];
@@ -97,7 +98,6 @@ class EntropyValidator {
         if (!fs.existsSync(ghostIgnorePath)) {
             this.ghostIgnorePatterns = [];
             this.ghostIgnoreLoaded = true;
-            try { console.log('[DEBUG] Loaded .ghostignore patterns:', JSON.stringify(this.ghostIgnorePatterns)); } catch(e) {}
             return;
         }
 
@@ -109,7 +109,6 @@ class EntropyValidator {
                 .filter(line => line && !line.startsWith('#'))
                 .map(p => p.replace(/\\/g, '/'));
             this.ghostIgnoreLoaded = true;
-            try { console.log('[DEBUG] Loaded .ghostignore patterns:', JSON.stringify(this.ghostIgnorePatterns)); } catch(e) {}
         } catch (error) {
             this.ghostIgnorePatterns = [];
             this.ghostIgnoreLoaded = true;
@@ -168,38 +167,32 @@ class EntropyValidator {
         return false;
     }
 
-    // Check whether a given filesystem path should be ignored according to .ghostignore patterns
     _isPathIgnored(filePath) {
         if (!filePath || typeof filePath !== 'string') return false;
-        const normalized = filePath.replace(/\\/g, '/'); // normalize to forward slashes
+        const normalized = filePath.replace(/\\/g, '/');
 
         if (!this.ghostIgnorePatterns || this.ghostIgnorePatterns.length === 0) return false;
 
-        for (let rawPattern of this.ghostIgnorePatterns) {
+        for (const rawPattern of this.ghostIgnorePatterns) {
             const pattern = rawPattern.trim();
             if (!pattern) continue;
 
             const pat = pattern.replace(/\\/g, '/');
 
             try {
-                // Directory-only patterns (e.g., docs/)
                 if (pat.endsWith('/')) {
                     const dirPat = pat.slice(0, -1);
                     if (minimatch(normalized, `${dirPat}/**`, { nocase: true })) return true;
                     continue;
                 }
 
-                // Exact match against the full path
                 if (minimatch(normalized, pat, { nocase: true })) return true;
 
-                // Match against basename
                 const base = path.basename(normalized);
                 if (minimatch(base, pat, { nocase: true })) return true;
 
-                // Match anywhere in the path (allow patterns like "secrets.js" to match nested files)
                 if (minimatch(normalized, `**/${pat}`, { nocase: true })) return true;
             } catch (e) {
-                // Fallback: simple checks
                 const base = path.basename(normalized);
                 if (base === pattern) return true;
                 if (normalized.includes(`/${pattern}`)) return true;
@@ -395,7 +388,7 @@ class EntropyValidator {
     }
 
     scanContentForIntent(content, ghostIgnorePath = null) {
-        // Always reload .ghostignore for each audit invocation so tests and dynamic updates are respected
+        // Always reload .ghostignore so tests and dynamic updates are respected
         const repoRoot = ghostIgnorePath ? path.dirname(ghostIgnorePath) : process.cwd();
         this.loadGhostIgnore(repoRoot);
 
@@ -416,10 +409,9 @@ class EntropyValidator {
             method: secret.method
         }));
 
-        // NIST SI-10 Compliance: We log the violations but allow execution (valid: true)
-        // to avoid false positives blocking legitimate documentation or code.
+        // Secret findings should surface as invalid for SI-10 validation callers.
         return {
-            valid: true,
+            valid: false,
             violations: violations,
             warning: true
         };

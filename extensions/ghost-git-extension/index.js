@@ -133,10 +133,10 @@ class ExtensionWrapper {
      * Resolves merge conflicts.
      */
     async merge(params) {
-        const subcommand = params.subcommand;
+        const subcommand = params.subcommand || (params.args && params.args[0]) || null;
         const strategy = params.flags && params.flags.strategy;
 
-        if (subcommand === 'status') {
+        if (subcommand === 'status' && !strategy) {
             const conflicts = await this.git.git.getConflicts();
             if (conflicts.length > 0) {
                 return { success: false, output: `Merge conflicts detected in: ${conflicts.join(', ')}` };

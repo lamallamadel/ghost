@@ -506,6 +506,13 @@ class GatewayLauncher {
             }
         });
 
+        // Forward extension stderr lines to gateway output in verbose/debug mode
+        this.runtime.on('stderr', (info) => {
+            if (this._isVerbose() || process.env.GHOST_DEBUG) {
+                console.log(`${Colors.DIM}[Extension:${info.extensionId}] ${info.line}${Colors.ENDC}`);
+            }
+        });
+
         // Catch raw error events bubbled up from ExtensionProcess to prevent Node crashes
         this.runtime.on('error', (info) => {
             if (info.code !== 'EPIPE' && info.error !== 'Channel closed') {
@@ -3091,6 +3098,10 @@ complete -c ghost -l help -s h -d "Show help message"`);
                 console.log(result.output);
             } else if (result) {
                 console.log(JSON.stringify(result, null, 2));
+            }
+
+            if (result && result.success === false) {
+                process.exit(1);
             }
         } catch (error) {
             if (this._isVerbose()) {

@@ -109,7 +109,7 @@ console.log('▶ Test 1: Git extension initialization');
 const mockRPC = new MockRPCClient();
 const gitExt = new GitExtension(mockRPC);
 
-assert.ok(gitExt.rpc, 'Extension should have RPC client');
+assert.ok(gitExt.sdk, 'Extension should have SDK client');
 assert.ok(gitExt.SECRET_REGEXES, 'Extension should have secret patterns');
 assert.ok(gitExt.AI_PROVIDERS, 'Extension should have AI providers');
 console.log('✅ Git extension initialized\n');
@@ -118,7 +118,7 @@ console.log('✅ Git extension initialized\n');
 console.log('▶ Test 2: Check Git repository');
 (async () => {
     try {
-        const isGitRepo = await gitExt.checkGitRepo();
+        const isGitRepo = await gitExt.git.isRepo();
         assert.strictEqual(isGitRepo, true, 'Should detect git repo');
         assert.ok(mockRPC.gitCommands.length > 0, 'Should have called git command');
         console.log('✅ Git repo check works\n');
@@ -722,6 +722,32 @@ console.log('▶ Test 2: Check Git repository');
         assert.ok(ignorePatterns.includes('*.log'), 'Should include *.log');
         assert.ok(!ignorePatterns.some(p => p.startsWith('#')), 'Should filter comments');
         console.log('✅ GhostIgnore loading works\n');
+
+        // Test 37b: Audit resolves tracked files from repo root
+        console.log('▶ Test 37b: Audit resolves files from repo root');
+        const tempRepo = fs.mkdtempSync(path.join(os.tmpdir(), 'ghost-git-audit-'));
+        const nestedDir = path.join(tempRepo, 'nested');
+        const trackedFile = path.join(tempRepo, 'src', 'app.js');
+        fs.mkdirSync(path.dirname(trackedFile), { recursive: true });
+        fs.mkdirSync(nestedDir, { recursive: true });
+        fs.writeFileSync(trackedFile, 'const AWS_KEY = "AKIA1234567890ABCDEF";');
+
+        const originalUserCwd = process.env.GHOST_USER_CWD;
+        const originalGetRepoRoot = gitExt.git.getRepoRoot.bind(gitExt.git);
+        process.env.GHOST_USER_CWD = nestedDir;
+        gitExt.git.getRepoRoot = async () => tempRepo;
+
+        const nestedFindings = await gitExt._scanFilesForSecrets(['src/app.js']);
+        assert.ok(nestedFindings.length > 0, 'Should read repo-relative files from repo root');
+
+        gitExt.git.getRepoRoot = originalGetRepoRoot;
+        if (originalUserCwd === undefined) {
+            delete process.env.GHOST_USER_CWD;
+        } else {
+            process.env.GHOST_USER_CWD = originalUserCwd;
+        }
+        fs.rmSync(tempRepo, { recursive: true, force: true });
+        console.log('✅ Audit uses repo-root-relative paths\n');
 
         // Test 38: End-to-end git operation through full pipeline
         console.log('▶ Test 38: End-to-end git operation through full pipeline');
