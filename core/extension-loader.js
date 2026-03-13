@@ -136,7 +136,7 @@ class ExtensionLoader {
 
             // Phase 6: Detect capability conflicts
             const conflicts = this.dependencyResolver.detectCapabilityConflicts(manifests, loadOrder);
-            if (conflicts.length > 0) {
+            if (conflicts.length > 0 && process.stdout.isTTY) {
                 const colors = {
                     softGreen: '\x1b[38;5;120m',
                     brown: '\x1b[38;5;130m',

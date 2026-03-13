@@ -11,6 +11,7 @@ const { ExtensionRuntime } = require('./core/runtime');
 const { IOPipeline, instrumentPipeline } = require('./core/pipeline');
 const { AuditLogger } = require('./core/pipeline/audit');
 const { GlobMatcher } = require('./core/pipeline/auth');
+const { CommandRegistry, CommandRegistryError } = require('./core/command-registry');
 const SetupWizard = require('./lib/setup-wizard');
 
 const USER_EXTENSIONS_DIR = path.join(os.homedir(), '.ghost', 'extensions');
@@ -117,6 +118,7 @@ class GatewayLauncher {
             requests: [],
             startTime: Date.now()
         };
+        this.commandRegistry = null;
     }
 
     /**
@@ -302,6 +304,7 @@ class GatewayLauncher {
 
         // Pure orchestration: delegate extension loading to Gateway
         await this._initializeExtensions();
+        this.commandRegistry = new CommandRegistry({ gateway: this.gateway, repoRoot: process.cwd() }).build();
     }
 
     _setupDevModeHandlers() {
@@ -1063,6 +1066,7 @@ class GatewayLauncher {
                 }
             }
         } else if (subcommand === 'install') {
+            const writeOut = (line = '') => fs.writeSync(1, `${line}\n`);
             // VIOLATION: Direct file system operations below
             // Should delegate to system extension or Gateway method
             const extPath = parsedArgs.args[0];
@@ -1096,9 +1100,10 @@ class GatewayLauncher {
             fs.mkdirSync(USER_EXTENSIONS_DIR, { recursive: true });
             this._copyDirectory(absolutePath, targetPath);
 
-            console.log(`${Colors.GREEN}✓${Colors.ENDC} Extension ${Colors.BOLD}${manifest.name}${Colors.ENDC} installed successfully`);
-            console.log(`${Colors.DIM}  Location: ${targetPath}${Colors.ENDC}`);
+            writeOut(`${Colors.GREEN}✓${Colors.ENDC} Extension ${Colors.BOLD}${manifest.name}${Colors.ENDC} installed successfully`);
+            writeOut(`${Colors.DIM}  Location: ${targetPath}${Colors.ENDC}`);
         } else if (subcommand === 'remove') {
+            const writeOut = (line = '') => fs.writeSync(1, `${line}\n`);
             // Mixed: metadata queries are correct, but fs operations are violations
             const extId = parsedArgs.args[0];
             
@@ -1131,7 +1136,7 @@ class GatewayLauncher {
                 this._removeDirectory(extPath);
             }
 
-            console.log(`${Colors.GREEN}✓${Colors.ENDC} Extension ${Colors.BOLD}${extId}${Colors.ENDC} removed successfully`);
+            writeOut(`${Colors.GREEN}✓${Colors.ENDC} Extension ${Colors.BOLD}${extId}${Colors.ENDC} removed successfully`);
         } else if (subcommand === 'info') {
             // Pure orchestration: query metadata and format output
             const extId = parsedArgs.args[0];
@@ -3054,30 +3059,77 @@ complete -c ghost -l help -s h -d "Show help message"`);
         let command = parsedArgs.command;
         if (!command) return;
 
-        let subcommand = parsedArgs.subcommand;
-        let args = parsedArgs.args;
-        
-        const targetExtension = this._findExtensionForCommand(command);
+        let targetExtension = this.gateway.getExtension(command);
+        let method = command;
+        let params;
 
-        if (!targetExtension) {
-            console.error(`${Colors.FAIL}Error: No extension found to handle command '${command}'${Colors.ENDC}\n`);
-            process.exit(1);
-        }
-
-        // If command was an explicit extension ID, shift arguments
-        if (command === targetExtension.manifest.id) {
+        // Explicit extension form: ghost <extension-id> <command>
+        if (targetExtension) {
+            let subcommand = parsedArgs.subcommand;
+            let args = parsedArgs.args;
             if (!subcommand) {
                 console.error(`${Colors.FAIL}Error: No command specified for extension '${command}'${Colors.ENDC}\n`);
                 process.exit(1);
             }
+
             command = subcommand;
-            subcommand = args[0] || null;
-            args = args.slice(1);
+            method = subcommand;
+            params = {
+                subcommand: args[0] || null,
+                args: args.slice(1),
+                flags: parsedArgs.flags
+            };
+        } else {
+            try {
+                if (!this.commandRegistry) {
+                    this.commandRegistry = new CommandRegistry({ gateway: this.gateway, repoRoot: process.cwd() }).build();
+                }
+                const resolved = this.commandRegistry.resolve(parsedArgs);
+                targetExtension = this.gateway.getExtension(resolved.extensionId);
+                method = resolved.method;
+                params = resolved.params;
+                command = resolved.canonicalCommandId;
+            } catch (error) {
+                if (error instanceof CommandRegistryError) {
+                    if (error.code === 'AMBIGUOUS_COMMAND') {
+                        console.error(`${Colors.FAIL}Error: ${error.message}${Colors.ENDC}`);
+                        if (Array.isArray(error.data?.candidates) && error.data.candidates.length > 0) {
+                            console.error('');
+                            console.error(`${Colors.WARNING}Candidates:${Colors.ENDC}`);
+                            for (const candidate of error.data.candidates) {
+                                console.error(`  ${Colors.CYAN}${candidate.id}${Colors.ENDC} → ${candidate.extensionId}`);
+                            }
+                        }
+                        console.error('');
+                        process.exit(1);
+                    }
+
+                    if (error.code === 'UNKNOWN_COMMAND') {
+                        console.error(`${Colors.FAIL}${error.message}${Colors.ENDC}\n`);
+                        const suggestions = this._findSimilarCommands(parsedArgs.command, this._getAllAvailableCommands());
+                        if (suggestions.length > 0) {
+                            console.log(`${Colors.WARNING}Did you mean?${Colors.ENDC}`);
+                            for (const suggestion of suggestions) {
+                                console.log(`  ${Colors.CYAN}ghost ${suggestion}${Colors.ENDC}`);
+                            }
+                            console.log('');
+                        }
+                        process.exit(1);
+                    }
+                }
+
+                throw error;
+            }
+
+            if (!targetExtension) {
+                console.error(`${Colors.FAIL}Error: No extension found to handle command '${parsedArgs.command}'${Colors.ENDC}\n`);
+                process.exit(1);
+            }
         }
 
         if (this._isVerbose()) {
             console.log(`${Colors.DIM}[Gateway] Routing '${command}' to extension '${targetExtension.manifest.id}'${Colors.ENDC}`);
-            this._logTelemetry('ROUTE', { command, extension: targetExtension.manifest.id });
+            this._logTelemetry('ROUTE', { command, extension: targetExtension.manifest.id, method });
         }
 
         try {
@@ -3091,29 +3143,22 @@ complete -c ghost -l help -s h -d "Show help message"`);
                 process.exit(1);
             }
 
-            if (typeof instance[command] !== 'function') {
-                console.error(`${Colors.FAIL}Error: Extension ${ext.manifest.id} does not implement '${command}'${Colors.ENDC}`);
+            if (typeof instance[method] !== 'function') {
+                console.error(`${Colors.FAIL}Error: Extension ${ext.manifest.id} does not implement '${method}'${Colors.ENDC}`);
                 process.exit(1);
             }
-
-            // Pure orchestration: prepare parameters and call extension method
-            const params = {
-                subcommand: subcommand,
-                args: args,
-                flags: parsedArgs.flags
-            };
 
             // THE KEY OPERATION: Delegate to extension instance
             // Disable RPC timeout for the interactive shell to prevent the 30s kill
             let timeout = null;
-            if (command === 'invoke' && ext.manifest.capabilities?.ui?.shell) {
+            if (method === 'invoke' && ext.manifest.capabilities?.ui?.shell) {
                 timeout = 0; 
             }
             
-            const result = await instance[command](params, timeout);
+            const result = await instance[method](params, timeout);
 
             if (this._isVerbose()) {
-                this._logTelemetry('SUCCESS', { command, extension: targetExtension.id });
+                this._logTelemetry('SUCCESS', { command, extension: targetExtension.id, method });
             }
 
             // Pure orchestration: format and display results
@@ -3130,7 +3175,7 @@ complete -c ghost -l help -s h -d "Show help message"`);
             }
         } catch (error) {
             if (this._isVerbose()) {
-                this._logTelemetry('ERROR', { command, extension: targetExtension.id, error: error.message });
+                this._logTelemetry('ERROR', { command, extension: targetExtension.id, method, error: error.message });
             }
 
             console.error(`${Colors.FAIL}Error executing command '${command}': ${error.message}${Colors.ENDC}`);
@@ -3201,18 +3246,18 @@ complete -c ghost -l help -s h -d "Show help message"`);
      * - Extract commands from manifests
      */
     _getAllAvailableCommands() {
+        if (this.commandRegistry) {
+            return this.commandRegistry.listCommandIds();
+        }
+
         const commands = new Set();
         const extensions = this.gateway.listExtensions();
-        
         for (const ext of extensions) {
             const fullExt = this.gateway.getExtension(ext.id);
-            if (fullExt && fullExt.manifest && fullExt.manifest.commands) {
-                if (Array.isArray(fullExt.manifest.commands)) {
-                    fullExt.manifest.commands.forEach(cmd => commands.add(cmd));
-                }
+            if (fullExt && fullExt.manifest && Array.isArray(fullExt.manifest.commands)) {
+                fullExt.manifest.commands.forEach(cmd => commands.add(cmd));
             }
         }
-        
         return Array.from(commands);
     }
 
@@ -3406,6 +3451,7 @@ complete -c ghost -l help -s h -d "Show help message"`);
     async _scaffoldExtension(name, flags) {
         const extId = name.toLowerCase().replace(/[^a-z0-9-]/g, '-');
         const targetDir = path.resolve(extId);
+        const writeOut = (text = '') => fs.writeSync(1, text);
 
         // VIOLATION: Direct fs.existsSync
         if (fs.existsSync(targetDir)) {
@@ -3413,8 +3459,8 @@ complete -c ghost -l help -s h -d "Show help message"`);
             process.exit(1);
         }
 
-        console.log(`${Colors.CYAN}Creating extension: ${Colors.BOLD}${name}${Colors.ENDC}`);
-        console.log(`${Colors.DIM}Directory: ${targetDir}${Colors.ENDC}\n`);
+        writeOut(`${Colors.CYAN}Creating extension: ${Colors.BOLD}${name}${Colors.ENDC}\n`);
+        writeOut(`${Colors.DIM}Directory: ${targetDir}${Colors.ENDC}\n\n`);
 
         // VIOLATION: Direct fs.mkdirSync
         fs.mkdirSync(targetDir, { recursive: true });
@@ -3907,23 +3953,21 @@ See [Extension API Documentation](https://github.com/lamallamadel/ghost/blob/mai
 .DS_Store
 `);
 
-        console.log(`${Colors.GREEN}✓${Colors.ENDC} Extension scaffolded successfully!\n`);
-        console.log(`${Colors.BOLD}Features included:${Colors.ENDC}`);
-        console.log(`  ${Colors.GREEN}✓${Colors.ENDC} TypeScript declaration file (index.d.ts)`);
-        console.log(`  ${Colors.GREEN}✓${Colors.ENDC} Comprehensive JSDoc comments`);
-        console.log(`  ${Colors.GREEN}✓${Colors.ENDC} Batch operations example`);
-        console.log(`  ${Colors.GREEN}✓${Colors.ENDC} Structured error handling and logging`);
-        console.log(`  ${Colors.GREEN}✓${Colors.ENDC} Git hooks integration (pre-commit, post-merge)`);
-        console.log(`  ${Colors.GREEN}✓${Colors.ENDC} Network rate limit with BE parameter (200KB)`);
-        console.log('');
-        console.log(`${Colors.BOLD}Next steps:${Colors.ENDC}`);
-        console.log(`  1. cd ${extId}`);
-        console.log(`  2. npm install`);
-        console.log(`  3. Edit manifest.json to customize capabilities`);
-        console.log(`  4. Edit index.js to implement your extension logic`);
-        console.log(`  5. ghost extension validate`);
-        console.log(`  6. ghost extension install .`);
-        console.log('');
+        writeOut(`${Colors.GREEN}✓${Colors.ENDC} Extension scaffolded successfully!\n\n`);
+        writeOut(`${Colors.BOLD}Features included:${Colors.ENDC}\n`);
+        writeOut(`  ${Colors.GREEN}✓${Colors.ENDC} TypeScript declaration file (index.d.ts)\n`);
+        writeOut(`  ${Colors.GREEN}✓${Colors.ENDC} Comprehensive JSDoc comments\n`);
+        writeOut(`  ${Colors.GREEN}✓${Colors.ENDC} Batch operations example\n`);
+        writeOut(`  ${Colors.GREEN}✓${Colors.ENDC} Structured error handling and logging\n`);
+        writeOut(`  ${Colors.GREEN}✓${Colors.ENDC} Git hooks integration (pre-commit, post-merge)\n`);
+        writeOut(`  ${Colors.GREEN}✓${Colors.ENDC} Network rate limit with BE parameter (200KB)\n`);
+        writeOut(`\n${Colors.BOLD}Next steps:${Colors.ENDC}\n`);
+        writeOut(`  1. cd ${extId}\n`);
+        writeOut(`  2. npm install\n`);
+        writeOut(`  3. Edit manifest.json to customize capabilities\n`);
+        writeOut(`  4. Edit index.js to implement your extension logic\n`);
+        writeOut(`  5. ghost extension validate\n`);
+        writeOut(`  6. ghost extension install .\n\n`);
     }
 
     /**
@@ -3938,8 +3982,10 @@ See [Extension API Documentation](https://github.com/lamallamadel/ghost/blob/mai
     async _validateExtension(extPath) {
         const absolutePath = path.resolve(extPath);
         const manifestPath = path.join(absolutePath, 'manifest.json');
+        const writeOut = (line = '') => fs.writeSync(1, `${line}\n`);
         
-        console.log(`${Colors.CYAN}Validating extension at: ${Colors.DIM}${absolutePath}${Colors.ENDC}\n`);
+        writeOut(`${Colors.CYAN}Validating extension at: ${Colors.DIM}${absolutePath}${Colors.ENDC}`);
+        writeOut();
 
         // VIOLATION: Direct fs.existsSync
         if (!fs.existsSync(manifestPath)) {
@@ -3952,7 +3998,7 @@ See [Extension API Documentation](https://github.com/lamallamadel/ghost/blob/mai
             // VIOLATION: Direct fs.readFileSync
             const content = fs.readFileSync(manifestPath, 'utf8');
             manifest = JSON.parse(content);
-            console.log(`${Colors.GREEN}✓${Colors.ENDC} Valid JSON syntax`);
+            writeOut(`${Colors.GREEN}✓${Colors.ENDC} Valid JSON syntax`);
         } catch (error) {
             console.error(`${Colors.FAIL}✗ Invalid JSON: ${error.message}${Colors.ENDC}`);
             process.exit(1);
@@ -3970,13 +4016,13 @@ See [Extension API Documentation](https://github.com/lamallamadel/ghost/blob/mai
         } else if (!/^[a-z0-9-]+$/.test(manifest.id)) {
             errors.push('Invalid id: must be lowercase alphanumeric with hyphens');
         } else {
-            console.log(`${Colors.GREEN}✓${Colors.ENDC} Valid extension id: ${manifest.id}`);
+            writeOut(`${Colors.GREEN}✓${Colors.ENDC} Valid extension id: ${manifest.id}`);
         }
 
         if (!manifest.name) {
             errors.push('Missing required field: name');
         } else {
-            console.log(`${Colors.GREEN}✓${Colors.ENDC} Extension name: ${manifest.name}`);
+            writeOut(`${Colors.GREEN}✓${Colors.ENDC} Extension name: ${manifest.name}`);
         }
 
         if (!manifest.version) {
@@ -3984,7 +4030,7 @@ See [Extension API Documentation](https://github.com/lamallamadel/ghost/blob/mai
         } else if (!/^\d+\.\d+\.\d+$/.test(manifest.version)) {
             errors.push('Invalid version: must be semantic version (major.minor.patch)');
         } else {
-            console.log(`${Colors.GREEN}✓${Colors.ENDC} Valid version: ${manifest.version}`);
+            writeOut(`${Colors.GREEN}✓${Colors.ENDC} Valid version: ${manifest.version}`);
         }
 
         if (!manifest.main) {
@@ -3995,19 +4041,19 @@ See [Extension API Documentation](https://github.com/lamallamadel/ghost/blob/mai
             if (!fs.existsSync(mainPath)) {
                 errors.push(`Main file not found: ${manifest.main}`);
             } else {
-                console.log(`${Colors.GREEN}✓${Colors.ENDC} Main file exists: ${manifest.main}`);
+                writeOut(`${Colors.GREEN}✓${Colors.ENDC} Main file exists: ${manifest.main}`);
             }
         }
 
         if (!manifest.capabilities) {
             errors.push('Missing required field: capabilities');
         } else {
-            console.log(`${Colors.GREEN}✓${Colors.ENDC} Capabilities defined`);
+            writeOut(`${Colors.GREEN}✓${Colors.ENDC} Capabilities defined`);
             
             if (manifest.capabilities.filesystem) {
                 const fs_cap = manifest.capabilities.filesystem;
                 if (fs_cap.read && Array.isArray(fs_cap.read)) {
-                    console.log(`  ${Colors.DIM}- Filesystem read: ${fs_cap.read.length} pattern(s)${Colors.ENDC}`);
+                    writeOut(`  ${Colors.DIM}- Filesystem read: ${fs_cap.read.length} pattern(s)${Colors.ENDC}`);
                     
                     fs_cap.read.forEach(pattern => {
                         try {
@@ -4022,7 +4068,7 @@ See [Extension API Documentation](https://github.com/lamallamadel/ghost/blob/mai
                     });
                 }
                 if (fs_cap.write && Array.isArray(fs_cap.write)) {
-                    console.log(`  ${Colors.DIM}- Filesystem write: ${fs_cap.write.length} pattern(s)${Colors.ENDC}`);
+                    writeOut(`  ${Colors.DIM}- Filesystem write: ${fs_cap.write.length} pattern(s)${Colors.ENDC}`);
                     if (fs_cap.write.length > 0) {
                         warnings.push('Extension requests write access to filesystem');
                     }
@@ -4046,7 +4092,7 @@ See [Extension API Documentation](https://github.com/lamallamadel/ghost/blob/mai
             if (manifest.capabilities.network) {
                 const net_cap = manifest.capabilities.network;
                 if (net_cap.allowlist && Array.isArray(net_cap.allowlist)) {
-                    console.log(`  ${Colors.DIM}- Network allowlist: ${net_cap.allowlist.length} domain(s)${Colors.ENDC}`);
+                    writeOut(`  ${Colors.DIM}- Network allowlist: ${net_cap.allowlist.length} domain(s)${Colors.ENDC}`);
                     net_cap.allowlist.forEach(url => {
                         if (!/^https?:\/\/[^/]+$/.test(url)) {
                             errors.push(`Invalid network allowlist entry: ${url} (must be protocol + domain only)`);
@@ -4090,12 +4136,12 @@ See [Extension API Documentation](https://github.com/lamallamadel/ghost/blob/mai
                     if (net_cap.rateLimit.cir && net_cap.rateLimit.bc) {
                         const refillTimeSeconds = (net_cap.rateLimit.bc / net_cap.rateLimit.cir) * 60;
                         const tokensPerSecond = net_cap.rateLimit.cir / 60;
-                        console.log(`  ${Colors.DIM}- Rate limit simulation:${Colors.ENDC}`);
-                        console.log(`    ${Colors.DIM}CIR: ${net_cap.rateLimit.cir} tokens/min (${tokensPerSecond.toFixed(2)} tokens/sec)${Colors.ENDC}`);
-                        console.log(`    ${Colors.DIM}Bc (committed burst): ${net_cap.rateLimit.bc} tokens${Colors.ENDC}`);
-                        console.log(`    ${Colors.DIM}Be (excess burst): ${net_cap.rateLimit.be || 0} bytes${Colors.ENDC}`);
-                        console.log(`    ${Colors.DIM}Bucket refills to capacity in: ${refillTimeSeconds.toFixed(1)}s${Colors.ENDC}`);
-                        console.log(`    ${Colors.DIM}Sustained rate: 1 request every ${(60 / net_cap.rateLimit.cir).toFixed(2)}s${Colors.ENDC}`);
+                        writeOut(`  ${Colors.DIM}- Rate limit simulation:${Colors.ENDC}`);
+                        writeOut(`    ${Colors.DIM}CIR: ${net_cap.rateLimit.cir} tokens/min (${tokensPerSecond.toFixed(2)} tokens/sec)${Colors.ENDC}`);
+                        writeOut(`    ${Colors.DIM}Bc (committed burst): ${net_cap.rateLimit.bc} tokens${Colors.ENDC}`);
+                        writeOut(`    ${Colors.DIM}Be (excess burst): ${net_cap.rateLimit.be || 0} bytes${Colors.ENDC}`);
+                        writeOut(`    ${Colors.DIM}Bucket refills to capacity in: ${refillTimeSeconds.toFixed(1)}s${Colors.ENDC}`);
+                        writeOut(`    ${Colors.DIM}Sustained rate: 1 request every ${(60 / net_cap.rateLimit.cir).toFixed(2)}s${Colors.ENDC}`);
                     }
                 }
             }
@@ -4103,10 +4149,10 @@ See [Extension API Documentation](https://github.com/lamallamadel/ghost/blob/mai
             if (manifest.capabilities.git) {
                 const git_cap = manifest.capabilities.git;
                 if (git_cap.read) {
-                    console.log(`  ${Colors.DIM}- Git read: enabled${Colors.ENDC}`);
+                    writeOut(`  ${Colors.DIM}- Git read: enabled${Colors.ENDC}`);
                 }
                 if (git_cap.write) {
-                    console.log(`  ${Colors.WARNING}- Git write: enabled${Colors.ENDC}`);
+                    writeOut(`  ${Colors.WARNING}- Git write: enabled${Colors.ENDC}`);
                     warnings.push('Extension requests write access to git repository');
                 }
             }
@@ -4127,7 +4173,7 @@ See [Extension API Documentation](https://github.com/lamallamadel/ghost/blob/mai
                     'update'
                 ];
                 
-                console.log(`  ${Colors.DIM}- Git hooks: ${manifest.capabilities.hooks.join(', ')}${Colors.ENDC}`);
+                writeOut(`  ${Colors.DIM}- Git hooks: ${manifest.capabilities.hooks.join(', ')}${Colors.ENDC}`);
                 
                 manifest.capabilities.hooks.forEach(hook => {
                     if (!ALLOWED_HOOKS.includes(hook)) {
@@ -4141,8 +4187,8 @@ See [Extension API Documentation](https://github.com/lamallamadel/ghost/blob/mai
             }
         }
 
-        console.log('');
-        console.log(`${Colors.BOLD}Simulating permission requests:${Colors.ENDC}`);
+        writeOut();
+        writeOut(`${Colors.BOLD}Simulating permission requests:${Colors.ENDC}`);
 
         const testIntents = [
             {
@@ -4164,30 +4210,31 @@ See [Extension API Documentation](https://github.com/lamallamadel/ghost/blob/mai
             const validation = IntentSchema.validate(intent);
             
             if (validation.valid) {
-                console.log(`${Colors.GREEN}✓${Colors.ENDC} ${intent.type}:${intent.operation} - valid intent`);
+                writeOut(`${Colors.GREEN}✓${Colors.ENDC} ${intent.type}:${intent.operation} - valid intent`);
             } else {
-                console.log(`${Colors.FAIL}✗${Colors.ENDC} ${intent.type}:${intent.operation} - invalid intent`);
+                writeOut(`${Colors.FAIL}✗${Colors.ENDC} ${intent.type}:${intent.operation} - invalid intent`);
                 validation.errors.forEach(err => {
-                    console.log(`  ${Colors.DIM}${err}${Colors.ENDC}`);
+                    writeOut(`  ${Colors.DIM}${err}${Colors.ENDC}`);
                 });
             }
         }
 
-        console.log('');
+        writeOut();
 
         if (warnings.length > 0) {
-            console.log(`${Colors.WARNING}Warnings:${Colors.ENDC}`);
-            warnings.forEach(w => console.log(`  ${Colors.WARNING}⚠${Colors.ENDC} ${w}`));
-            console.log('');
+            writeOut(`${Colors.WARNING}Warnings:${Colors.ENDC}`);
+            warnings.forEach(w => writeOut(`  ${Colors.WARNING}⚠${Colors.ENDC} ${w}`));
+            writeOut();
         }
 
         if (errors.length > 0) {
-            console.log(`${Colors.FAIL}Validation failed with ${errors.length} error(s):${Colors.ENDC}`);
-            errors.forEach(e => console.log(`  ${Colors.FAIL}✗${Colors.ENDC} ${e}`));
+            writeOut(`${Colors.FAIL}Validation failed with ${errors.length} error(s):${Colors.ENDC}`);
+            errors.forEach(e => writeOut(`  ${Colors.FAIL}✗${Colors.ENDC} ${e}`));
             process.exit(1);
         } else {
-            console.log(`${Colors.GREEN}${Colors.BOLD}✓ Extension is valid!${Colors.ENDC}\n`);
-            console.log(`${Colors.DIM}Ready to install with: ghost extension install ${extPath}${Colors.ENDC}`);
+            writeOut(`${Colors.GREEN}${Colors.BOLD}✓ Extension is valid!${Colors.ENDC}`);
+            writeOut();
+            writeOut(`${Colors.DIM}Ready to install with: ghost extension install ${extPath}${Colors.ENDC}`);
         }
     }
 

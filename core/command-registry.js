@@ -86,13 +86,14 @@ class CommandRegistry {
   _ingestManifest(manifest, extensionId) {
     const cmds = manifest.commands;
     if (!cmds) return;
+    const namespace = this._deriveNamespace(extensionId);
 
     // Legacy: commands: ["commit","add",...]
     if (Array.isArray(cmds) && cmds.length > 0 && typeof cmds[0] === 'string') {
       for (const c of cmds) {
         if (!c || typeof c !== 'string') continue;
         this._register({
-          id: c,
+          id: namespace ? `${namespace}:${c}` : c,
           method: c,
           aliases: [],
           priority: 0,
@@ -127,6 +128,15 @@ class CommandRegistry {
         });
       }
     }
+  }
+
+  _deriveNamespace(extensionId) {
+    const raw = String(extensionId || '').trim();
+    if (!raw) return null;
+
+    return raw
+      .replace(/^ghost-/, '')
+      .replace(/-extension$/, '');
   }
 
   _register(entry) {
