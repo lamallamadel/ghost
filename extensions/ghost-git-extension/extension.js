@@ -6,10 +6,50 @@
  * Uses @ghost/extension-sdk for all I/O and communication with Ghost core
  */
 
-const { ExtensionSDK, RPCClient } = require('@ghost/extension-sdk');
 const path = require('path');
 const fs = require('fs');
-const { minimatch } = require('minimatch');
+
+function loadExtensionSdk() {
+    try {
+        return require('@ghost/extension-sdk');
+    } catch (error) {
+        return require('../../packages/extension-sdk');
+    }
+}
+
+function escapeRegex(value) {
+    return value.replace(/[|\\{}()[\]^$+?.]/g, '\\$&');
+}
+
+function globToRegExp(glob) {
+    let pattern = '';
+
+    for (let i = 0; i < glob.length; i++) {
+        const char = glob[i];
+        const next = glob[i + 1];
+
+        if (char === '*') {
+            if (next === '*') {
+                pattern += '.*';
+                i++;
+            } else {
+                pattern += '[^/]*';
+            }
+            continue;
+        }
+
+        if (char === '?') {
+            pattern += '[^/]';
+            continue;
+        }
+
+        pattern += escapeRegex(char);
+    }
+
+    return new RegExp(`^${pattern}$`, 'i');
+}
+
+const { ExtensionSDK, RPCClient } = loadExtensionSdk();
 
 const Colors = {
     GREEN: '\x1b[32m',
@@ -595,22 +635,26 @@ class GitExtension {
     _matchesIgnorePattern(filePath, pattern) {
         const normalized = filePath.replace(/\\/g, '/');
         const pat = pattern.replace(/\\/g, '/');
-        const matchOptions = { nocase: true, dot: true };
+        const base = path.basename(normalized);
+        const targetPatterns = [pat];
+
+        if (!pat.includes('/')) {
+            targetPatterns.push(`**/${pat}`);
+        }
+
+        if (pat.endsWith('/')) {
+            const dirPat = pat.slice(0, -1);
+            targetPatterns.push(`${dirPat}/**`);
+            targetPatterns.push(`**/${dirPat}/**`);
+        }
 
         try {
-            if (pat.endsWith('/')) {
-                const dirPat = pat.slice(0, -1);
-                return normalized === dirPat || normalized.startsWith(dirPat + '/');
+            for (const target of targetPatterns) {
+                if (globToRegExp(target).test(normalized)) return true;
             }
 
-            if (minimatch(normalized, pat, matchOptions)) return true;
-
-            const base = path.basename(normalized);
-            if (minimatch(base, pat, matchOptions)) return true;
-
-            return minimatch(normalized, `**/${pat}`, matchOptions);
+            return globToRegExp(pat).test(base);
         } catch (e) {
-            const base = path.basename(normalized);
             return normalized === pat || base === pat || normalized.endsWith('/' + pat);
         }
     }

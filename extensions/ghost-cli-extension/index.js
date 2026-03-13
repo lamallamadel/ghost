@@ -8,10 +8,19 @@
  * Terminal interaction (readline, process.stdout) is the UI layer — exempt.
  */
 
-const { ExtensionSDK, ExtensionRunner } = require('@ghost/extension-sdk');
 const readline = require('readline');
 const os = require('os');
 const path = require('path');
+
+function loadExtensionSdk() {
+    try {
+        return require('@ghost/extension-sdk');
+    } catch (error) {
+        return require('../../packages/extension-sdk');
+    }
+}
+
+const { ExtensionSDK, ExtensionRunner } = loadExtensionSdk();
 
 // ─── Paths (string ops only — no fs) ─────────────────────────────────────────
 const HISTORY_PATH = path.join(os.homedir(), '.ghost', 'cli-history.json');

@@ -1,6 +1,37 @@
 const fs = require('fs');
 const path = require('path');
-const { minimatch } = require('minimatch');
+
+function escapeRegex(value) {
+    return value.replace(/[|\\{}()[\]^$+?.]/g, '\\$&');
+}
+
+function globToRegExp(glob) {
+    let pattern = '';
+
+    for (let i = 0; i < glob.length; i++) {
+        const char = glob[i];
+        const next = glob[i + 1];
+
+        if (char === '*') {
+            if (next === '*') {
+                pattern += '.*';
+                i++;
+            } else {
+                pattern += '[^/]*';
+            }
+            continue;
+        }
+
+        if (char === '?') {
+            pattern += '[^/]';
+            continue;
+        }
+
+        pattern += escapeRegex(char);
+    }
+
+    return new RegExp(`^${pattern}$`, 'i');
+}
 
 class EntropyValidator {
     constructor(options = {}) {
@@ -170,6 +201,7 @@ class EntropyValidator {
     _isPathIgnored(filePath) {
         if (!filePath || typeof filePath !== 'string') return false;
         const normalized = filePath.replace(/\\/g, '/');
+        const base = path.basename(normalized);
 
         if (!this.ghostIgnorePatterns || this.ghostIgnorePatterns.length === 0) return false;
 
@@ -178,22 +210,25 @@ class EntropyValidator {
             if (!pattern) continue;
 
             const pat = pattern.replace(/\\/g, '/');
+            const targetPatterns = [pat];
+
+            if (!pat.includes('/')) {
+                targetPatterns.push(`**/${pat}`);
+            }
+
+            if (pat.endsWith('/')) {
+                const dirPat = pat.slice(0, -1);
+                targetPatterns.push(`${dirPat}/**`);
+                targetPatterns.push(`**/${dirPat}/**`);
+            }
 
             try {
-                if (pat.endsWith('/')) {
-                    const dirPat = pat.slice(0, -1);
-                    if (minimatch(normalized, `${dirPat}/**`, { nocase: true })) return true;
-                    continue;
+                for (const target of targetPatterns) {
+                    if (globToRegExp(target).test(normalized)) return true;
                 }
 
-                if (minimatch(normalized, pat, { nocase: true })) return true;
-
-                const base = path.basename(normalized);
-                if (minimatch(base, pat, { nocase: true })) return true;
-
-                if (minimatch(normalized, `**/${pat}`, { nocase: true })) return true;
+                if (globToRegExp(pat).test(base)) return true;
             } catch (e) {
-                const base = path.basename(normalized);
                 if (base === pattern) return true;
                 if (normalized.includes(`/${pattern}`)) return true;
             }

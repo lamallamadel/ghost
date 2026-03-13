@@ -5,9 +5,18 @@
  * Headless OS process management with strict semaphore locking
  */
 
-const { ExtensionSDK } = require('@ghost/extension-sdk');
 const path = require('path');
 const os = require('os');
+
+function loadExtensionSdk() {
+    try {
+        return require('@ghost/extension-sdk');
+    } catch (error) {
+        return require('../../packages/extension-sdk');
+    }
+}
+
+const { ExtensionSDK } = loadExtensionSdk();
 
 const Colors = {
     GREEN: '\x1b[32m',

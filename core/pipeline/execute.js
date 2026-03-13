@@ -77,6 +77,7 @@ class TimeoutManager {
 
     static async withTimeout(promise, timeout = this.DEFAULT_TIMEOUT) {
         let timeoutId;
+        const effectiveTimeout = this._getEffectiveTimeout(timeout);
         
         const timeoutPromise = new Promise((_, reject) => {
             timeoutId = setTimeout(() => {
@@ -84,7 +85,7 @@ class TimeoutManager {
                     `Operation timed out after ${timeout}ms`,
                     'EXEC_TIMEOUT'
                 ));
-            }, timeout);
+            }, effectiveTimeout);
         });
 
         try {
@@ -95,6 +96,11 @@ class TimeoutManager {
             clearTimeout(timeoutId);
             throw error;
         }
+    }
+
+    static _getEffectiveTimeout(timeout) {
+        const margin = Math.min(2000, Math.max(100, Math.floor(timeout * 0.05)));
+        return Math.max(1, timeout - margin);
     }
 }
 

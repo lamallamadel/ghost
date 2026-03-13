@@ -1,10 +1,19 @@
 #!/usr/bin/env node
 
 const { GitExtension } = require('./extension.js');
-const { ExtensionSDK, ExtensionRunner } = require('@ghost/extension-sdk');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+
+function loadExtensionSdk() {
+    try {
+        return require('@ghost/extension-sdk');
+    } catch (error) {
+        return require('../../packages/extension-sdk');
+    }
+}
+
+const { ExtensionSDK, ExtensionRunner } = loadExtensionSdk();
 
 const manifestPath = path.join(__dirname, 'manifest.json');
 const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
@@ -145,6 +154,124 @@ class ExtensionWrapper {
         }
 
         return await this.git.handleMergeResolve(strategy);
+    }
+
+    _compareVersions(a, b) {
+        const pa = String(a || '0.0.0').split('.').map(n => parseInt(n, 10) || 0);
+        const pb = String(b || '0.0.0').split('.').map(n => parseInt(n, 10) || 0);
+        for (let i = 0; i < 3; i++) {
+            if (pa[i] > pb[i]) return 1;
+            if (pa[i] < pb[i]) return -1;
+        }
+        return 0;
+    }
+
+    _buildVersionHookScript() {
+        return `#!/usr/bin/env node
+const fs = require('fs');
+const { execSync } = require('child_process');
+
+function readJson(spec, fallbackPath) {
+  try {
+    if (spec) return JSON.parse(execSync('git show ' + spec, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }));
+  } catch (error) {}
+  if (fallbackPath && fs.existsSync(fallbackPath)) {
+    return JSON.parse(fs.readFileSync(fallbackPath, 'utf8'));
+  }
+  return null;
+}
+
+function compareVersions(a, b) {
+  const pa = String(a || '0.0.0').split('.').map(n => parseInt(n, 10) || 0);
+  const pb = String(b || '0.0.0').split('.').map(n => parseInt(n, 10) || 0);
+  for (let i = 0; i < 3; i++) {
+    if (pa[i] > pb[i]) return 1;
+    if (pa[i] < pb[i]) return -1;
+  }
+  return 0;
+}
+
+function detectRequiredBump(message) {
+  if (!message) return null;
+  if (/BREAKING CHANGE/.test(message)) return 'major';
+  const match = message.match(/^([a-z]+)(\\(.+\\))?(!)?:/i);
+  if (!match) return null;
+  if (match[3] === '!') return 'major';
+  const type = match[1].toLowerCase();
+  if (type === 'feat') return 'minor';
+  if (['fix', 'perf', 'refactor'].includes(type)) return 'patch';
+  return null;
+}
+
+const messageFile = process.argv[2];
+const commitMessage = fs.readFileSync(messageFile, 'utf8').trim();
+const required = detectRequiredBump(commitMessage);
+if (!required) process.exit(0);
+
+const headPkg = readJson('HEAD:package.json', null);
+const stagedPkg = readJson(':package.json', 'package.json');
+if (!headPkg || !stagedPkg || !headPkg.version || !stagedPkg.version) process.exit(0);
+
+const head = headPkg.version;
+const staged = stagedPkg.version;
+let ok = false;
+
+if (required === 'major') {
+  ok = compareVersions(staged, head) > 0 && staged.split('.')[0] !== head.split('.')[0];
+} else if (required === 'minor') {
+  const [hMaj, hMin] = head.split('.').map(n => parseInt(n, 10) || 0);
+  const [sMaj, sMin] = staged.split('.').map(n => parseInt(n, 10) || 0);
+  ok = sMaj > hMaj || (sMaj === hMaj && sMin > hMin);
+} else if (required === 'patch') {
+  ok = compareVersions(staged, head) > 0;
+}
+
+if (!ok) {
+  console.error('Commit message requires a ' + required + ' version bump in package.json');
+  process.exit(1);
+}
+`;
+    }
+
+    async _installVersionHooks() {
+        const gitDir = path.join(process.env.GHOST_USER_CWD || process.cwd(), '.git');
+        const hooksDir = path.join(gitDir, 'hooks');
+        fs.mkdirSync(hooksDir, { recursive: true });
+
+        const commitMsgHookPath = path.join(hooksDir, 'commit-msg');
+        fs.writeFileSync(commitMsgHookPath, this._buildVersionHookScript(), 'utf8');
+        fs.chmodSync(commitMsgHookPath, 0o755);
+
+        return { success: true, output: 'Git version hooks installed' };
+    }
+
+    async version(params) {
+        const subcommand = params.subcommand || (params.args && params.args[0]) || 'check';
+        const flags = params.flags || {};
+
+        if (subcommand === 'install-hooks') {
+            return await this._installVersionHooks();
+        }
+
+        if (subcommand === 'bump') {
+            const bumpType = flags.bump || flags.type || (params.args && params.args[1]) || 'patch';
+            const result = await this.git.handleVersionBump(bumpType, flags);
+            await this.git.git.add(['package.json']);
+            if (flags.tag) {
+                await this.git.git.tag(`v${result.next}`, `release-v${result.next}`);
+            }
+            return {
+                success: true,
+                output: `Version bumped from ${result.current} to ${result.next}`
+            };
+        }
+
+        if (subcommand === 'check') {
+            const result = await this.git.handleVersionCheck();
+            return { success: true, output: result.version, result };
+        }
+
+        return { success: false, output: `Unknown version subcommand: ${subcommand}` };
     }
 
     /**

@@ -3,6 +3,7 @@ const { EventEmitter } = require('events');
 const readline = require('readline');
 const { PluginSandbox, ResourceLimiter } = require('./sandbox');
 const path = require('path');
+const fs = require('fs');
 
 class ExtensionProcess extends EventEmitter {
     constructor(extensionId, extensionPath, manifest, options = {}) {
@@ -498,8 +499,18 @@ class ExtensionProcess extends EventEmitter {
 
     _validateManifest() {
         const requiredFields = ['id', 'name', 'version', 'main'];
-        for (const field of requiredFields) {
-            if (!this.manifest[field]) throw new Error(`Invalid manifest for extension ${this.extensionId}: missing ${field}`);
+        const missingFields = requiredFields.filter(field => !this.manifest[field]);
+
+        if (missingFields.length > 0) {
+            throw new Error(
+                `Invalid manifest for extension ${this.extensionId}: missing required fields: ${missingFields.join(', ')}`
+            );
+        }
+
+        if (!/^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(this.manifest.version)) {
+            throw new Error(
+                `Invalid manifest for extension ${this.extensionId}: version must follow semver format`
+            );
         }
     }
 
@@ -791,19 +802,69 @@ class SandboxedExtension extends EventEmitter {
         this.manifest = manifest;
         this.options = options;
         this.state = 'STOPPED';
+        this.sandbox = null;
     }
 
     async start() {
+        const mainFile = path.join(this.extensionPath, this.manifest.main);
+        if (!fs.existsSync(mainFile)) {
+            throw new Error(`Main file does not exist: ${mainFile}`);
+        }
+
+        this.sandbox = new PluginSandbox(this.extensionId, this.manifest, this.options);
+        this.sandbox.initialize(this.options.api || {});
+
+        const source = fs.readFileSync(mainFile, 'utf8');
+        await this.sandbox.executeCode(source);
+        await this.sandbox.executeCode(`
+            const __ghostExport = module.exports && module.exports.default ? module.exports.default : module.exports;
+            if (typeof __ghostExport !== 'function') {
+                throw new Error('Sandbox extension must export a constructor');
+            }
+            var __ghostExtensionInstance = new __ghostExport();
+            async function __ghostCall(method, params) {
+                if (!__ghostExtensionInstance || typeof __ghostExtensionInstance[method] !== 'function') {
+                    throw new Error('Method not found: ' + method);
+                }
+                return await __ghostExtensionInstance[method](params);
+            }
+            async function __ghostInit(config) {
+                if (__ghostExtensionInstance && typeof __ghostExtensionInstance.init === 'function') {
+                    return await __ghostExtensionInstance.init(config);
+                }
+                return { success: true };
+            }
+            async function __ghostCleanup() {
+                if (__ghostExtensionInstance && typeof __ghostExtensionInstance.cleanup === 'function') {
+                    return await __ghostExtensionInstance.cleanup();
+                }
+                return { success: true };
+            }
+        `);
+
+        await this.sandbox.call('__ghostInit', [this.manifest.config || {}], this.options.startupTimeout);
         this.state = 'RUNNING';
         this.emit('started', { extensionId: this.extensionId });
     }
 
     async stop() {
+        if (this.sandbox && this.state === 'RUNNING') {
+            try {
+                await this.sandbox.call('__ghostCleanup', [], this.options.shutdownTimeout);
+            } catch (error) {
+                // Ignore cleanup errors during shutdown
+            }
+            this.sandbox.terminate();
+        }
         this.state = 'STOPPED';
     }
 
     async call(method, params = {}) {
-        return { success: true };
+        if (!this.sandbox || this.state !== 'RUNNING') {
+            throw new Error(`Extension ${this.extensionId} is not running`);
+        }
+
+        return await this.sandbox.call('__ghostCall', [method, params], this.options.responseTimeout);
     }
 
     async executeExtension(method, params) {
@@ -826,7 +887,10 @@ class ExtensionRuntime extends EventEmitter {
 
     async startExtension(extensionId, extensionPath, manifest, processOptions = {}) {
         if (this.options.verbose || process.env.GHOST_DEBUG) console.log(`[DEBUG] --> START startExtension(${extensionId})`);
-        const extension = new ExtensionProcess(extensionId, extensionPath, manifest, { ...this.options, ...processOptions });
+        const runtimeOptions = { ...this.options, ...processOptions };
+        const extension = runtimeOptions.executionMode === 'sandbox'
+            ? new SandboxedExtension(extensionId, extensionPath, manifest, runtimeOptions)
+            : new ExtensionProcess(extensionId, extensionPath, manifest, runtimeOptions);
 
         // Forward critical events from the individual process to the runtime manager
         extension.on('state-change', (info) => {

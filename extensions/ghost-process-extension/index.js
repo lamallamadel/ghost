@@ -1,7 +1,16 @@
 #!/usr/bin/env node
 
 const { ProcessExtension } = require('./extension.js');
-const { ExtensionSDK, ExtensionRunner } = require('@ghost/extension-sdk');
+
+function loadExtensionSdk() {
+    try {
+        return require('@ghost/extension-sdk');
+    } catch (error) {
+        return require('../../packages/extension-sdk');
+    }
+}
+
+const { ExtensionSDK, ExtensionRunner } = loadExtensionSdk();
 
 class ExtensionWrapper {
     constructor() {

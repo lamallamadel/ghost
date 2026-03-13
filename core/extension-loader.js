@@ -206,6 +206,59 @@ class ExtensionLoader {
     }
 
     /**
+     * Discover extension manifests without dependency resolution or persistence.
+     *
+     * This path is used by metadata-only commands such as `ghost --help`, where
+     * we need command routing information but must avoid spinner output, writes
+     * to ~/.ghost, or any other observable side effects.
+     *
+     * @returns {Promise<Array>} Array of extension metadata with null instances
+     */
+    discoverMetadata() {
+        if (!fs.existsSync(this.extensionsDir)) {
+            return [];
+        }
+
+        const entries = fs.readdirSync(this.extensionsDir, { withFileTypes: true });
+        const extensions = [];
+
+        for (const entry of entries) {
+            if (!entry.isDirectory()) {
+                continue;
+            }
+
+            const extPath = path.join(this.extensionsDir, entry.name);
+            const manifestPath = path.join(extPath, 'manifest.json');
+
+            if (!fs.existsSync(manifestPath)) {
+                continue;
+            }
+
+            try {
+                const manifestContent = fs.readFileSync(manifestPath, 'utf8');
+                const manifest = JSON.parse(manifestContent);
+                this.validateManifest(manifest);
+
+                const mainFile = path.join(extPath, manifest.main);
+                if (!fs.existsSync(mainFile)) {
+                    throw new Error(`Main file not found: ${manifest.main}`);
+                }
+
+                extensions.push({
+                    path: extPath,
+                    manifest,
+                    instance: null,
+                    loaded: new Date().toISOString()
+                });
+            } catch (error) {
+                console.error(`[ExtensionLoader] Failed to load ${entry.name}:`, error.message);
+            }
+        }
+
+        return extensions;
+    }
+
+    /**
      * Load a single extension from a path
      * 
      * FAIL-CLOSED VALIDATION:

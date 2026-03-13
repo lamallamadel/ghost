@@ -42,6 +42,31 @@ const Colors = {
     }
 };
 
+function renderStaticHelp() {
+    return `
+${Colors.BOLD}${Colors.CYAN}GHOST CLI v${VERSION}${Colors.ENDC} - Gateway Launcher
+Zero-dependency Git assistant with extensible architecture
+
+${Colors.BOLD}USAGE:${Colors.ENDC}
+  ghost <command> [subcommand] [options]
+
+${Colors.BOLD}CORE COMMANDS:${Colors.ENDC}
+  ${Colors.CYAN}setup${Colors.ENDC}                         Interactive setup wizard
+  ${Colors.CYAN}doctor${Colors.ENDC}                        Health check
+  ${Colors.CYAN}extension${Colors.ENDC}                     Manage extensions
+  ${Colors.CYAN}gateway${Colors.ENDC}                       Gateway status and diagnostics
+  ${Colors.CYAN}audit-log${Colors.ENDC}                     View and inspect audit logs
+
+${Colors.BOLD}OPTIONS:${Colors.ENDC}
+  --verbose, -v                 Show detailed telemetry
+  --json                        Output in JSON format
+  --no-color                    Disable colored output
+  --help, -h                    Show this help message
+
+Run \`ghost <command> --help\` for command-specific help.
+`;
+}
+
 /**
  * GatewayLauncher - Pure Orchestration Layer
  * 
@@ -4669,7 +4694,7 @@ async function main() {
                 extensionsDir: USER_EXTENSIONS_DIR,
                 bundledExtensionsDir: BUNDLED_EXTENSIONS_DIR
             });
-            await launcher.gateway.initialize();
+            launcher.gateway.initializeMetadataOnly();
             launcher.showHelp();
             return;
         }
@@ -4692,7 +4717,15 @@ async function main() {
 }
 
 if (require.main === module) {
-    main().catch(console.error);
+    const cliArgs = process.argv.slice(2);
+    const wantsHelp = cliArgs.includes('--help') || cliArgs.includes('-h');
+    const hasCommand = cliArgs.some(arg => !arg.startsWith('-'));
+
+    if (wantsHelp || !hasCommand) {
+        fs.writeSync(1, renderStaticHelp());
+    } else {
+        main().catch(console.error);
+    }
 }
 
 function semverParse(input) {

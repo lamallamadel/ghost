@@ -114,6 +114,38 @@ class Gateway {
     }
 
     /**
+     * Initialize registry using metadata-only discovery.
+     *
+     * This avoids dependency graph generation, persistence, and any runtime
+     * startup behavior while still exposing manifest-declared commands.
+     *
+     * @returns {Promise<Object>} Initialization result with loaded extension count and IDs
+     */
+    initializeMetadataOnly() {
+        const loadedExtensions = this.loader.discoverMetadata();
+
+        for (const ext of loadedExtensions) {
+            this.extensions.set(ext.manifest.id, ext);
+        }
+
+        if (this.bundledLoader) {
+            const bundledExtensions = this.bundledLoader.discoverMetadata();
+
+            for (const ext of bundledExtensions) {
+                if (!this.extensions.has(ext.manifest.id)) {
+                    this.extensions.set(ext.manifest.id, ext);
+                }
+            }
+        }
+
+        return {
+            success: true,
+            loaded: this.extensions.size,
+            extensions: Array.from(this.extensions.keys())
+        };
+    }
+
+    /**
      * Retrieve extension metadata from registry
      * 
      * PURE ORCHESTRATION: Returns reference without modification
