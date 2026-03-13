@@ -14,11 +14,36 @@ class ExtensionWrapper {
         this.author = new AuthorExtension(this.sdk);
     }
 
+    _isCommandInvocation(options) {
+        if (!options || typeof options !== 'object') {
+            return false;
+        }
+
+        if (options.coreHandler) {
+            return false;
+        }
+
+        return (
+            typeof options.subcommand === 'string' ||
+            Array.isArray(options.args) ||
+            !!options.flags ||
+            typeof options.canonicalCommandId === 'string'
+        );
+    }
+
     async init(options = {}) {
+        if (!this._isCommandInvocation(options)) {
+            if (options.coreHandler) {
+                this.sdk.setCoreHandler(options.coreHandler);
+            }
+            return { success: true };
+        }
+
         if (options.coreHandler) {
             this.sdk.setCoreHandler(options.coreHandler);
         }
-        return { success: true };
+
+        return await this.author.handleRPCRequest({ method: 'author.init', params: options });
     }
 
     async initExt(params) {

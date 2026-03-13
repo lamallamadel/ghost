@@ -21,8 +21,13 @@ class AuthorExtension {
         this.sdk = sdk;
     }
 
+    _resolveInitTarget(params = {}) {
+        const raw = params.subcommand || params.args?.[0] || '';
+        return String(raw).trim();
+    }
+
     async handleInit(params) {
-        const name = params.args?.[0];
+        const name = this._resolveInitTarget(params);
         if (!name) return { success: false, output: "Please specify an extension name (e.g., my-helper)." };
 
         const extId = name.startsWith('ghost-') ? name : `ghost-${name}-extension`;

@@ -671,10 +671,34 @@ class GatewayLauncher {
             await this.handleWebhookCommand(parsedArgs);
         } else if (parsedArgs.command === 'dev') {
             await this.handleDevCommand(parsedArgs);
+        } else if (parsedArgs.command === 'init' && parsedArgs.subcommand === 'cli') {
+            await this.handleCliInitCommand(parsedArgs);
         } else {
             // Pure routing: delegate domain commands to extensions
             await this.forwardToExtension(parsedArgs);
         }
+    }
+
+    async handleCliInitCommand(parsedArgs) {
+        if (!process.stdin.isTTY || !process.stdout.isTTY) {
+            console.log(`${Colors.WARNING}Interactive CLI shell requires a TTY.${Colors.ENDC}`);
+            return;
+        }
+
+        const cliExtension = this.gateway.getExtension('ghost-cli-extension');
+        if (!cliExtension) {
+            throw new Error('ghost-cli-extension is not available');
+        }
+
+        const wrapperPath = path.join(cliExtension.path, cliExtension.manifest.main || 'index.js');
+        const CliWrapper = require(wrapperPath);
+        const wrapper = new CliWrapper();
+
+        await wrapper.init({
+            coreHandler: async (request) => await this.forwardIntent('ghost-cli-extension', request)
+        });
+
+        await wrapper.start({ flags: parsedArgs.flags || {} });
     }
 
     /**
