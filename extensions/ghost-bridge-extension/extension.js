@@ -122,8 +122,19 @@ class BridgeExtension {
         const session = this.activeSessions.get(sessionId);
         if (session) {
             // In real WebSocket, we'd do: session.socket.send(JSON.stringify({ event, data }))
-            console.log(`${Colors.CYAN}[Bridge Event]${Colors.ENDC} Notifying ${session.editor} of ${event}`);
+            this._emitDiagnostic(`${Colors.CYAN}[Bridge Event]${Colors.ENDC} Notifying ${session.editor} of ${event}`);
         }
+    }
+
+    _emitDiagnostic(message) {
+        if (!message) return;
+
+        if (process.env.GHOST_EXTENSION_MODE === 'subprocess') {
+            process.stderr.write(`${message}\n`);
+            return;
+        }
+
+        console.log(message);
     }
 
     async handleRPCRequest(request) {
