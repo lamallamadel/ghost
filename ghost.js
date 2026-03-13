@@ -3270,6 +3270,8 @@ complete -c ghost -l help -s h -d "Show help message"`);
      * - Extract commands from manifests
      */
     _getAllAvailableCommands() {
+        this._ensureCommandRegistry();
+
         if (this.commandRegistry) {
             return this.commandRegistry.listCommandIds();
         }
@@ -3283,6 +3285,30 @@ complete -c ghost -l help -s h -d "Show help message"`);
             }
         }
         return Array.from(commands);
+    }
+
+    _ensureCommandRegistry() {
+        if (this.commandRegistry || !this.gateway) {
+            return;
+        }
+
+        this.commandRegistry = new CommandRegistry({
+            gateway: this.gateway,
+            repoRoot: process.cwd()
+        }).build();
+    }
+
+    _getExtensionForDisplayCommand(commandId) {
+        this._ensureCommandRegistry();
+
+        if (this.commandRegistry && this.commandRegistry.byId && this.commandRegistry.byId.has(commandId)) {
+            const entry = this.commandRegistry.byId.get(commandId);
+            if (entry) {
+                return this.gateway.getExtension(entry.extensionId);
+            }
+        }
+
+        return this._findExtensionForCommand(commandId);
     }
 
     /**
@@ -4491,6 +4517,8 @@ See [Extension API Documentation](https://github.com/lamallamadel/ghost/blob/mai
      * - Dynamically lists extension commands
      */
     showHelp() {
+        this._ensureCommandRegistry();
+
         // Get dynamically available extension commands
         const extensionCommands = this._getAllAvailableCommands();
         console.log(`
@@ -4547,7 +4575,7 @@ ${Colors.BOLD}WORKFLOW COMMANDS:${Colors.ENDC}`);
         // Dynamically list extension commands
         if (extensionCommands.length > 0) {
             extensionCommands.forEach(cmd => {
-                const ext = this._findExtensionForCommand(cmd);
+                const ext = this._getExtensionForDisplayCommand(cmd);
                 const extName = ext ? ext.manifest.name : 'unknown';
                 console.log(`  ${Colors.CYAN}${cmd.padEnd(30)}${Colors.ENDC} ${Colors.DIM}(${extName})${Colors.ENDC}`);
             });
@@ -4788,15 +4816,7 @@ async function main() {
 }
 
 if (require.main === module) {
-    const cliArgs = process.argv.slice(2);
-    const wantsHelp = cliArgs.includes('--help') || cliArgs.includes('-h');
-    const hasCommand = cliArgs.some(arg => !arg.startsWith('-'));
-
-    if (wantsHelp || !hasCommand) {
-        fs.writeSync(1, renderStaticHelp());
-    } else {
-        main().catch(console.error);
-    }
+    main().catch(console.error);
 }
 
 function semverParse(input) {
