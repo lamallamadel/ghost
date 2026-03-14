@@ -12,7 +12,7 @@ const { AuthManager } = require('./auth-manager');
 const { AdminDashboard } = require('./admin-dashboard');
 const { DownloadTracker } = require('./download-tracker');
 const { HealthScorer } = require('./health-scorer');
-const { CodeSigningManager } = require('../code-signing');
+const { CodeSigningManager } = require('./code-signing');
 
 class MarketplaceServer {
     constructor(options = {}) {
@@ -30,7 +30,7 @@ class MarketplaceServer {
             codeSigning: this.codeSigning,
             extensionDir: options.extensionDir || path.join(__dirname, '..', '..', 'extensions')
         });
-        this.uploadDir = options.uploadDir || path.join(__dirname, 'uploads');
+        this.uploadDir = options.uploadDir || process.env.UPLOAD_DIR || path.join(__dirname, 'uploads');
         this.healthScoreCache = new Map();
         this.healthScoreCacheTTL = 3600000;
         this.startTime = Date.now();

@@ -1,5 +1,5 @@
-const { IntrusionDetectionSystem } = require('../intrusion-detection');
-const { CodeSigningManager } = require('../code-signing');
+const { IntrusionDetectionSystem } = require('./intrusion-detection');
+const { CodeSigningManager } = require('./code-signing');
 const zlib = require('zlib');
 const tar = require('tar-stream');
 

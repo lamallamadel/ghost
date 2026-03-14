@@ -7,10 +7,10 @@ class AuthManager {
     constructor(options = {}) {
         this.dataDir = options.dataDir || path.join(os.homedir(), '.ghost', 'marketplace');
         this.usersFile = path.join(this.dataDir, 'users.json');
-        this.jwtSecret = options.jwtSecret || this._generateSecret();
         this.tokenExpiry = options.tokenExpiry || 24 * 60 * 60 * 1000;
         this.users = new Map();
         this._ensureDataDir();
+        this.jwtSecret = options.jwtSecret || this._generateSecret();
         this._loadUsers();
     }
 
