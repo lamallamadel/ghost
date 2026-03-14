@@ -11,7 +11,7 @@ FROM base AS dependencies
 
 COPY core/marketplace-backend/package*.json ./
 
-RUN npm ci --only=production && \
+RUN npm install --production && \
     npm cache clean --force
 
 FROM base AS build
@@ -30,8 +30,8 @@ ENV NODE_ENV=production \
     DB_PATH=/data/marketplace.db \
     UPLOAD_DIR=/data/uploads
 
-RUN addgroup -g 1000 ghost && \
-    adduser -D -u 1000 -G ghost ghost && \
+RUN addgroup -g 1001 ghost && \
+    adduser -D -u 1001 -G ghost ghost && \
     mkdir -p /data/uploads && \
     chown -R ghost:ghost /data
 
