@@ -1,0 +1,46 @@
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: ghost-ratelimit
+  namespace: ghost-gateway
+spec:
+  rateLimit:
+    average: 100
+    burst: 50
+    period: 1m
+
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: ghost-cors
+  namespace: ghost-gateway
+spec:
+  headers:
+    accessControlAllowMethods:
+      - GET
+      - POST
+      - PUT
+      - DELETE
+      - OPTIONS
+    accessControlAllowHeaders:
+      - Content-Type
+      - Authorization
+    accessControlAllowOriginList:
+      - "https://ghost-cli.dev"
+    accessControlMaxAge: 600
+
+---
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: ghost-secure-headers
+  namespace: ghost-gateway
+spec:
+  headers:
+    stsSeconds: 31536000
+    stsIncludeSubdomains: true
+    frameDeny: true
+    contentTypeNosniff: true
+    browserXssFilter: true

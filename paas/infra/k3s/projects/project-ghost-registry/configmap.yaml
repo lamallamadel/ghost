@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ghost-registry-config
+  namespace: project-ghost-registry
+data:
+  NODE_ENV: "production"
+  PORT: "3000"
+  DATA_DIR: "/data"

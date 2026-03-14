@@ -1,0 +1,10 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ghost-marketplace
+  namespace: project-ghost-deployments
+rules:
+  - apiGroups: [""]
+    resources: ["secrets", "configmaps"]
+    resourceNames: ["ghost-deployments-secret", "ghost-deployments-config"]
+    verbs: ["get"]

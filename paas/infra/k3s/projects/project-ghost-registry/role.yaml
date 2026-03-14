@@ -1,0 +1,10 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ghost-registry
+  namespace: project-ghost-registry
+rules:
+  - apiGroups: [""]
+    resources: ["secrets", "configmaps"]
+    resourceNames: ["ghost-registry-secret", "ghost-registry-config"]
+    verbs: ["get"]

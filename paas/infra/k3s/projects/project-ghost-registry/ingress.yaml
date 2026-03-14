@@ -1,0 +1,21 @@
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: ghost-registry
+  namespace: project-ghost-registry
+  annotations:
+    traefik.ingress.kubernetes.io/router.middlewares: >-
+      ghost-gateway-ghost-ratelimit@kubernetescrd,
+      ghost-gateway-ghost-cors@kubernetescrd,
+      ghost-gateway-ghost-secure-headers@kubernetescrd
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`registry.ghost-cli.dev`)
+      kind: Rule
+      services:
+        - name: ghost-registry
+          port: 3000
+  tls:
+    certResolver: letsencrypt
