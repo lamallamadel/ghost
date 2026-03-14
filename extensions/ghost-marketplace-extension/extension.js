@@ -8,6 +8,18 @@
 const { ExtensionSDK } = require('@ghost/extension-sdk');
 const path = require('path');
 const os = require('os');
+const fs = require('fs');
+
+const GHOSTRC_PATH = path.join(os.homedir(), '.ghost', 'config', 'ghostrc.json');
+const DEFAULT_REGISTRY_URL = 'https://registry.ghost-cli.dev/api';
+
+function resolveRegistryUrl() {
+    try {
+        const rc = JSON.parse(fs.readFileSync(GHOSTRC_PATH, 'utf8'));
+        if (rc?.marketplace?.registryUrl) return rc.marketplace.registryUrl;
+    } catch {}
+    return process.env.GHOST_MARKETPLACE_URL || DEFAULT_REGISTRY_URL;
+}
 
 const Colors = {
     GREEN: '\x1b[32m',
@@ -21,7 +33,7 @@ const Colors = {
 class MarketplaceExtension {
     constructor(sdk) {
         this.sdk = sdk;
-        this.registryUrl = 'https://registry.ghost-cli.dev/api';
+        this.registryUrl = resolveRegistryUrl();
     }
 
     async handleBrowse(params) {

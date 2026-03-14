@@ -1,6 +1,10 @@
 const { IntentBuilder } = require('./intent-builder');
 const { RPCClient } = require('./rpc-client');
 const { IntentError, ValidationError, RateLimitError } = require('./errors');
+const path = require('path');
+const os = require('os');
+
+const GHOSTRC_PATH = path.join(os.homedir(), '.ghost', 'config', 'ghostrc.json');
 
 class ExtensionSDK {
     constructor(extensionId, options = {}) {
@@ -390,7 +394,7 @@ class ExtensionSDK {
         return await this.emitIntent({
             type: 'filesystem',
             operation: 'read',
-            params: { path: 'C:/Users/PRO/.ghost/config/ghostrc.json' }
+            params: { path: GHOSTRC_PATH }
         }).then(content => JSON.parse(content));
     }
 

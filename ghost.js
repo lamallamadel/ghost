@@ -1279,6 +1279,12 @@ class GatewayLauncher {
 
         if (!subcommand || subcommand === 'help') {
             console.log(`${Colors.BOLD}Marketplace Commands:${Colors.ENDC}
+  ghost marketplace login                 Log in to the marketplace
+    Options:
+      --username=<name>                     Username (prompts if omitted)
+      --password=<pass>                     Password (prompts if omitted)
+  ghost marketplace logout                Remove saved auth token
+  ghost marketplace whoami                Show currently logged-in user
   ghost marketplace browse [category]     Browse available extensions
   ghost marketplace search <query>        Search for extensions
   ghost marketplace info <id>             Show extension details
@@ -1840,6 +1846,156 @@ class GatewayLauncher {
         } else if (subcommand === 'refresh') {
             marketplace.clearCache();
             console.log(`${Colors.GREEN}✓${Colors.ENDC} Marketplace cache cleared\n`);
+        } else if (subcommand === 'login') {
+            const readline = require('readline');
+            const https = require('https');
+            const http = require('http');
+
+            let username = parsedArgs.flags.username;
+            let password = parsedArgs.flags.password;
+
+            const prompt = (question) => new Promise(resolve => {
+                const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+                rl.question(question, answer => { rl.close(); resolve(answer); });
+            });
+
+            if (!username) username = await prompt('Username: ');
+            if (!password) {
+                process.stdout.write('Password: ');
+                // Hide password input
+                process.stdin.setRawMode && process.stdin.setRawMode(true);
+                password = await new Promise(resolve => {
+                    let pass = '';
+                    process.stdin.resume();
+                    process.stdin.setEncoding('utf8');
+                    const onData = (ch) => {
+                        if (ch === '\n' || ch === '\r' || ch === '\u0003') {
+                            process.stdin.setRawMode && process.stdin.setRawMode(false);
+                            process.stdin.pause();
+                            process.stdin.removeListener('data', onData);
+                            process.stdout.write('\n');
+                            resolve(pass);
+                        } else if (ch === '\u007f') {
+                            pass = pass.slice(0, -1);
+                        } else {
+                            pass += ch;
+                        }
+                    };
+                    process.stdin.on('data', onData);
+                });
+            }
+
+            try {
+                const marketplaceUrl = process.env.GHOST_MARKETPLACE_URL || 'https://marketplace.ghost-cli.dev';
+                const loginUrl = new URL('/api/auth/login', marketplaceUrl);
+                const protocol = loginUrl.protocol === 'https:' ? https : http;
+
+                const result = await new Promise((resolve, reject) => {
+                    const body = JSON.stringify({ username, password });
+                    const req = protocol.request({
+                        hostname: loginUrl.hostname,
+                        port: loginUrl.port,
+                        path: loginUrl.pathname,
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Content-Length': Buffer.byteLength(body)
+                        }
+                    }, (res) => {
+                        const chunks = [];
+                        res.on('data', c => chunks.push(c));
+                        res.on('end', () => {
+                            try {
+                                const data = JSON.parse(Buffer.concat(chunks).toString());
+                                if (res.statusCode >= 200 && res.statusCode < 300) resolve(data);
+                                else reject(new Error(data.error || `HTTP ${res.statusCode}`));
+                            } catch (e) { reject(e); }
+                        });
+                    });
+                    req.on('error', reject);
+                    req.write(body);
+                    req.end();
+                });
+
+                // Decode token to get expiry
+                const tokenParts = result.token.split('.');
+                let expiresAt = null;
+                try {
+                    const payload = JSON.parse(Buffer.from(tokenParts[1], 'base64url').toString());
+                    if (payload.exp) expiresAt = payload.exp * 1000;
+                } catch {}
+
+                // Save token to ghostrc
+                const ghostrcDir = path.join(os.homedir(), '.ghost', 'config');
+                if (!fs.existsSync(ghostrcDir)) {
+                    fs.mkdirSync(ghostrcDir, { recursive: true, mode: 0o700 });
+                }
+                const ghostrcPath = path.join(ghostrcDir, 'ghostrc.json');
+                let rc = {};
+                try { rc = JSON.parse(fs.readFileSync(ghostrcPath, 'utf8')); } catch {}
+                rc.marketplace = { ...rc.marketplace, token: result.token, expiresAt };
+                fs.writeFileSync(ghostrcPath, JSON.stringify(rc, null, 2), { mode: 0o600 });
+
+                console.log(`${Colors.GREEN}✓${Colors.ENDC} Logged in as ${Colors.BOLD}${result.user.username}${Colors.ENDC}\n`);
+                if (expiresAt) {
+                    console.log(`${Colors.DIM}Token expires: ${new Date(expiresAt).toLocaleString()}${Colors.ENDC}\n`);
+                }
+            } catch (error) {
+                console.error(`${Colors.FAIL}Login failed: ${error.message}${Colors.ENDC}\n`);
+                process.exit(1);
+            }
+        } else if (subcommand === 'logout') {
+            const ghostrcPath = path.join(os.homedir(), '.ghost', 'config', 'ghostrc.json');
+            try {
+                let rc = {};
+                try { rc = JSON.parse(fs.readFileSync(ghostrcPath, 'utf8')); } catch {}
+                if (rc.marketplace) {
+                    delete rc.marketplace.token;
+                    delete rc.marketplace.expiresAt;
+                }
+                fs.writeFileSync(ghostrcPath, JSON.stringify(rc, null, 2), { mode: 0o600 });
+                console.log(`${Colors.GREEN}✓${Colors.ENDC} Logged out successfully\n`);
+            } catch (error) {
+                console.error(`${Colors.FAIL}Logout failed: ${error.message}${Colors.ENDC}\n`);
+                process.exit(1);
+            }
+        } else if (subcommand === 'whoami') {
+            const ghostrcPath = path.join(os.homedir(), '.ghost', 'config', 'ghostrc.json');
+            try {
+                let rc = {};
+                try { rc = JSON.parse(fs.readFileSync(ghostrcPath, 'utf8')); } catch {}
+                const token = rc?.marketplace?.token;
+                if (!token) {
+                    console.log(`${Colors.WARNING}Not logged in. Run ${Colors.CYAN}ghost marketplace login${Colors.ENDC}${Colors.WARNING} to authenticate.${Colors.ENDC}\n`);
+                    return;
+                }
+
+                // Decode token payload (no verification needed — just display)
+                const parts = token.split('.');
+                if (parts.length !== 3) {
+                    console.error(`${Colors.FAIL}Invalid token stored. Please log in again.${Colors.ENDC}\n`);
+                    process.exit(1);
+                }
+                const payload = JSON.parse(Buffer.from(parts[1], 'base64url').toString());
+                const expiresAt = payload.exp ? new Date(payload.exp * 1000) : null;
+                const expired = expiresAt && Date.now() > expiresAt.getTime();
+
+                if (parsedArgs.flags.json) {
+                    console.log(JSON.stringify({ userId: payload.userId, isAdmin: payload.isAdmin, expiresAt: expiresAt?.toISOString(), expired }, null, 2));
+                } else {
+                    console.log(`${Colors.BOLD}${Colors.CYAN}Logged-in User${Colors.ENDC}`);
+                    console.log(`  User ID:  ${payload.userId}`);
+                    console.log(`  Admin:    ${payload.isAdmin ? `${Colors.GREEN}yes${Colors.ENDC}` : 'no'}`);
+                    if (expiresAt) {
+                        const status = expired ? `${Colors.FAIL}(expired)${Colors.ENDC}` : `${Colors.GREEN}(valid)${Colors.ENDC}`;
+                        console.log(`  Expires:  ${expiresAt.toLocaleString()} ${status}`);
+                    }
+                    console.log('');
+                }
+            } catch (error) {
+                console.error(`${Colors.FAIL}Error reading credentials: ${error.message}${Colors.ENDC}\n`);
+                process.exit(1);
+            }
         } else {
             console.error(`${Colors.FAIL}Error: Unknown marketplace subcommand '${subcommand}'${Colors.ENDC}\n`);
             console.log(`Run ${Colors.CYAN}ghost marketplace help${Colors.ENDC} to see all marketplace commands\n`);

@@ -5,14 +5,35 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const MARKETPLACE_REGISTRY_URL = process.env.GHOST_MARKETPLACE_URL || 'https://registry.ghost-cli.dev/api';
+const DEFAULT_REGISTRY_URL = 'https://registry.ghost-cli.dev/api';
+const GHOSTRC_PATH = path.join(os.homedir(), '.ghost', 'config', 'ghostrc.json');
 const DEFAULT_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAw8+JBKqK5vHxqD8xhN2K
 -----END PUBLIC KEY-----`;
 
+function resolveRegistryUrl() {
+    try {
+        const rc = JSON.parse(fs.readFileSync(GHOSTRC_PATH, 'utf8'));
+        if (rc?.marketplace?.registryUrl) return rc.marketplace.registryUrl;
+    } catch {}
+    return process.env.GHOST_MARKETPLACE_URL || DEFAULT_REGISTRY_URL;
+}
+
+function readAuthToken() {
+    try {
+        const rc = JSON.parse(fs.readFileSync(GHOSTRC_PATH, 'utf8'));
+        const token = rc?.marketplace?.token;
+        const expiresAt = rc?.marketplace?.expiresAt;
+        if (token && (!expiresAt || Date.now() < expiresAt)) {
+            return token;
+        }
+    } catch {}
+    return null;
+}
+
 class MarketplaceService {
     constructor(options = {}) {
-        this.registryUrl = options.registryUrl || MARKETPLACE_REGISTRY_URL;
+        this.registryUrl = options.registryUrl || resolveRegistryUrl();
         this.publicKey = options.publicKey || DEFAULT_PUBLIC_KEY;
         this.cacheDir = path.join(os.homedir(), '.ghost', 'marketplace-cache');
         this.cacheTTL = options.cacheTTL || 3600000;
@@ -283,15 +304,21 @@ module.exports = ${this._toPascalCase(manifest.id)}Extension;
             const url = new URL(this.registryUrl + path);
             const protocol = url.protocol === 'https:' ? https : http;
             
+            const headers = {
+                'Content-Type': 'application/json',
+                'User-Agent': 'ghost-cli-marketplace/1.0'
+            };
+            const authToken = readAuthToken();
+            if (authToken) {
+                headers['Authorization'] = `Bearer ${authToken}`;
+            }
+
             const options = {
                 hostname: url.hostname,
                 port: url.port,
                 path: url.pathname + url.search,
                 method,
-                headers: {
-                    'Content-Type': 'application/json',
-                    'User-Agent': 'ghost-cli-marketplace/1.0'
-                }
+                headers
             };
 
             if (body) {
