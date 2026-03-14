@@ -52,21 +52,24 @@ CLI args → GatewayLauncher (ghost.js)
 
 ### Core Infrastructure (`core/`)
 - `gateway.js` — Extension registry: discovers, registers, and routes to extensions
+- `command-registry.js` — `CommandRegistry`: deterministic command routing built from extension manifests. Replaces ghost.js if/else dispatch. Supports namespaced invocation (`ghost policy:list`), two-word sugar (`ghost policy list`), and legacy flat aliases. Tie-breaks by `command.priority` (default 0) then lexicographic extension ID. Optional `extensions.lock.json` (or `config/extensions.lock.json`) pins command owners via `commandOwners`.
 - `extension-loader.js` — Filesystem discovery + manifest validation (fail-closed); uses `DependencyResolver` to determine load order
 - `runtime.js` — `ExtensionProcess`: subprocess lifecycle over JSON-RPC with state machine (`STOPPED → STARTING → RUNNING → STOPPING`), heartbeat monitoring, exponential backoff restarts
 - `dependency-resolver.js` — Topological sort (Kahn's algorithm) + cycle detection (Tarjan's SCC) + semver version constraint validation for extension load ordering
+- `marketplace.js` — `MarketplaceService`: fetch/search/install/uninstall extensions from registry (`GHOST_MARKETPLACE_URL`); verified via RSA public key; caches to `~/.ghost/marketplace-cache`. Full backend in `marketplace-backend/` (Express server, SQLite, health scoring, security scanning).
 - `telemetry.js` — Metrics; wires OTLP/Prometheus exporters (`core/exporters/`)
 - `qos/` — Rate limiting suite: `token-bucket.js` (CIR/BC), `advanced-rate-limiter.js`, `enhanced-circuit-breaker.js`, `fair-queuing.js`, `global-rate-limiter.js`
 - `validators/` — Input validators: `path-validator.js`, `command-validator.js`, `network-validator.js`, `entropy-validator.js`
 - `hot-reload.js` + `dev-mode.js` — File watching with debounce, graceful shutdown, state preservation (`serialize`/`deserialize` hooks), request queuing, rollback on failure
 - `analytics/` — `AnalyticsPlatform` with WebSocket server on port 9877; desktop connects here for real-time metrics
+- `webhooks/` — Webhook subsystem: `WebhookController`, `WebhookEventStore`, `WebhookRouter`, `WebhookTransformPipeline`, `WebhookDeliveryQueue`
 - `mesh/` — Multi-agent mesh network: `AgentMeshNetwork`, `AgentDiscoveryService`, `CRDTStateSync`, `WorkflowOrchestrator`
 - Security: `security-hardening.js`, `security-policy-engine.js`, `intrusion-detection.js`, `code-signing.js`, `secrets-manager.js`, `sandbox.js`
 
 ### Extensions
 Extensions are Node.js subprocesses communicating via JSON-RPC over stdio. Extension discovery order:
 1. `~/.ghost/extensions/` (user extensions, take precedence on ID collision)
-2. `extensions/` (bundled, e.g. `ghost-git-extension`)
+2. `extensions/` (24 bundled extensions; key ones: `ghost-git-extension`, `ghost-agent-extension`, `ghost-ai-extension`, `ghost-bridge-extension`, `ghost-policy-extension`, `ghost-security-extension`, `ghost-marketplace-extension`)
 
 Each extension has a `manifest.json` validated against `core/manifest-schema.json`:
 ```json
