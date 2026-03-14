@@ -1,0 +1,81 @@
+name: Publish Ghost Registry Image
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - 'registry/**'
+      - '.github/workflows/publish-ghost-registry-image.yml'
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Optional explicit image tag'
+        required: false
+        type: string
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set lowercase owner
+        id: owner
+        run: |
+          echo "value=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Set image tags
+        id: meta
+        run: |
+          OWNER='${{ steps.owner.outputs.value }}'
+          IMAGE="ghcr.io/${OWNER}/ghost-registry"
+          SHORT_SHA="$(git rev-parse --short HEAD)"
+
+          if [ -n "${{ github.event.inputs.image_tag }}" ]; then
+            PRIMARY_TAG="${{ github.event.inputs.image_tag }}"
+          elif [ "${GITHUB_REF_NAME}" = "main" ] || [ "${GITHUB_REF_NAME}" = "master" ]; then
+            PRIMARY_TAG="dev"
+          else
+            PRIMARY_TAG="${GITHUB_REF_NAME}"
+          fi
+
+          {
+            echo "image=${IMAGE}"
+            echo "primary_tag=${PRIMARY_TAG}"
+            echo "short_sha=${SHORT_SHA}"
+            echo "tags=${IMAGE}:${PRIMARY_TAG},${IMAGE}:sha-${SHORT_SHA}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Publishing tags: ${IMAGE}:${PRIMARY_TAG} and ${IMAGE}:sha-${SHORT_SHA}"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./registry
+          file: ./registry/Dockerfile
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+
+      - name: Smoke check image metadata
+        run: |
+          echo "Image pushed:"
+          echo "  ${{ steps.meta.outputs.image }}:${{ steps.meta.outputs.primary_tag }}"
+          echo "  ${{ steps.meta.outputs.image }}:sha-${{ steps.meta.outputs.short_sha }}"
