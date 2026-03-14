@@ -92,7 +92,25 @@ class MarketplaceServer {
                 return;
             }
 
-            if (pathname === '/api/health' && method === 'GET') {
+            if ((pathname === '/' || pathname === '') && method === 'GET') {
+                const pkg = require('./package.json');
+                res.writeHead(200);
+                res.end(JSON.stringify({
+                    name: 'Ghost Extension Marketplace',
+                    version: pkg.version,
+                    endpoints: {
+                        health:    'GET  /api/health',
+                        browse:    'GET  /api/extensions',
+                        publish:   'POST /api/extensions',
+                        extension: 'GET  /api/extensions/:id',
+                        download:  'GET  /api/extensions/:id/versions/:version',
+                        rate:      'POST /api/extensions/:id/rate',
+                        reviews:   'GET  /api/extensions/:id/reviews',
+                        login:     'POST /api/auth/login',
+                        register:  'POST /api/auth/register',
+                    }
+                }, null, 2));
+            } else if (pathname === '/api/health' && method === 'GET') {
                 await this._handleHealth(req, res);
             } else if (pathname === '/api/extensions' && method === 'POST') {
                 await this._handlePublish(req, res, token);
