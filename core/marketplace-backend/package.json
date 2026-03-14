@@ -20,6 +20,8 @@
   "author": "Adel Lamallam",
   "license": "MIT",
   "dependencies": {
+    "busboy": "^1.6.0",
+    "jsonwebtoken": "^9.0.0",
     "sqlite3": "^5.1.6",
     "tar-stream": "^3.1.6"
   },

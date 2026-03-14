@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const jwt = require('jsonwebtoken');
 
 class AuthManager {
     constructor(options = {}) {
@@ -9,8 +10,13 @@ class AuthManager {
         this.usersFile = path.join(this.dataDir, 'users.json');
         this.tokenExpiry = options.tokenExpiry || 24 * 60 * 60 * 1000;
         this.users = new Map();
+
+        if (!process.env.JWT_SECRET) {
+            throw new Error('[AuthManager] JWT_SECRET environment variable is required');
+        }
+        this.jwtSecret = process.env.JWT_SECRET;
+
         this._ensureDataDir();
-        this.jwtSecret = options.jwtSecret || this._generateSecret();
         this._loadUsers();
     }
 
@@ -18,17 +24,6 @@ class AuthManager {
         if (!fs.existsSync(this.dataDir)) {
             fs.mkdirSync(this.dataDir, { recursive: true, mode: 0o700 });
         }
-    }
-
-    _generateSecret() {
-        const secretFile = path.join(this.dataDir, 'jwt-secret.key');
-        if (fs.existsSync(secretFile)) {
-            return fs.readFileSync(secretFile, 'utf8');
-        }
-        
-        const secret = crypto.randomBytes(64).toString('hex');
-        fs.writeFileSync(secretFile, secret, { mode: 0o600 });
-        return secret;
     }
 
     _loadUsers() {
@@ -69,7 +64,7 @@ class AuthManager {
 
         const id = this.users.size + 1;
         const passwordHash = this._hashPassword(password);
-        
+
         const user = {
             id,
             username,
@@ -83,7 +78,7 @@ class AuthManager {
         this.users.set(id, user);
         this._saveUsers();
 
-        const token = this._generateToken(user);
+        const token = this._createToken(user.id, user.isAdmin);
 
         return {
             success: true,
@@ -94,7 +89,7 @@ class AuthManager {
 
     login(username, password) {
         let user = null;
-        
+
         for (const u of this.users.values()) {
             if (u.username === username) {
                 user = u;
@@ -110,7 +105,7 @@ class AuthManager {
             return { success: false, error: 'Invalid credentials' };
         }
 
-        const token = this._generateToken(user);
+        const token = this._createToken(user.id, user.isAdmin);
 
         return {
             success: true,
@@ -119,28 +114,23 @@ class AuthManager {
         };
     }
 
+    _createToken(userId, isAdmin) {
+        return jwt.sign({ userId, isAdmin }, this.jwtSecret, {
+            algorithm: 'HS256',
+            expiresIn: Math.floor(this.tokenExpiry / 1000),
+            issuer: 'ghost-marketplace',
+            audience: 'ghost-cli'
+        });
+    }
+
     verifyToken(token) {
         try {
-            const parts = token.split('.');
-            if (parts.length !== 3) {
-                return null;
-            }
-
-            const header = JSON.parse(Buffer.from(parts[0], 'base64').toString());
-            const payload = JSON.parse(Buffer.from(parts[1], 'base64').toString());
-            const signature = parts[2];
-
-            if (payload.exp < Date.now()) {
-                return null;
-            }
-
-            const expectedSignature = this._sign(parts[0] + '.' + parts[1]);
-            if (signature !== expectedSignature) {
-                return null;
-            }
-
-            return payload;
-        } catch (error) {
+            return jwt.verify(token, this.jwtSecret, {
+                algorithms: ['HS256'],
+                issuer: 'ghost-marketplace',
+                audience: 'ghost-cli'
+            });
+        } catch {
             return null;
         }
     }
@@ -156,34 +146,6 @@ class AuthManager {
         this._saveUsers();
 
         return { success: true, user: this._sanitizeUser(user) };
-    }
-
-    _generateToken(user) {
-        const header = {
-            alg: 'HS256',
-            typ: 'JWT'
-        };
-
-        const payload = {
-            id: user.id,
-            username: user.username,
-            isAdmin: user.isAdmin,
-            iat: Date.now(),
-            exp: Date.now() + this.tokenExpiry
-        };
-
-        const headerB64 = Buffer.from(JSON.stringify(header)).toString('base64');
-        const payloadB64 = Buffer.from(JSON.stringify(payload)).toString('base64');
-        const signature = this._sign(headerB64 + '.' + payloadB64);
-
-        return `${headerB64}.${payloadB64}.${signature}`;
-    }
-
-    _sign(data) {
-        return crypto
-            .createHmac('sha256', this.jwtSecret)
-            .update(data)
-            .digest('base64');
     }
 
     _hashPassword(password) {

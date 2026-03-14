@@ -4,6 +4,7 @@ const querystring = require('querystring');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const busboy = require('busboy');
 const { Database } = require('./database');
 const { SecurityScanner } = require('./security-scanner');
 const { ManifestValidator } = require('./manifest-validator');
@@ -79,7 +80,8 @@ class MarketplaceServer {
             const token = req.headers.authorization?.replace('Bearer ', '');
             
             if (pathname.startsWith('/api/admin/')) {
-                if (!token || !this.authManager.verifyToken(token)?.isAdmin) {
+                const decoded = this.authManager.verifyToken(token);
+                if (!decoded || !decoded.isAdmin) {
                     res.writeHead(403);
                     res.end(JSON.stringify({ error: 'Admin access required' }));
                     return;
@@ -427,62 +429,59 @@ class MarketplaceServer {
     }
 
     async _parseMultipartUpload(req) {
-        return new Promise((resolve, reject) => {
-            const boundary = req.headers['content-type']?.split('boundary=')[1];
-            if (!boundary) {
-                reject(new Error('No boundary found'));
-                return;
-            }
+        const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 
-            let buffer = Buffer.alloc(0);
-            req.on('data', chunk => {
-                buffer = Buffer.concat([buffer, chunk]);
+        return new Promise((resolve, reject) => {
+            const bb = busboy({
+                headers: req.headers,
+                limits: { fileSize: MAX_FILE_SIZE, files: 1, fields: 5 }
             });
 
-            req.on('end', () => {
-                try {
-                    const parts = this._parseMultipartData(buffer, boundary);
-                    const file = parts.file;
-                    const manifest = JSON.parse(parts.manifest.toString());
-                    resolve({ file, manifest });
-                } catch (error) {
-                    reject(error);
+            let fileBuffer = null;
+            let manifest = null;
+            let fileLimitExceeded = false;
+
+            bb.on('file', (name, stream) => {
+                const chunks = [];
+                stream.on('data', chunk => chunks.push(chunk));
+                stream.on('limit', () => {
+                    fileLimitExceeded = true;
+                    stream.resume();
+                });
+                stream.on('end', () => {
+                    if (!fileLimitExceeded) {
+                        fileBuffer = Buffer.concat(chunks);
+                    }
+                });
+                stream.on('error', reject);
+            });
+
+            bb.on('field', (name, value) => {
+                if (name === 'manifest') {
+                    try {
+                        manifest = JSON.parse(value);
+                    } catch {
+                        // handled in finish
+                    }
                 }
             });
 
-            req.on('error', reject);
+            bb.on('finish', () => {
+                if (fileLimitExceeded) {
+                    return reject(new Error('File exceeds 10MB limit'));
+                }
+                if (!fileBuffer) {
+                    return reject(new Error('No file uploaded'));
+                }
+                if (!manifest) {
+                    return reject(new Error('No manifest provided'));
+                }
+                resolve({ file: fileBuffer, manifest });
+            });
+
+            bb.on('error', reject);
+            req.pipe(bb);
         });
-    }
-
-    _parseMultipartData(buffer, boundary) {
-        const boundaryBuffer = Buffer.from(`--${boundary}`);
-        const parts = {};
-        let offset = 0;
-
-        while (offset < buffer.length) {
-            const boundaryIndex = buffer.indexOf(boundaryBuffer, offset);
-            if (boundaryIndex === -1) break;
-
-            const headerEnd = buffer.indexOf('\r\n\r\n', boundaryIndex);
-            if (headerEnd === -1) break;
-
-            const headers = buffer.slice(boundaryIndex + boundaryBuffer.length, headerEnd).toString();
-            const nameMatch = headers.match(/name="([^"]+)"/);
-            if (!nameMatch) {
-                offset = headerEnd + 4;
-                continue;
-            }
-
-            const name = nameMatch[1];
-            const contentStart = headerEnd + 4;
-            const nextBoundary = buffer.indexOf(boundaryBuffer, contentStart);
-            const contentEnd = nextBoundary === -1 ? buffer.length : nextBoundary - 2;
-
-            parts[name] = buffer.slice(contentStart, contentEnd);
-            offset = contentEnd;
-        }
-
-        return parts;
     }
 
     async _getHealthScore(extensionId) {

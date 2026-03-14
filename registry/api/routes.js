@@ -90,6 +90,15 @@ function validateManifest(manifest) {
     return true;
 }
 
+function requireRegistryKey(req, res, next) {
+    const authHeader = req.headers.authorization || '';
+    const key = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    if (!key || key !== process.env.REGISTRY_API_KEY) {
+        return res.status(401).json({ error: 'Unauthorized' });
+    }
+    next();
+}
+
 function setupRoutes(app, registry) {
     app.get('/api/extensions', async (req, res, next) => {
         try {
@@ -138,7 +147,7 @@ function setupRoutes(app, registry) {
         }
     });
 
-    app.post('/api/extensions/publish', upload.single('tarball'), async (req, res, next) => {
+    app.post('/api/extensions/publish', requireRegistryKey, upload.single('tarball'), async (req, res, next) => {
         try {
             const data = typeof req.body.data === 'string' ? JSON.parse(req.body.data) : req.body;
             
