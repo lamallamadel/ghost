@@ -12,13 +12,37 @@ const Colors = {
     GREEN: '\x1b[32m',
     CYAN: '\x1b[36m',
     BOLD: '\x1b[1m',
+    WARNING: '\x1b[33m',
     FAIL: '\x1b[31m',
     ENDC: '\x1b[0m'
+};
+
+const getLoadingSquare = (label) => {
+    const square = [
+        '╔═════════╗',
+        '║ ███   █ ║',
+        '║ █ █ █ █ ║',
+        '║ █   █ █ ║',
+        '╚═════════╝'
+    ];
+
+    return square.map((line, idx) => {
+        if (idx === 2) {
+            const inner = label.slice(0, 7).padEnd(7);
+            return `║ ${inner} ║`;
+        }
+        return line;
+    }).join('\n');
 };
 
 class AuthorExtension {
     constructor(sdk) {
         this.sdk = sdk;
+    }
+
+    _emitLoadingSquare(label) {
+        const message = getLoadingSquare(label || 'init');
+        process.stderr.write(`${Colors.CYAN}${message}${Colors.ENDC}\n`);
     }
 
     _resolveInitTarget(params = {}) {
@@ -33,6 +57,7 @@ class AuthorExtension {
         const extId = name.startsWith('ghost-') ? name : `ghost-${name}-extension`;
         const targetDir = path.join('extensions', extId);
 
+        this._emitLoadingSquare('scaffold');
         await this.sdk.requestLog({ level: 'info', message: `Scaffolding new extension: ${extId}` });
 
         try {
@@ -56,11 +81,6 @@ class AuthorExtension {
                 permissions: ["filesystem:read"]
             };
 
-            await this.sdk.requestFileWrite({ 
-                path: path.join(targetDir, 'manifest.json'), 
-                content: JSON.stringify(manifest, null, 2) 
-            });
-
             // 3. Generate package.json
             const pkg = {
                 name: `@ghost/${extId}`,
@@ -70,18 +90,14 @@ class AuthorExtension {
                 dependencies: { "@ghost/extension-sdk": "^1.0.0" }
             };
 
-            await this.sdk.requestFileWrite({ 
-                path: path.join(targetDir, 'package.json'), 
-                content: JSON.stringify(pkg, null, 2) 
-            });
-
             // 4. Generate entry point (index.js)
             const entryPoint = `#!/usr/bin/env node\n\nconst { ExtensionSDK } = require('@ghost/extension-sdk');\n\nclass ExtensionWrapper {\n    constructor() {\n        this.sdk = new ExtensionSDK('${extId}');\n    }\n\n    async hello() {\n        return { success: true, output: 'Hello from ${name}!' };\n    }\n\n    async handleRPCRequest(request) {\n        if (request.method === '${name}.hello') return await this.hello();\n        return { error: { code: -32601, message: 'Method not found' } };\n    }\n}\n\nmodule.exports = ExtensionWrapper;\n`;
 
-            await this.sdk.requestFileWrite({ 
-                path: path.join(targetDir, 'index.js'), 
-                content: entryPoint 
-            });
+            await Promise.all([
+                this.sdk.requestFileWrite({ path: path.join(targetDir, 'manifest.json'), content: JSON.stringify(manifest, null, 2) }),
+                this.sdk.requestFileWrite({ path: path.join(targetDir, 'package.json'), content: JSON.stringify(pkg, null, 2) }),
+                this.sdk.requestFileWrite({ path: path.join(targetDir, 'index.js'), content: entryPoint }),
+            ]);
 
             return { 
                 success: true, 
@@ -92,14 +108,14 @@ class AuthorExtension {
         }
     }
 
-    async handleValidate(params) {
+    async handleValidate(params, _content) {
         const target = params.args?.[0] || '.';
         const manifestPath = target.endsWith('manifest.json') ? target : path.join(target, 'manifest.json');
-        
+
         await this.sdk.requestLog({ level: 'info', message: `Validating extension manifest at: ${manifestPath}` });
 
         try {
-            const content = await this.sdk.requestFileRead({ path: manifestPath });
+            const content = _content !== undefined ? _content : await this.sdk.requestFileRead({ path: manifestPath });
             const manifest = JSON.parse(content);
             const errors = [];
             const warnings = [];
@@ -163,15 +179,17 @@ class AuthorExtension {
         await this.sdk.requestLog({ level: 'info', message: `Preparing publication for extension at: ${target}` });
 
         try {
-            // 1. Read files
-            const manifestContent = await this.sdk.requestFileRead({ path: manifestPath });
-            const pkgContent = await this.sdk.requestFileRead({ path: packagePath });
-            
+            // 1. Read files in parallel
+            const [manifestContent, pkgContent] = await Promise.all([
+                this.sdk.requestFileRead({ path: manifestPath }),
+                this.sdk.requestFileRead({ path: packagePath }),
+            ]);
+
             const manifest = JSON.parse(manifestContent);
             const pkg = JSON.parse(pkgContent);
 
-            // 2. Perform validation first
-            const validation = await this.handleValidate({ args: [target] });
+            // 2. Perform validation first (reuse already-read content)
+            const validation = await this.handleValidate({ args: [target] }, manifestContent);
             if (!validation.success) {
                 return { success: false, output: `${Colors.FAIL}Publication aborted: Validation failed.${Colors.ENDC}\n${validation.output}` };
             }
@@ -187,9 +205,11 @@ class AuthorExtension {
             manifest.version = newVersion;
             pkg.version = newVersion;
 
-            // 4. Write back files
-            await this.sdk.requestFileWrite({ path: manifestPath, content: JSON.stringify(manifest, null, 2) });
-            await this.sdk.requestFileWrite({ path: packagePath, content: JSON.stringify(pkg, null, 2) });
+            // 4. Write back files in parallel
+            await Promise.all([
+                this.sdk.requestFileWrite({ path: manifestPath, content: JSON.stringify(manifest, null, 2) }),
+                this.sdk.requestFileWrite({ path: packagePath, content: JSON.stringify(pkg, null, 2) }),
+            ]);
 
             // 5. Git Tagging (via git intent)
             const tagName = `${manifest.id}@${newVersion}`;
