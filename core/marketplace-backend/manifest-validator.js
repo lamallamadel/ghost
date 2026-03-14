@@ -1,4 +1,4 @@
-const manifestSchema = require('../manifest-schema.json');
+const manifestSchema = require('./manifest-schema.json');
 
 class ManifestValidator {
     constructor() {

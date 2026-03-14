@@ -18,9 +18,10 @@ FROM base AS build
 
 COPY --from=dependencies /app/node_modules ./node_modules
 COPY core/marketplace-backend ./
-COPY core/code-signing.js ../code-signing.js
-COPY core/intrusion-detection.js ../intrusion-detection.js
+COPY core/code-signing.js ./
+COPY core/intrusion-detection.js ./
 
+COPY core/manifest-schema.json ./
 RUN chmod +x cli.js
 
 FROM base AS runtime
