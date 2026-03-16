@@ -25,6 +25,7 @@ const { ExtensionSDK, ExtensionRunner } = loadExtensionSdk();
 // ─── Paths (string ops only — no fs) ─────────────────────────────────────────
 const HISTORY_PATH = path.join(os.homedir(), '.ghost', 'cli-history.json');
 const CONFIG_PATH  = path.join(os.homedir(), '.ghost', 'config', 'ghostrc.json');
+const MODELS_DIR   = path.join(os.homedir(), '.ghost', 'models');
 const MAX_HISTORY  = 200;
 
 // ─── ANSI Color Palette ───────────────────────────────────────────────────────
@@ -422,6 +423,56 @@ class CommandPalette {
     }
 }
 
+// ─── Semantic Router ──────────────────────────────────────────────────────────
+class SemanticRouter {
+    constructor() {
+        this.embedder       = null;
+        this.catalogVecs    = null;
+        this.catalogEntries = null;
+        this.dim            = 384;
+    }
+
+    async init(catalog) {
+        try {
+            const { pipeline } = await import('@xenova/transformers');
+            this.embedder = await pipeline(
+                'feature-extraction', 'Xenova/all-MiniLM-L6-v2',
+                { cache_dir: MODELS_DIR, quantized: true }
+            );
+            this.catalogEntries = [];
+            for (const [cmd, def] of Object.entries(catalog)) {
+                for (const [sub, sdef] of Object.entries(def.sub)) {
+                    this.catalogEntries.push({ cmd, sub, text: `${cmd} ${sub}: ${sdef.d}` });
+                }
+            }
+            const out = await this.embedder(
+                this.catalogEntries.map(e => e.text),
+                { pooling: 'mean', normalize: true }
+            );
+            this.catalogVecs = out.data;   // Float32Array [N × dim]
+            this.dim         = out.dims[1];
+            return true;
+        } catch { return false; }
+    }
+
+    async classify(input, branch = null) {
+        if (!this.embedder) return null;
+        try {
+            const query = branch ? `[branch: ${branch}] ${input}` : input;
+            const out   = await this.embedder([query], { pooling: 'mean', normalize: true });
+            const q     = out.data;
+            const N     = this.catalogEntries.length;
+            let best = -1, idx = 0;
+            for (let i = 0; i < N; i++) {
+                let dot = 0;
+                for (let j = 0; j < this.dim; j++) dot += q[j] * this.catalogVecs[i * this.dim + j];
+                if (dot > best) { best = dot; idx = i; }
+            }
+            return best >= 0.5 ? { ...this.catalogEntries[idx], confidence: best } : null;
+        } catch { return null; }
+    }
+}
+
 // ─── Ghost Shell ──────────────────────────────────────────────────────────────
 class GhostShell {
     constructor(sdk) {
@@ -432,12 +483,29 @@ class GhostShell {
         this.spinner  = new Spinner();
         this.rl       = null;
         this._registry = [];
+        this.semanticRouter = null;
     }
 
     async init() {
         await this.history.load();
         await this.context.refresh().catch(() => {});
+        try {
+            const rc = JSON.parse(require('fs').readFileSync(CONFIG_PATH, 'utf8'));
+            if (rc?.nlRouter?.mode === 'semantic') await this._initSemanticRouter();
+        } catch {}
         return { success: true };
+    }
+
+    async _initSemanticRouter() {
+        this.spinner.start('Loading semantic router…');
+        const router = new SemanticRouter();
+        const ok     = await router.init(CATALOG);
+        this.spinner.stop();
+        if (ok) {
+            this.semanticRouter = router;
+        } else {
+            console.log(Fmt.warn('Semantic router unavailable — using keyword routing'));
+        }
     }
 
     // ── Registry ──
@@ -521,51 +589,66 @@ class GhostShell {
     }
 
     _installKeypressHandler() {
-        process.stdin.prependListener('keypress', (str, key) => {
-            if (!key) return;
-            if (key.ctrl && (key.name === 'c' || key.name === 'd')) process.exit(0);
+        // Intercept readline's key processing directly so we can suppress keys
+        // without leaking raw escape sequences into the line buffer.
+        // (prependListener + key.name='null' doesn't stop readline from calling
+        // _insertString(key.sequence), which pollutes the buffer with \x1b[A etc.)
+        if (typeof this.rl._ttyWrite !== 'function') return;
+
+        const origTtyWrite = this.rl._ttyWrite.bind(this.rl);
+
+        this.rl._ttyWrite = (s, key) => {
+            key = key || {};
+
+            // Ctrl+L — clear screen
             if (key.ctrl && key.name === 'l') {
                 process.stdout.write('\x1b[2J\x1b[H');
                 this._printBanner();
                 this.rl.prompt(true);
-                key.name = 'null';
                 return;
             }
 
-            const line = this.rl ? this.rl.line : '';
-            if (!line.startsWith('/')) { this.palette.clear(); return; }
+            const line = this.rl.line || '';
 
-            const hasSpace = line.includes(' ');
-            if (key.name === 'up') {
-                this.palette.moveUp();
-                this.palette.update(line.slice(1));
-                key.name = 'null';
-            } else if (key.name === 'down') {
-                this.palette.moveDown();
-                this.palette.update(line.slice(1));
-                key.name = 'null';
-            } else if ((key.name === 'tab' || key.name === 'right') && !hasSpace) {
-                const completion = this.palette.complete();
-                if (completion) {
-                    this.rl.write(null, { ctrl: true, name: 'u' });
-                    this.rl.write(completion);
-                    this.palette.clear();
+            if (line.startsWith('/')) {
+                if (key.name === 'up') {
+                    this.palette.moveUp();
+                    this.palette.update(line.slice(1));
+                    return; // suppress — no history navigation
                 }
-                key.name = 'null';
-            } else if (key.name === 'return') {
-                this.palette.clear();
-            } else if (key.name !== 'null') {
-                setImmediate(() => {
-                    const current = this.rl ? this.rl.line : '';
-                    if (current.startsWith('/')) {
-                        if (key.name !== 'up' && key.name !== 'down') this.palette.selected = 0;
-                        this.palette.update(current.slice(1));
-                    } else {
+                if (key.name === 'down') {
+                    this.palette.moveDown();
+                    this.palette.update(line.slice(1));
+                    return; // suppress
+                }
+                if ((key.name === 'tab' || key.name === 'right') && !line.includes(' ')) {
+                    const completion = this.palette.complete();
+                    if (completion) {
+                        this.rl.write(null, { ctrl: true, name: 'u' });
+                        this.rl.write(completion);
                         this.palette.clear();
                     }
-                });
+                    return; // suppress readline tab-completion
+                }
+                if (key.name === 'return' || key.name === 'enter') {
+                    this.palette.clear();
+                    origTtyWrite(s, key);
+                    return;
+                }
             }
-        });
+
+            origTtyWrite(s, key);
+
+            // After readline updates the line buffer, sync the palette
+            setImmediate(() => {
+                const current = this.rl.line || '';
+                if (current.startsWith('/')) {
+                    this.palette.update(current.slice(1));
+                } else {
+                    this.palette.clear();
+                }
+            });
+        };
     }
 
     // ── Slash command routing ──
@@ -634,7 +717,18 @@ class GhostShell {
 
     // ── Natural language routing ──
     async _handleNL(input) {
-        // Smart local routing: try to match keywords to extension commands
+        // Layer 1: Semantic router (if enabled and loaded)
+        if (this.semanticRouter) {
+            const match = await this.semanticRouter.classify(input, this.context.branch);
+            if (match) {
+                const pct = Math.round(match.confidence * 100);
+                console.log(Fmt.info(`Routing to ${C.BOLD}/${match.cmd} ${match.sub}${C.RESET}${C.DIM} (confidence: ${pct}%) — or use /help for full control${C.RESET}`));
+                await this._handleSlash(`${match.cmd} ${match.sub}`);
+                return;
+            }
+        }
+
+        // Layer 2: Keyword shortcuts
         const lower = input.toLowerCase();
         const shortcuts = [
             [['commit', 'push', 'git'], 'git', 'commit'],
@@ -655,7 +749,7 @@ class GhostShell {
             }
         }
 
-        // Delegate to AI agent
+        // Layer 3: Delegate to AI agent
         this.spinner.start('Thinking…');
         try {
             const result = await this.sdk.emitIntent({
@@ -668,9 +762,10 @@ class GhostShell {
             });
             this.spinner.stop();
             this._printResult(result);
-        } catch (_) {
+        } catch (err) {
             this.spinner.stop();
-            console.log(Fmt.warn('AI agent unavailable — type /help to browse commands'));
+            const detail = err?.message ? `: ${err.message}` : '';
+            console.log(Fmt.warn(`AI agent unavailable${detail} — type /help to browse commands`));
         }
     }
 
