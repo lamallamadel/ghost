@@ -490,7 +490,7 @@ class GhostShell {
         await this.history.load();
         await this.context.refresh().catch(() => {});
         try {
-            const rc = JSON.parse(require('fs').readFileSync(CONFIG_PATH, 'utf8'));
+            const rc = await this.sdk.requestFileReadJSON(CONFIG_PATH);
             if (rc?.nlRouter?.mode === 'semantic') await this._initSemanticRouter();
         } catch {}
         return { success: true };
