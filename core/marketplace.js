@@ -542,4 +542,4 @@ module.exports = ${this._toPascalCase(manifest.id)}Extension;
     }
 }
 
-module.exports = { MarketplaceService };
+module.exports = { MarketplaceService, resolveRegistryUrl };

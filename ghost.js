@@ -17,6 +17,7 @@ const SetupWizard = require('./lib/setup-wizard');
 const USER_EXTENSIONS_DIR = path.join(os.homedir(), '.ghost', 'extensions');
 const BUNDLED_EXTENSIONS_DIR = path.join(__dirname, 'extensions');
 const AUDIT_LOG_PATH = path.join(os.homedir(), '.ghost', 'audit.log');
+const GHOSTRC_PATH = path.join(os.homedir(), '.ghost', 'config', 'ghostrc.json');
 
 const Colors = {
     HEADER: '\x1b[95m',
@@ -1926,11 +1927,8 @@ class GatewayLauncher {
                 } catch {}
 
                 // Save token to ghostrc
-                const ghostrcDir = path.join(os.homedir(), '.ghost', 'config');
-                if (!fs.existsSync(ghostrcDir)) {
-                    fs.mkdirSync(ghostrcDir, { recursive: true, mode: 0o700 });
-                }
-                const ghostrcPath = path.join(ghostrcDir, 'ghostrc.json');
+                const ghostrcPath = GHOSTRC_PATH;
+                fs.mkdirSync(path.dirname(ghostrcPath), { recursive: true, mode: 0o700 });
                 let rc = {};
                 try { rc = JSON.parse(fs.readFileSync(ghostrcPath, 'utf8')); } catch {}
                 rc.marketplace = { ...rc.marketplace, token: result.token, expiresAt };
@@ -1945,7 +1943,7 @@ class GatewayLauncher {
                 process.exit(1);
             }
         } else if (subcommand === 'logout') {
-            const ghostrcPath = path.join(os.homedir(), '.ghost', 'config', 'ghostrc.json');
+            const ghostrcPath = GHOSTRC_PATH;
             try {
                 let rc = {};
                 try { rc = JSON.parse(fs.readFileSync(ghostrcPath, 'utf8')); } catch {}
@@ -1960,7 +1958,7 @@ class GatewayLauncher {
                 process.exit(1);
             }
         } else if (subcommand === 'whoami') {
-            const ghostrcPath = path.join(os.homedir(), '.ghost', 'config', 'ghostrc.json');
+            const ghostrcPath = GHOSTRC_PATH;
             try {
                 let rc = {};
                 try { rc = JSON.parse(fs.readFileSync(ghostrcPath, 'utf8')); } catch {}

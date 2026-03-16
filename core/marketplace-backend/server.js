@@ -440,6 +440,7 @@ class MarketplaceServer {
             let fileBuffer = null;
             let manifest = null;
             let fileLimitExceeded = false;
+            let manifestParseError = null;
 
             bb.on('file', (name, stream) => {
                 const chunks = [];
@@ -460,8 +461,8 @@ class MarketplaceServer {
                 if (name === 'manifest') {
                     try {
                         manifest = JSON.parse(value);
-                    } catch {
-                        // handled in finish
+                    } catch (e) {
+                        manifestParseError = e;
                     }
                 }
             });
@@ -474,7 +475,11 @@ class MarketplaceServer {
                     return reject(new Error('No file uploaded'));
                 }
                 if (!manifest) {
-                    return reject(new Error('No manifest provided'));
+                    return reject(new Error(
+                        manifestParseError
+                            ? `Invalid manifest JSON: ${manifestParseError.message}`
+                            : 'No manifest provided'
+                    ));
                 }
                 resolve({ file: fileBuffer, manifest });
             });
