@@ -58,6 +58,7 @@ export function ExtensionManagerTab() {
   const [pendingEdits, setPendingEdits] = useState<Map<string, EditableFields>>(new Map())
 
   const [searchQuery, setSearchQuery] = useState('')
+  const [viewMode, setViewMode] = useState<'cards' | 'table'>('table')
   const [cliModal, setCliModal] = useState<CliModal>(null)
   const [uninstallConfirm, setUninstallConfirm] = useState<string | null>(null)
   const [expandedPerms, setExpandedPerms] = useState<Set<string>>(new Set())
@@ -185,6 +186,29 @@ export function ExtensionManagerTab() {
     )
   }, [state, searchQuery])
 
+  function getPromiseColor(ext: ExtensionInfo): { hex: string; label: string } {
+    const health = ext.runtimeState?.health
+    const level = ext.healthBadge?.level
+    const score = ext.healthScore ?? -1
+
+    if (health === 'crashed' || level === 'poor' || (score >= 0 && score < 40))
+      return { hex: '#ef4444', label: 'Critique' }
+    if (health === 'restarting' || level === 'fair' || (score >= 40 && score < 60))
+      return { hex: '#f97316', label: 'Dégradé' }
+    if (health === 'degraded' || level === 'good' || (score >= 60 && score < 80))
+      return { hex: '#eab308', label: 'Avertissement' }
+    if (health === 'healthy' || level === 'excellent' || score >= 80)
+      return { hex: '#22c55e', label: 'Opérationnel' }
+    return { hex: '#6b7280', label: 'Inconnu' }
+  }
+
+  const tableExtensions = useMemo(() => {
+    const priority: Record<string, number> = { '#ef4444': 0, '#f97316': 1, '#eab308': 2, '#22c55e': 3, '#6b7280': 4 }
+    return [...filteredExtensions].sort((a, b) =>
+      (priority[getPromiseColor(a).hex] ?? 4) - (priority[getPromiseColor(b).hex] ?? 4)
+    )
+  }, [filteredExtensions])
+
   function renderHealthBadge(ext: ExtensionInfo) {
     if (!ext.healthScore || !ext.healthBadge) return null
     const badge = ext.healthBadge
@@ -211,6 +235,22 @@ export function ExtensionManagerTab() {
         <div className="flex items-center gap-2">
           <div className="rounded-md border border-white/10 bg-white/5 px-3 py-1.5 text-xs text-white/60">
             {extensions.length} extension{extensions.length !== 1 ? 's' : ''}
+          </div>
+          <div className="flex overflow-hidden rounded-lg border border-white/10 text-xs">
+            <button
+              type="button"
+              onClick={() => setViewMode('cards')}
+              className={viewMode === 'cards' ? 'bg-white/10 px-3 py-1.5' : 'bg-white/5 px-3 py-1.5 hover:bg-white/10'}
+            >
+              Cartes
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('table')}
+              className={viewMode === 'table' ? 'bg-white/10 px-3 py-1.5' : 'bg-white/5 px-3 py-1.5 hover:bg-white/10'}
+            >
+              Tableau
+            </button>
           </div>
           <button type="button" onClick={load} className="rounded-lg border border-white/10 bg-white/5 px-3 py-2 text-sm hover:bg-white/10">
             Actualiser
@@ -244,6 +284,115 @@ export function ExtensionManagerTab() {
           <div className="text-sm text-white/60">Chargement…</div>
         ) : null}
 
+        {viewMode === 'table' && (
+          <>
+            <div className="mb-3 flex items-center gap-4 text-xs text-white/40">
+              {[
+                { hex: '#22c55e', label: 'Opérationnel' },
+                { hex: '#eab308', label: 'Avertissement' },
+                { hex: '#f97316', label: 'Dégradé' },
+                { hex: '#ef4444', label: 'Critique' },
+                { hex: '#6b7280', label: 'Inconnu' },
+              ].map(({ hex, label }) => (
+                <span key={label} className="flex items-center gap-1.5">
+                  <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ backgroundColor: hex }} />
+                  {label}
+                </span>
+              ))}
+            </div>
+
+            {tableExtensions.length === 0 && !loading ? (
+              <div className="rounded-xl border border-white/10 bg-black/20 p-8 text-center text-sm text-white/60">
+                {extensions.length === 0 ? 'Aucune extension installée' : 'Aucun résultat pour cette recherche'}
+              </div>
+            ) : (
+              <table className="w-full border-collapse text-sm">
+                <thead>
+                  <tr className="border-b border-white/10 text-xs text-white/40">
+                    <th className="w-8 px-3 py-2 text-left">État</th>
+                    <th className="px-3 py-2 text-left">Extension</th>
+                    <th className="px-3 py-2 text-left">Version</th>
+                    <th className="px-3 py-2 text-left">Score</th>
+                    <th className="px-3 py-2 text-right">Requêtes ✓</th>
+                    <th className="px-3 py-2 text-left">Activité</th>
+                    <th className="px-3 py-2 text-left">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/5">
+                  {tableExtensions.map(ext => {
+                    const { hex, label } = getPromiseColor(ext)
+                    const isEnabled = enabledExtensions.has(ext.manifest.id)
+                    return (
+                      <tr key={ext.manifest.id} className="transition-colors hover:bg-white/5">
+                        <td className="px-3 py-2.5">
+                          <span
+                            className="inline-block h-3 w-3 rounded-full"
+                            style={{ backgroundColor: hex }}
+                            title={label}
+                          />
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <div className="font-semibold">{ext.manifest.name}</div>
+                          <div className="font-mono text-xs text-white/40">{ext.manifest.id}</div>
+                        </td>
+                        <td className="px-3 py-2.5 font-mono text-xs text-white/60">
+                          v{ext.manifest.version}
+                        </td>
+                        <td className="px-3 py-2.5">
+                          {ext.healthScore !== undefined ? (
+                            <span className="font-mono text-sm font-semibold" style={{ color: hex }}>
+                              {ext.healthScore}
+                            </span>
+                          ) : (
+                            <span className="text-white/30">—</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2.5 text-right font-mono text-xs text-emerald-400">
+                          {ext.stats.requestsApproved}
+                        </td>
+                        <td className="px-3 py-2.5 text-xs text-white/40">
+                          {ext.stats.lastActivity
+                            ? new Date(ext.stats.lastActivity).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+                            : '—'}
+                        </td>
+                        <td className="px-3 py-2.5">
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              onClick={() => toggleExtension(ext.manifest.id, !isEnabled)}
+                              className={`rounded border px-2 py-0.5 text-xs transition-colors ${isEnabled ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300' : 'border-white/10 bg-white/5 text-white/50'}`}
+                              title={isEnabled ? 'Désactiver' : 'Activer'}
+                            >
+                              <Power size={11} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => reloadExtension(ext.manifest.id)}
+                              className="rounded border border-blue-500/30 bg-blue-500/10 p-0.5 text-blue-300 hover:bg-blue-500/20"
+                              title="Recharger"
+                            >
+                              <RefreshCw size={11} />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => confirmUninstall(ext.manifest.id)}
+                              className="rounded border border-rose-500/30 bg-rose-500/10 p-0.5 text-rose-300 hover:bg-rose-500/20"
+                              title="Désinstaller"
+                            >
+                              <Trash2 size={11} />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            )}
+          </>
+        )}
+
+        {viewMode === 'cards' && (
         <div className="space-y-3">
           {filteredExtensions.map((ext) => {
             const isEnabled = enabledExtensions.has(ext.manifest.id)
@@ -491,6 +640,7 @@ export function ExtensionManagerTab() {
             </div>
           ) : null}
         </div>
+        )}
       </div>
 
       {cliModal && (
