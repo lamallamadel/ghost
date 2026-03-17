@@ -11,22 +11,30 @@ const DEFAULT_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAw8+JBKqK5vHxqD8xhN2K
 -----END PUBLIC KEY-----`;
 
-function resolveRegistryUrl() {
+function resolveRegistryUrl(profileName = null) {
     try {
         const rc = JSON.parse(fs.readFileSync(GHOSTRC_PATH, 'utf8'));
+        const name = profileName || rc?.marketplace?.activeProfile || 'default';
+        // New format: profiles map
+        const p = rc?.marketplace?.profiles?.[name];
+        if (p?.registryUrl) return p.registryUrl;
+        // Old flat format (pre-profiles migration)
         if (rc?.marketplace?.registryUrl) return rc.marketplace.registryUrl;
     } catch {}
     return process.env.GHOST_MARKETPLACE_URL || DEFAULT_REGISTRY_URL;
 }
 
-function readAuthToken() {
+function readAuthToken(profileName = null) {
     try {
         const rc = JSON.parse(fs.readFileSync(GHOSTRC_PATH, 'utf8'));
+        const name = profileName || rc?.marketplace?.activeProfile || 'default';
+        // New format: profiles map
+        const p = rc?.marketplace?.profiles?.[name];
+        if (p?.token && (!p.expiresAt || Date.now() < p.expiresAt)) return p.token;
+        // Old flat format (pre-profiles migration)
         const token = rc?.marketplace?.token;
         const expiresAt = rc?.marketplace?.expiresAt;
-        if (token && (!expiresAt || Date.now() < expiresAt)) {
-            return token;
-        }
+        if (token && (!expiresAt || Date.now() < expiresAt)) return token;
     } catch {}
     return null;
 }

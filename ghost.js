@@ -1351,6 +1351,45 @@ class GatewayLauncher {
         }
     }
 
+    // ── Ghostrc profile helpers ──────────────────────────────────────────────
+    _readGhostrc() {
+        try { return JSON.parse(fs.readFileSync(GHOSTRC_PATH, 'utf8')); } catch { return {}; }
+    }
+
+    _writeGhostrc(rc) {
+        fs.mkdirSync(path.dirname(GHOSTRC_PATH), { recursive: true, mode: 0o700 });
+        fs.writeFileSync(GHOSTRC_PATH, JSON.stringify(rc, null, 2), { mode: 0o600 });
+    }
+
+    _activeProfileName(rc) {
+        return rc?.marketplace?.activeProfile || 'default';
+    }
+
+    _getProfileData(rc, name) {
+        if (rc?.marketplace?.profiles?.[name]) return rc.marketplace.profiles[name];
+        // Migration: old flat format → default profile
+        if (name === 'default' && rc?.marketplace?.token) {
+            return { token: rc.marketplace.token, expiresAt: rc.marketplace.expiresAt ?? null, registryUrl: rc.marketplace.registryUrl ?? null };
+        }
+        return null;
+    }
+
+    _saveProfile(rc, name, data) {
+        if (!rc.marketplace) rc.marketplace = {};
+        // One-time migration of old flat token → profiles.default
+        if (rc.marketplace.token && !rc.marketplace.profiles) {
+            rc.marketplace.profiles = {
+                default: { token: rc.marketplace.token, expiresAt: rc.marketplace.expiresAt ?? null, registryUrl: rc.marketplace.registryUrl ?? null }
+            };
+            delete rc.marketplace.token;
+            delete rc.marketplace.expiresAt;
+            delete rc.marketplace.registryUrl;
+        }
+        if (!rc.marketplace.profiles) rc.marketplace.profiles = {};
+        if (!rc.marketplace.activeProfile) rc.marketplace.activeProfile = 'default';
+        rc.marketplace.profiles[name] = { ...rc.marketplace.profiles[name], ...data };
+    }
+
     /**
      * Handle marketplace commands for extension discovery and installation.
      */
@@ -1373,8 +1412,16 @@ class GatewayLauncher {
     Options:
       --username=<name>                     Username (prompts if omitted)
       --password=<pass>                     Password (prompts if omitted)
+      --profile=<name>                      Save credentials to named profile
   ghost marketplace logout                Remove saved auth token
+    Options:
+      --profile=<name>                      Log out from named profile
   ghost marketplace whoami                Show currently logged-in user
+    Options:
+      --profile=<name>                      Show info for named profile
+  ghost marketplace profile list          List all credential profiles
+  ghost marketplace profile use <name>    Switch active profile
+  ghost marketplace profile remove <name> Remove a profile
   ghost marketplace browse [category]     Browse available extensions
   ghost marketplace search <query>        Search for extensions
   ghost marketplace info <id>             Show extension details
@@ -2008,22 +2055,19 @@ class GatewayLauncher {
                 });
 
                 // Decode token to get expiry
-                const tokenParts = result.token.split('.');
                 let expiresAt = null;
                 try {
-                    const payload = JSON.parse(Buffer.from(tokenParts[1], 'base64url').toString());
+                    const payload = JSON.parse(Buffer.from(result.token.split('.')[1], 'base64url').toString());
                     if (payload.exp) expiresAt = payload.exp * 1000;
                 } catch {}
 
-                // Save token to ghostrc
-                const ghostrcPath = GHOSTRC_PATH;
-                fs.mkdirSync(path.dirname(ghostrcPath), { recursive: true, mode: 0o700 });
-                let rc = {};
-                try { rc = JSON.parse(fs.readFileSync(ghostrcPath, 'utf8')); } catch {}
-                rc.marketplace = { ...rc.marketplace, token: result.token, expiresAt };
-                fs.writeFileSync(ghostrcPath, JSON.stringify(rc, null, 2), { mode: 0o600 });
+                // Save token to named profile (migrates old flat format on first write)
+                const rc = this._readGhostrc();
+                const profileName = parsedArgs.flags.profile || this._activeProfileName(rc);
+                this._saveProfile(rc, profileName, { token: result.token, expiresAt });
+                this._writeGhostrc(rc);
 
-                console.log(`${Colors.GREEN}✓${Colors.ENDC} Logged in as ${Colors.BOLD}${result.user.username}${Colors.ENDC}\n`);
+                console.log(`${Colors.GREEN}✓${Colors.ENDC} Logged in as ${Colors.BOLD}${result.user.username}${Colors.ENDC} ${Colors.DIM}(profile: ${profileName})${Colors.ENDC}\n`);
                 if (expiresAt) {
                     console.log(`${Colors.DIM}Token expires: ${new Date(expiresAt).toLocaleString()}${Colors.ENDC}\n`);
                 }
@@ -2032,28 +2076,32 @@ class GatewayLauncher {
                 process.exit(1);
             }
         } else if (subcommand === 'logout') {
-            const ghostrcPath = GHOSTRC_PATH;
             try {
-                let rc = {};
-                try { rc = JSON.parse(fs.readFileSync(ghostrcPath, 'utf8')); } catch {}
-                if (rc.marketplace) {
+                const rc = this._readGhostrc();
+                const profileName = parsedArgs.flags.profile || this._activeProfileName(rc);
+                if (rc?.marketplace?.profiles?.[profileName]) {
+                    delete rc.marketplace.profiles[profileName].token;
+                    delete rc.marketplace.profiles[profileName].expiresAt;
+                } else if (rc?.marketplace) {
+                    // Old flat format
                     delete rc.marketplace.token;
                     delete rc.marketplace.expiresAt;
                 }
-                fs.writeFileSync(ghostrcPath, JSON.stringify(rc, null, 2), { mode: 0o600 });
-                console.log(`${Colors.GREEN}✓${Colors.ENDC} Logged out successfully\n`);
+                this._writeGhostrc(rc);
+                console.log(`${Colors.GREEN}✓${Colors.ENDC} Logged out ${Colors.DIM}(profile: ${profileName})${Colors.ENDC}\n`);
             } catch (error) {
                 console.error(`${Colors.FAIL}Logout failed: ${error.message}${Colors.ENDC}\n`);
                 process.exit(1);
             }
         } else if (subcommand === 'whoami') {
-            const ghostrcPath = GHOSTRC_PATH;
             try {
-                let rc = {};
-                try { rc = JSON.parse(fs.readFileSync(ghostrcPath, 'utf8')); } catch {}
-                const token = rc?.marketplace?.token;
+                const rc = this._readGhostrc();
+                const profileName = parsedArgs.flags.profile || this._activeProfileName(rc);
+                const profileData = this._getProfileData(rc, profileName);
+                const token = profileData?.token;
+
                 if (!token) {
-                    console.log(`${Colors.WARNING}Not logged in. Run ${Colors.CYAN}ghost marketplace login${Colors.ENDC}${Colors.WARNING} to authenticate.${Colors.ENDC}\n`);
+                    console.log(`${Colors.WARNING}Not logged in${profileName !== 'default' ? ` (profile: ${profileName})` : ''}. Run ${Colors.CYAN}ghost marketplace login${Colors.ENDC}${Colors.WARNING} to authenticate.${Colors.ENDC}\n`);
                     return;
                 }
 
@@ -2068,9 +2116,9 @@ class GatewayLauncher {
                 const expired = expiresAt && Date.now() > expiresAt.getTime();
 
                 if (parsedArgs.flags.json) {
-                    console.log(JSON.stringify({ userId: payload.userId, isAdmin: payload.isAdmin, expiresAt: expiresAt?.toISOString(), expired }, null, 2));
+                    console.log(JSON.stringify({ profile: profileName, userId: payload.userId, isAdmin: payload.isAdmin, expiresAt: expiresAt?.toISOString(), expired }, null, 2));
                 } else {
-                    console.log(`${Colors.BOLD}${Colors.CYAN}Logged-in User${Colors.ENDC}`);
+                    console.log(`${Colors.BOLD}${Colors.CYAN}Logged-in User${Colors.ENDC}  ${Colors.DIM}profile: ${profileName}${rc?.marketplace?.activeProfile === profileName ? ' ★' : ''}${Colors.ENDC}`);
                     console.log(`  User ID:  ${payload.userId}`);
                     console.log(`  Admin:    ${payload.isAdmin ? `${Colors.GREEN}yes${Colors.ENDC}` : 'no'}`);
                     if (expiresAt) {
@@ -2083,6 +2131,62 @@ class GatewayLauncher {
                 console.error(`${Colors.FAIL}Error reading credentials: ${error.message}${Colors.ENDC}\n`);
                 process.exit(1);
             }
+        } else if (subcommand === 'profile') {
+            const action = parsedArgs.args[0];
+            const rc = this._readGhostrc();
+
+            if (!action || action === 'list') {
+                const profiles = rc?.marketplace?.profiles || {};
+                const active = this._activeProfileName(rc);
+                // Include old flat format as 'default' if no profiles map yet
+                if (Object.keys(profiles).length === 0 && rc?.marketplace?.token) {
+                    profiles['default'] = { token: rc.marketplace.token, expiresAt: rc.marketplace.expiresAt };
+                }
+                if (Object.keys(profiles).length === 0) {
+                    console.log(`${Colors.DIM}No profiles. Run ghost marketplace login to create one.${Colors.ENDC}\n`);
+                    return;
+                }
+                console.log(`${Colors.BOLD}Marketplace Profiles${Colors.ENDC}\n`);
+                for (const [name, data] of Object.entries(profiles)) {
+                    const star = name === active ? ` ${Colors.YELLOW}★${Colors.ENDC}` : '';
+                    const hasToken = !!data?.token;
+                    const expired = data?.expiresAt && Date.now() > data.expiresAt;
+                    const status = !hasToken ? `${Colors.DIM}(not logged in)${Colors.ENDC}` :
+                        expired ? `${Colors.FAIL}(token expired)${Colors.ENDC}` : `${Colors.GREEN}(active)${Colors.ENDC}`;
+                    console.log(`  ${Colors.BOLD}${name}${Colors.ENDC}${star}  ${status}`);
+                    if (data?.registryUrl) console.log(`    ${Colors.DIM}registry: ${data.registryUrl}${Colors.ENDC}`);
+                }
+                console.log('');
+
+            } else if (action === 'use') {
+                const name = parsedArgs.args[1];
+                if (!name) { console.error(`${Colors.FAIL}Usage: ghost marketplace profile use <name>${Colors.ENDC}\n`); process.exit(1); }
+                if (!rc?.marketplace?.profiles?.[name]) {
+                    console.error(`${Colors.FAIL}Profile '${name}' not found. Run ghost marketplace login --profile ${name} first.${Colors.ENDC}\n`);
+                    process.exit(1);
+                }
+                if (!rc.marketplace) rc.marketplace = {};
+                rc.marketplace.activeProfile = name;
+                this._writeGhostrc(rc);
+                console.log(`${Colors.GREEN}✓${Colors.ENDC} Active profile set to ${Colors.BOLD}${name}${Colors.ENDC}\n`);
+
+            } else if (action === 'remove') {
+                const name = parsedArgs.args[1];
+                if (!name) { console.error(`${Colors.FAIL}Usage: ghost marketplace profile remove <name>${Colors.ENDC}\n`); process.exit(1); }
+                if (!rc?.marketplace?.profiles?.[name]) {
+                    console.error(`${Colors.FAIL}Profile '${name}' not found.${Colors.ENDC}\n`);
+                    process.exit(1);
+                }
+                delete rc.marketplace.profiles[name];
+                if (rc.marketplace.activeProfile === name) rc.marketplace.activeProfile = 'default';
+                this._writeGhostrc(rc);
+                console.log(`${Colors.GREEN}✓${Colors.ENDC} Profile ${Colors.BOLD}${name}${Colors.ENDC} removed\n`);
+
+            } else {
+                console.error(`${Colors.FAIL}Unknown profile action '${action}'. Use: list, use, remove${Colors.ENDC}\n`);
+                process.exit(1);
+            }
+
         } else {
             console.error(`${Colors.FAIL}Error: Unknown marketplace subcommand '${subcommand}'${Colors.ENDC}\n`);
             console.log(`Run ${Colors.CYAN}ghost marketplace help${Colors.ENDC} to see all marketplace commands\n`);
