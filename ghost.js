@@ -2187,6 +2187,60 @@ class GatewayLauncher {
                 process.exit(1);
             }
 
+        } else if (subcommand === 'publish-token') {
+            const https = require('https');
+            const http = require('http');
+            try {
+                const rc = this._readGhostrc();
+                const profileName = parsedArgs.flags.profile || this._activeProfileName(rc);
+                const { readAuthToken } = require('./core/marketplace');
+                const sessionToken = readAuthToken(profileName);
+                if (!sessionToken) {
+                    console.error(`${Colors.FAIL}Not logged in${profileName !== 'default' ? ` (profile: ${profileName})` : ''}. Run ${Colors.CYAN}ghost marketplace login${Colors.ENDC}${Colors.FAIL} first.${Colors.ENDC}\n`);
+                    process.exit(1);
+                }
+
+                const marketplaceUrl = process.env.GHOST_MARKETPLACE_URL || 'https://marketplace.ghost-cli.dev';
+                const tokenUrl = new URL('/api/auth/publish-token', marketplaceUrl);
+                const protocol = tokenUrl.protocol === 'https:' ? https : http;
+
+                const result = await new Promise((resolve, reject) => {
+                    const req = protocol.request({
+                        hostname: tokenUrl.hostname,
+                        port: tokenUrl.port,
+                        path: tokenUrl.pathname,
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Content-Length': 0,
+                            'Authorization': `Bearer ${sessionToken}`
+                        }
+                    }, (res) => {
+                        const chunks = [];
+                        res.on('data', c => chunks.push(c));
+                        res.on('end', () => {
+                            try {
+                                const data = JSON.parse(Buffer.concat(chunks).toString());
+                                if (res.statusCode >= 200 && res.statusCode < 300) resolve(data);
+                                else reject(new Error(data.error || `HTTP ${res.statusCode}`));
+                            } catch (e) { reject(e); }
+                        });
+                    });
+                    req.on('error', reject);
+                    req.end();
+                });
+
+                if (parsedArgs.flags.json) {
+                    console.log(JSON.stringify({ publishToken: result.publishToken, expiresIn: result.expiresIn }));
+                } else {
+                    console.log(`${Colors.GREEN}✓${Colors.ENDC} Publish token issued ${Colors.DIM}(expires in ${result.expiresIn}s)${Colors.ENDC}`);
+                    console.log(`\n${Colors.BOLD}Token:${Colors.ENDC} ${result.publishToken}\n`);
+                    console.log(`${Colors.DIM}Pass this as${Colors.ENDC} ${Colors.CYAN}Authorization: Bearer <token>${Colors.ENDC} ${Colors.DIM}when publishing to the registry.${Colors.ENDC}\n`);
+                }
+            } catch (error) {
+                console.error(`${Colors.FAIL}Failed to get publish token: ${error.message}${Colors.ENDC}\n`);
+                process.exit(1);
+            }
         } else {
             console.error(`${Colors.FAIL}Error: Unknown marketplace subcommand '${subcommand}'${Colors.ENDC}\n`);
             console.log(`Run ${Colors.CYAN}ghost marketplace help${Colors.ENDC} to see all marketplace commands\n`);

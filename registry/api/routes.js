@@ -99,6 +99,31 @@ function requireRegistryKey(req, res, next) {
     next();
 }
 
+function requirePublishJWT(req, res, next) {
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : null;
+    if (!token) return res.status(401).json({ error: 'Publish token required' });
+
+    const secret = process.env.JWT_SECRET;
+    if (!secret) return res.status(500).json({ error: 'Server misconfigured: JWT_SECRET not set' });
+
+    try {
+        const jwt = require('jsonwebtoken');
+        const decoded = jwt.verify(token, secret, {
+            algorithms: ['HS256'],
+            issuer: 'ghost-marketplace',
+            audience: 'ghost-cli'
+        });
+        if (decoded.action !== 'publish') {
+            return res.status(403).json({ error: 'Token not scoped for publish' });
+        }
+        req.publisherId = decoded.userId;
+        next();
+    } catch {
+        return res.status(401).json({ error: 'Invalid or expired publish token' });
+    }
+}
+
 function setupRoutes(app, registry) {
     app.get('/api/extensions', async (req, res, next) => {
         try {
@@ -147,7 +172,7 @@ function setupRoutes(app, registry) {
         }
     });
 
-    app.post('/api/extensions/publish', requireRegistryKey, upload.single('tarball'), async (req, res, next) => {
+    app.post('/api/extensions/publish', requirePublishJWT, upload.single('tarball'), async (req, res, next) => {
         try {
             const data = typeof req.body.data === 'string' ? JSON.parse(req.body.data) : req.body;
             

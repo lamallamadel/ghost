@@ -550,4 +550,4 @@ module.exports = ${this._toPascalCase(manifest.id)}Extension;
     }
 }
 
-module.exports = { MarketplaceService, resolveRegistryUrl };
+module.exports = { MarketplaceService, resolveRegistryUrl, readAuthToken };

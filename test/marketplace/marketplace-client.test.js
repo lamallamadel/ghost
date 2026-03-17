@@ -152,11 +152,112 @@ function runTest6() {
             console.log('  ✓ Expired token path exercised\n');
         }
 
-        // cleanup
+        // cleanup before profile tests
         removeGhostrc();
         if (originalEnv !== undefined) process.env.GHOST_MARKETPLACE_URL = originalEnv;
         else delete process.env.GHOST_MARKETPLACE_URL;
 
-        console.log('✅ All marketplace-client tests passed');
+        runProfileTests();
     });
+}
+
+function runProfileTests() {
+    // ── Test 7: resolveRegistryUrl(profileName) reads from profiles map ───────
+
+    console.log('▶ Test 7: resolveRegistryUrl(profileName) reads from profiles map');
+    delete process.env.GHOST_MARKETPLACE_URL;
+    writeGhostrc({
+        marketplace: {
+            profiles: {
+                work: { registryUrl: 'https://work-registry.example.com/api' }
+            }
+        }
+    });
+    const { resolveRegistryUrl: rru7, readAuthToken: rat7 } = freshRequire();
+    assert.strictEqual(rru7('work'), 'https://work-registry.example.com/api',
+        'Should return profile registryUrl');
+    console.log('  ✓ resolveRegistryUrl(profileName) reads from profiles map\n');
+
+    // ── Test 8: readAuthToken(profileName) reads valid profile token ──────────
+
+    console.log('▶ Test 8: readAuthToken(profileName) reads valid profile token');
+    const futureExp = Date.now() + 3600000;
+    writeGhostrc({
+        marketplace: {
+            profiles: {
+                work: { token: 'work-profile-token', expiresAt: futureExp }
+            }
+        }
+    });
+    const { readAuthToken: rat8 } = freshRequire();
+    assert.strictEqual(rat8('work'), 'work-profile-token',
+        'Should return token from named profile');
+    console.log('  ✓ readAuthToken(profileName) returns valid profile token\n');
+
+    // ── Test 9: activeProfile drives resolution when no explicit name given ───
+
+    console.log('▶ Test 9: activeProfile field drives resolution');
+    writeGhostrc({
+        marketplace: {
+            activeProfile: 'staging',
+            profiles: {
+                staging: {
+                    registryUrl: 'https://staging-registry.example.com/api',
+                    token: 'staging-token',
+                    expiresAt: Date.now() + 3600000
+                }
+            }
+        }
+    });
+    const { resolveRegistryUrl: rru9, readAuthToken: rat9 } = freshRequire();
+    assert.strictEqual(rru9(), 'https://staging-registry.example.com/api',
+        'Should use activeProfile for URL');
+    assert.strictEqual(rat9(), 'staging-token',
+        'Should use activeProfile for token');
+    console.log('  ✓ activeProfile drives both URL and token resolution\n');
+
+    // ── Test 10: Expired profile token returns null ───────────────────────────
+
+    console.log('▶ Test 10: Expired profile token returns null');
+    writeGhostrc({
+        marketplace: {
+            profiles: {
+                old: { token: 'stale-token', expiresAt: Date.now() - 5000 }
+            }
+        }
+    });
+    const { readAuthToken: rat10 } = freshRequire();
+    assert.strictEqual(rat10('old'), null, 'Expired profile token must return null');
+    console.log('  ✓ Expired profile token returns null\n');
+
+    // ── Test 11: Migration — flat format readable when no profiles exist ──────
+
+    console.log('▶ Test 11: Migration — flat marketplace.token readable as default');
+    const flatExp = Date.now() + 3600000;
+    writeGhostrc({ marketplace: { token: 'legacy-flat-token', expiresAt: flatExp } });
+    const { readAuthToken: rat11 } = freshRequire();
+    assert.strictEqual(rat11(), 'legacy-flat-token',
+        'Old flat token should be returned when no profiles present');
+    console.log('  ✓ Flat format token readable via default profile migration\n');
+
+    // ── Test 12: Unknown profile name falls back gracefully ───────────────────
+
+    console.log('▶ Test 12: Unknown profile name falls back gracefully');
+    process.env.GHOST_MARKETPLACE_URL = 'https://fallback.example.com/api';
+    writeGhostrc({ marketplace: { profiles: { known: { registryUrl: 'https://known.example.com/api' } } } });
+    const { resolveRegistryUrl: rru12, readAuthToken: rat12 } = freshRequire();
+    // Unknown profile → falls back to env var
+    assert.strictEqual(rru12('unknown'), 'https://fallback.example.com/api',
+        'Unknown profile should fall back to env var');
+    // Unknown profile → null token (no crash)
+    assert.strictEqual(rat12('unknown'), null,
+        'Unknown profile should return null token without throwing');
+    console.log('  ✓ Unknown profile falls back gracefully\n');
+
+    // final cleanup
+    removeGhostrc();
+    if (originalEnv !== undefined) process.env.GHOST_MARKETPLACE_URL = originalEnv;
+    else delete process.env.GHOST_MARKETPLACE_URL;
+
+    console.log('✅ All marketplace-client tests passed');
 }

@@ -136,6 +136,8 @@ class MarketplaceServer {
                 await this._handleLogin(req, res);
             } else if (pathname === '/api/auth/register' && method === 'POST') {
                 await this._handleRegister(req, res);
+            } else if (pathname === '/api/auth/publish-token' && method === 'POST') {
+                await this._handlePublishToken(req, res);
             } else {
                 res.writeHead(404);
                 res.end(JSON.stringify({ error: 'Not found' }));
@@ -389,6 +391,26 @@ class MarketplaceServer {
 
         res.writeHead(200);
         res.end(JSON.stringify(result));
+    }
+
+    async _handlePublishToken(req, res) {
+        const token = req.headers.authorization?.replace('Bearer ', '');
+        if (!token) {
+            res.writeHead(401);
+            res.end(JSON.stringify({ error: 'Authentication required' }));
+            return;
+        }
+
+        const user = this.authManager.verifyToken(token);
+        if (!user) {
+            res.writeHead(401);
+            res.end(JSON.stringify({ error: 'Invalid or expired token' }));
+            return;
+        }
+
+        const publishToken = this.authManager.createPublishToken(user.userId);
+        res.writeHead(200);
+        res.end(JSON.stringify({ publishToken, expiresIn: 3600 }));
     }
 
     async _handleRegister(req, res) {

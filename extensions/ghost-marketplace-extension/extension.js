@@ -6,7 +6,7 @@
  */
 
 const { ExtensionSDK } = require('@ghost/extension-sdk');
-const { resolveRegistryUrl } = require('../../core/marketplace');
+const { resolveRegistryUrl, readAuthToken } = require('../../core/marketplace');
 const path = require('path');
 const os = require('os');
 
@@ -26,8 +26,11 @@ class MarketplaceExtension {
     }
 
     async handleBrowse(params) {
+        const profile = params.flags?.profile || null;
+        const registryUrl = resolveRegistryUrl(profile);
+        const authToken = readAuthToken(profile);
         const category = params.args?.[0];
-        await this.sdk.requestLog({ level: 'info', message: `Browsing extensions${category ? ' in ' + category : ''}` });
+        await this.sdk.requestLog({ level: 'info', message: `Browsing extensions${category ? ' in ' + category : ''}${profile ? ` (profile: ${profile})` : ''}` });
 
         try {
             const registry = await this._loadRegistry();
@@ -52,10 +55,13 @@ class MarketplaceExtension {
     }
 
     async handleInstall(params) {
+        const profile = params.flags?.profile || null;
+        const registryUrl = resolveRegistryUrl(profile);
+        const authToken = readAuthToken(profile);
         const extensionId = params.args?.[0];
         if (!extensionId) return { success: false, output: "Please specify an extension to install." };
 
-        await this.sdk.requestLog({ level: 'info', message: `Installing extension: ${extensionId}` });
+        await this.sdk.requestLog({ level: 'info', message: `Installing extension: ${extensionId}${profile ? ` (profile: ${profile})` : ''}` });
 
         try {
             const registry = await this._loadRegistry();

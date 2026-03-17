@@ -135,6 +135,19 @@ class AuthManager {
         }
     }
 
+    createPublishToken(userId) {
+        return jwt.sign(
+            { userId, action: 'publish' },
+            this.jwtSecret,
+            {
+                algorithm: 'HS256',
+                expiresIn: 3600,
+                issuer: 'ghost-marketplace',
+                audience: 'ghost-cli'
+            }
+        );
+    }
+
     promoteToAdmin(userId) {
         const user = this.users.get(userId);
         if (!user) {
