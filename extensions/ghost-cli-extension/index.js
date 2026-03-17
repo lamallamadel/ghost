@@ -340,7 +340,7 @@ class CommandPalette {
         return qi === query.length;
     }
 
-    update(input) {
+    update(input, cursorCol = 0) {
         // input is after the leading '/'
         const parts  = input.split(' ');
         const query  = parts[0].toLowerCase();
@@ -360,10 +360,10 @@ class CommandPalette {
                     }));
                 if (this.selected >= this.filtered.length)
                     this.selected = Math.max(0, this.filtered.length - 1);
-                this._render(input);
+                this._render(input, cursorCol);
                 return;
             }
-            this.clear();
+            this.clear(cursorCol);
             return;
         }
 
@@ -372,43 +372,49 @@ class CommandPalette {
         );
         if (this.selected >= this.filtered.length)
             this.selected = Math.max(0, this.filtered.length - 1);
-        this._render(input);
+        this._render(input, cursorCol);
     }
 
-    _render(input) {
+    _render(input, cursorCol = 0) {
         if (!process.stdout.isTTY) return;
         const LIMIT = 7;
         const start = Math.max(0, this.selected - Math.floor(LIMIT / 2));
         const end   = Math.min(this.filtered.length, start + LIMIT);
-        let out     = '\n';
+        const rows  = [];
 
         if (this.filtered.length === 0) {
-            out += `  ${C.DIM}No commands match — try natural language${C.RESET}\n`;
-            this.lines = 2;
+            rows.push(`  ${C.DIM}No commands match — try natural language${C.RESET}`);
         } else {
             for (let i = start; i < end; i++) {
                 const item = this.filtered[i];
                 const icon = item.icon ? `${item.icon} ` : '   ';
                 const hint = item.hint ? `${C.DIM} ${item.hint}${C.RESET}` : '';
                 if (i === this.selected) {
-                    out += `  ${C.GREEN}❯${C.RESET} ${C.BOLD}/${item.slash}${C.RESET}${hint}`;
-                    out += `\n    ${C.DIM}${icon}${item.desc}${C.RESET}\n`;
+                    rows.push(`  ${C.GREEN}❯${C.RESET} ${C.BOLD}/${item.slash}${C.RESET}${hint}`);
+                    rows.push(`    ${C.DIM}${icon}${item.desc}${C.RESET}`);
                 } else {
-                    out += `    ${C.DIM}/${item.slash}${C.RESET}${C.DIM} — ${item.desc}${C.RESET}\n`;
+                    rows.push(`    ${C.DIM}/${item.slash}${C.RESET}${C.DIM} — ${item.desc}${C.RESET}`);
                 }
             }
             if (end < this.filtered.length) {
-                out += `    ${C.DIM}… ${this.filtered.length - end} more${C.RESET}\n`;
+                rows.push(`    ${C.DIM}… ${this.filtered.length - end} more${C.RESET}`);
             }
-            this.lines = (end - start) * 2 + 2;
         }
 
-        process.stdout.write(`\x1b7\x1b[J${out}\x1b8`);
+        this.lines = rows.length;
+        // Use relative cursor movement instead of DEC save/restore (\x1b7/\x1b8),
+        // which breaks when the palette causes the terminal to scroll.
+        // \r\n   — move below prompt line and erase to end of screen
+        // rows   — draw palette rows separated by \r\n
+        // \x1b[NA — move back up N lines to prompt line
+        // \x1b[CG  — restore exact column
+        process.stdout.write(`\r\n\x1b[J${rows.join('\r\n')}\x1b[${this.lines}A\x1b[${cursorCol + 1}G`);
     }
 
-    clear() {
+    clear(cursorCol = 0) {
         if (this.lines > 0 && process.stdout.isTTY) {
-            process.stdout.write('\x1b7\x1b[J\x1b8');
+            // Move below current line, erase to end of screen, move back up, restore column.
+            process.stdout.write(`\x1b[B\x1b[1G\x1b[J\x1b[A\x1b[${cursorCol + 1}G`);
             this.lines = 0;
         }
         this.selected = 0;
@@ -597,6 +603,13 @@ class GhostShell {
 
         const origTtyWrite = this.rl._ttyWrite.bind(this.rl);
 
+        // Compute the terminal column the cursor is at (0-indexed prompt length + rl buffer offset).
+        // Used to restore cursor position after palette draw/clear without DEC save/restore.
+        const getCursorCol = () => {
+            const promptStr = this.context.prompt().replace(/\x1b\[[0-9;]*m/g, '');
+            return promptStr.length + (this.rl.cursor || 0);
+        };
+
         this.rl._ttyWrite = (s, key) => {
             key = key || {};
 
@@ -613,12 +626,12 @@ class GhostShell {
             if (line.startsWith('/')) {
                 if (key.name === 'up') {
                     this.palette.moveUp();
-                    this.palette.update(line.slice(1));
+                    this.palette.update(line.slice(1), getCursorCol());
                     return; // suppress — no history navigation
                 }
                 if (key.name === 'down') {
                     this.palette.moveDown();
-                    this.palette.update(line.slice(1));
+                    this.palette.update(line.slice(1), getCursorCol());
                     return; // suppress
                 }
                 if ((key.name === 'tab' || key.name === 'right') && !line.includes(' ')) {
@@ -626,26 +639,31 @@ class GhostShell {
                     if (completion) {
                         this.rl.write(null, { ctrl: true, name: 'u' });
                         this.rl.write(completion);
-                        this.palette.clear();
+                        this.palette.clear(getCursorCol());
                     }
                     return; // suppress readline tab-completion
                 }
                 if (key.name === 'return' || key.name === 'enter') {
-                    this.palette.clear();
+                    this.palette.clear(getCursorCol());
                     origTtyWrite(s, key);
                     return;
                 }
             }
 
+            // Clear palette before readline processes the key so the erase sequence
+            // runs while the terminal cursor is still at the known prompt-line column.
+            this.palette.clear(getCursorCol());
+
             origTtyWrite(s, key);
 
-            // After readline updates the line buffer, sync the palette
+            // After readline updates the line buffer, sync the palette at the new cursor position.
             setImmediate(() => {
                 const current = this.rl.line || '';
+                const cursorCol = getCursorCol();
                 if (current.startsWith('/')) {
-                    this.palette.update(current.slice(1));
+                    this.palette.update(current.slice(1), cursorCol);
                 } else {
-                    this.palette.clear();
+                    this.palette.clear(cursorCol);
                 }
             });
         };

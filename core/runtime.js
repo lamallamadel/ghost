@@ -947,10 +947,14 @@ class ExtensionRuntime extends EventEmitter {
     }
 
     _createExtensionInterface(extension) {
+        // ExtensionProcess lifecycle methods that share names with extension API methods.
+        // If we let these fall through to the target, instance.start() calls the process
+        // lifecycle (which throws "already running") instead of sending an RPC 'start' message.
+        const PROCESS_LIFECYCLE = new Set(['start', 'stop', 'restart']);
         return new Proxy(extension, {
             get: (target, prop) => {
                 if (prop === 'then' || prop === 'catch' || prop === 'finally') return undefined;
-                if (prop in target) return typeof target[prop] === 'function' ? target[prop].bind(target) : target[prop];
+                if (!PROCESS_LIFECYCLE.has(prop) && prop in target) return typeof target[prop] === 'function' ? target[prop].bind(target) : target[prop];
                 return async (params) => await target.executeExtension(prop, params);
             }
         });

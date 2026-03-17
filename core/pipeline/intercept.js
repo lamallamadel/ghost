@@ -296,11 +296,18 @@ class MessageInterceptor {
 
     normalize(message) {
         const messageParams = message.params || {};
-        
+
+        // Two message formats are accepted:
+        //   Flat:   { extensionId, type, operation, params }          — params IS the intent params
+        //   Nested: { method, params: { type, operation, params } }   — params lives inside message.params
+        const isFlat = !!(message.type && message.operation);
+
         const intentData = {
             type: message.type || messageParams.type || message.capability,
             operation: message.operation || messageParams.operation || message.method,
-            params: messageParams.params || message.parameters || {},
+            params: isFlat
+                ? (message.params || {})
+                : (messageParams.params || message.parameters || {}),
             extensionId: message.extensionId || messageParams.extensionId || message.extension_id || message.ext_id,
             requestId: message.requestId || messageParams.requestId || message.id
         };

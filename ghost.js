@@ -180,21 +180,9 @@ class GatewayLauncher {
             restartWindow: 60000,
             heartbeatTimeout: 30000,
             intentHandler: async (intentParams) => {
-                // Reconstruct a JSON-RPC request from the intent parameters
-                // This allows us to reuse forwardIntent which handles the pipeline.process
-                const fakeRpcRequest = {
-                    jsonrpc: "2.0",
-                    id: intentParams.requestId || `sub-${Date.now()}`,
-                    method: 'intent',
-                    params: intentParams
-                };
-                
-                const response = await this.forwardIntent(intentParams.extensionId, fakeRpcRequest);
-                
-                if (response.error) {
-                    throw new Error(response.error.message);
-                }
-                return response.result;
+                // intentParams is already unwrapped: { type, operation, params, extensionId, requestId }
+                // Pass directly — forwardIntent will handle it without needing a JSON-RPC wrapper.
+                return await this.forwardIntent(intentParams.extensionId, intentParams);
             }
         });
         
@@ -449,52 +437,6 @@ class GatewayLauncher {
             this.startupLocks.delete(extId);
             throw error;
         }
-    }    /**
-     * Forward an intent from an extension to the security pipeline.
-     */
-    async forwardIntent(extensionId, request) {
-        // Pure orchestration: delegate to pipeline
-        // The pipeline.process expects a "raw message" or intent object.
-        // We'll wrap the extension's request into the pipeline's expected format.
-        const pipelineMessage = {
-            extensionId,
-            ...request
-        };
-
-        try {
-            const pipelineResult = await this.pipeline.process(pipelineMessage);
-            
-            if (pipelineResult.success) {
-                return {
-                    jsonrpc: "2.0",
-                    id: request.id,
-                    result: pipelineResult.result
-                };
-            } else {
-                return {
-                    jsonrpc: "2.0",
-                    id: request.id,
-                    error: {
-                        code: this._mapPipelineErrorToCode(pipelineResult.code),
-                        message: pipelineResult.error,
-                        data: {
-                            stage: pipelineResult.stage,
-                            code: pipelineResult.code,
-                            violations: pipelineResult.violations
-                        }
-                    }
-                };
-            }
-        } catch (error) {
-            return {
-                jsonrpc: "2.0",
-                id: request.id,
-                error: {
-                    code: -32603,
-                    message: error.message
-                }
-            };
-        }
     }
 
     /**
@@ -676,6 +618,9 @@ class GatewayLauncher {
             await this.handleShellCommand(parsedArgs);
         } else if (parsedArgs.command === 'init' && parsedArgs.subcommand === 'cli') {
             await this.handleCliInitCommand(parsedArgs);
+        } else if (parsedArgs.command === 'cli') {
+            // ghost cli [start] — interactive shell must run in-process, not as an RPC subprocess
+            await this.handleCliInitCommand(parsedArgs);
         } else {
             // Pure routing: delegate domain commands to extensions
             await this.forwardToExtension(parsedArgs);
@@ -794,15 +739,23 @@ class GatewayLauncher {
     /**
      * Handle intents from extensions.
      * This is where the Gateway acts as a System Bus.
+     *
+     * The SDK wraps every emitIntent call in a JSON-RPC envelope:
+     *   { jsonrpc: '2.0', method: 'intent', params: <actual-intent>, id }
+     * We unwrap it first so the rest of the handler sees { type, operation, params }.
      */
     async forwardIntent(extId, request) {
-        const { type, operation, params } = request;
-        
-        // SYSTEM BUS OPERATIONS
+        // Unwrap JSON-RPC envelope produced by sdk._sendViaCoreHandler
+        const intent = (request.method === 'intent' && request.params && typeof request.params === 'object')
+            ? request.params
+            : request;
+        const { type, operation, params } = intent;
+
+        // SYSTEM BUS OPERATIONS — handled directly (no pipeline round-trip needed)
         if (type === 'system') {
             switch (operation) {
                 case 'registry':
-                    return this.registry.listExtensions().map(e => ({ id: e.manifest.id, description: e.manifest.description }));
+                    return this.gateway.listExtensions().map(e => ({ id: e.manifest.id, description: e.manifest.description }));
                 case 'log':
                     if (this._isVerbose()) console.log(`[Extension:${extId}] ${params.message}`);
                     return { success: true };
@@ -814,13 +767,13 @@ class GatewayLauncher {
             }
         }
 
-        // DIRECT GIT OPERATIONS (to prevent routing loops)
+        // DIRECT GIT OPERATIONS — bypass pipeline to prevent routing loops
         if (type === 'git' && operation === 'exec') {
             return new Promise((resolve, reject) => {
                 const { args, suppressError } = params;
                 const fullCommand = `git ${args.join(' ')}`;
                 if (this._isVerbose()) console.log(`[Gateway:Git] Executing: ${fullCommand}`);
-                
+
                 exec(fullCommand, { cwd: process.cwd() }, (error, stdout, stderr) => {
                     if (error && !suppressError) {
                         reject(new Error(stderr || error.message));
@@ -831,11 +784,13 @@ class GatewayLauncher {
             });
         }
 
-        // EXTENSION-TO-EXTENSION ROUTING
+        // ALL OTHER OPERATIONS — through the secure pipeline
+        // Flat format: { extensionId, type, operation, params } is what intercept.normalize() expects.
         const pipelineMessage = {
-            id: Date.now(),
             extensionId: extId,
-            intent: { type, operation, params }
+            type,
+            operation,
+            params
         };
 
         const pipelineResult = await this.pipeline.process(pipelineMessage);
