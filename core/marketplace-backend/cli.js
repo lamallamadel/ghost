@@ -42,7 +42,10 @@ Examples:
 const options = parseArgs(process.argv.slice(2));
 const server = new MarketplaceServer(options);
 
-server.start();
+server.start().catch(err => {
+    console.error('[Marketplace] Failed to start:', err);
+    process.exit(1);
+});
 
 process.on('SIGINT', () => {
     console.log('\n[Marketplace] Shutting down...');

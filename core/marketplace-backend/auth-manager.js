@@ -1,3 +1,5 @@
+'use strict';
+
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
@@ -16,8 +18,16 @@ class AuthManager {
         }
         this.jwtSecret = process.env.JWT_SECRET;
 
-        this._ensureDataDir();
-        this._loadUsers();
+        // Keycloak mode: opt-in via KEYCLOAK_URL env var
+        if (process.env.KEYCLOAK_URL) {
+            const { KeycloakAdapter } = require('./keycloak-adapter');
+            this._keycloak = new KeycloakAdapter();
+            console.log('[AuthManager] Keycloak mode enabled');
+        } else {
+            this._keycloak = null;
+            this._ensureDataDir();
+            this._loadUsers();
+        }
     }
 
     _ensureDataDir() {
@@ -48,28 +58,30 @@ class AuthManager {
         }
     }
 
-    register(username, password, email) {
+    /**
+     * Register a new user.
+     * In Keycloak mode, registration is not supported via the marketplace — use Keycloak directly.
+     */
+    async register(username, password, email) {
+        if (this._keycloak) {
+            return { success: false, error: 'User registration must be performed via Keycloak' };
+        }
+
         if (!username || !password || !email) {
             return { success: false, error: 'Missing required fields' };
         }
 
         for (const user of this.users.values()) {
-            if (user.username === username) {
-                return { success: false, error: 'Username already exists' };
-            }
-            if (user.email === email) {
-                return { success: false, error: 'Email already exists' };
-            }
+            if (user.username === username) return { success: false, error: 'Username already exists' };
+            if (user.email === email) return { success: false, error: 'Email already exists' };
         }
 
         const id = this.users.size + 1;
-        const passwordHash = this._hashPassword(password);
-
         const user = {
             id,
             username,
             email,
-            passwordHash,
+            passwordHash: this._hashPassword(password),
             isAdmin: false,
             createdAt: Date.now(),
             updatedAt: Date.now()
@@ -78,39 +90,45 @@ class AuthManager {
         this.users.set(id, user);
         this._saveUsers();
 
-        const token = this._createToken(user.id, user.isAdmin);
-
         return {
             success: true,
             user: this._sanitizeUser(user),
-            token
+            token: this._createToken(user.id, user.isAdmin)
         };
     }
 
-    login(username, password) {
+    /**
+     * Login with username/password.
+     * Keycloak mode: proxies credentials to Keycloak ROPC, returns Keycloak access token.
+     * Local mode: verifies against local PBKDF2 store, returns HS256 JWT.
+     */
+    async login(username, password) {
+        if (this._keycloak) {
+            const result = await this._keycloak.loginWithKeycloak(username, password);
+            if (!result.success) return { success: false, error: 'Invalid credentials' };
+            return {
+                success: true,
+                user: {
+                    id: result.user.id,
+                    username: result.user.username,
+                    email: result.user.email,
+                    isAdmin: result.user.isAdmin
+                },
+                token: result.token
+            };
+        }
+
         let user = null;
-
         for (const u of this.users.values()) {
-            if (u.username === username) {
-                user = u;
-                break;
-            }
+            if (u.username === username) { user = u; break; }
         }
-
-        if (!user) {
+        if (!user || !this._verifyPassword(password, user.passwordHash)) {
             return { success: false, error: 'Invalid credentials' };
         }
-
-        if (!this._verifyPassword(password, user.passwordHash)) {
-            return { success: false, error: 'Invalid credentials' };
-        }
-
-        const token = this._createToken(user.id, user.isAdmin);
-
         return {
             success: true,
             user: this._sanitizeUser(user),
-            token
+            token: this._createToken(user.id, user.isAdmin)
         };
     }
 
@@ -123,7 +141,15 @@ class AuthManager {
         });
     }
 
-    verifyToken(token) {
+    /**
+     * Verify a token.
+     * Tries local HS256 JWT first; if that fails and Keycloak mode is active,
+     * falls back to Keycloak JWKS verification.
+     */
+    async verifyToken(token) {
+        if (!token) return null;
+
+        // Try local JWT first
         try {
             return jwt.verify(token, this.jwtSecret, {
                 algorithms: ['HS256'],
@@ -131,8 +157,15 @@ class AuthManager {
                 audience: 'ghost-cli'
             });
         } catch {
-            return null;
+            // fall through
         }
+
+        // Keycloak fallback
+        if (this._keycloak) {
+            return this._keycloak.verifyKeycloakToken(token);
+        }
+
+        return null;
     }
 
     createPublishToken(userId) {
@@ -149,15 +182,14 @@ class AuthManager {
     }
 
     promoteToAdmin(userId) {
-        const user = this.users.get(userId);
-        if (!user) {
-            return { success: false, error: 'User not found' };
+        if (this._keycloak) {
+            return { success: false, error: 'Role management is handled via Keycloak' };
         }
-
+        const user = this.users.get(userId);
+        if (!user) return { success: false, error: 'User not found' };
         user.isAdmin = true;
         user.updatedAt = Date.now();
         this._saveUsers();
-
         return { success: true, user: this._sanitizeUser(user) };
     }
 

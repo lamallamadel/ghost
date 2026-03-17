@@ -1,10 +1,12 @@
+'use strict';
+
 const Joi = require('joi');
 const path = require('path');
 const fs = require('fs');
 const multer = require('multer');
-const tar = require('tar');
 const crypto = require('crypto');
 const sanitize = require('sanitize-filename');
+const storage_client = require('../storage/minio-client');
 
 const storage = multer.diskStorage({
     destination: (req, file, cb) => {
@@ -20,7 +22,7 @@ const storage = multer.diskStorage({
     }
 });
 
-const upload = multer({ 
+const upload = multer({
     storage,
     limits: { fileSize: 10 * 1024 * 1024 },
     fileFilter: (req, file, cb) => {
@@ -78,15 +80,12 @@ function validateManifest(manifest) {
             throw new Error(`Manifest missing required field: ${field}`);
         }
     }
-
     if (!/^[a-z0-9-]+$/.test(manifest.id)) {
         throw new Error('Manifest id must be lowercase alphanumeric with hyphens only');
     }
-
     if (!/^\d+\.\d+\.\d+$/.test(manifest.version)) {
         throw new Error('Manifest version must follow semver (x.y.z)');
     }
-
     return true;
 }
 
@@ -124,7 +123,7 @@ function requirePublishJWT(req, res, next) {
     }
 }
 
-function setupRoutes(app, registry) {
+function setupRoutes(app, registry, publisher) {
     app.get('/api/extensions', async (req, res, next) => {
         try {
             const { error, value } = extensionSearchSchema.validate(req.query);
@@ -141,7 +140,7 @@ function setupRoutes(app, registry) {
                 offset: value.offset
             };
 
-            const result = registry.searchExtensions(query);
+            const result = await registry.searchExtensions(query);
             res.json(result);
         } catch (err) {
             next(err);
@@ -150,7 +149,7 @@ function setupRoutes(app, registry) {
 
     app.get('/api/extensions/:id', async (req, res, next) => {
         try {
-            const extension = registry.getExtension(req.params.id);
+            const extension = await registry.getExtension(req.params.id);
             res.json(extension);
         } catch (err) {
             if (err.message.includes('not found')) {
@@ -162,7 +161,7 @@ function setupRoutes(app, registry) {
 
     app.get('/api/extensions/:id/versions', async (req, res, next) => {
         try {
-            const versions = registry.getVersions(req.params.id);
+            const versions = await registry.getVersions(req.params.id);
             res.json({ versions });
         } catch (err) {
             if (err.message.includes('not found')) {
@@ -173,64 +172,90 @@ function setupRoutes(app, registry) {
     });
 
     app.post('/api/extensions/publish', requirePublishJWT, upload.single('tarball'), async (req, res, next) => {
+        let tempFilePath = req.file ? req.file.path : null;
         try {
             const data = typeof req.body.data === 'string' ? JSON.parse(req.body.data) : req.body;
-            
+
             const { error, value } = publishExtensionSchema.validate(data);
             if (error) {
-                if (req.file) fs.unlinkSync(req.file.path);
+                if (tempFilePath) fs.unlinkSync(tempFilePath);
                 return res.status(400).json({ error: error.details[0].message });
             }
 
             validateManifest(value.manifest);
 
             if (value.id !== value.manifest.id) {
-                if (req.file) fs.unlinkSync(req.file.path);
+                if (tempFilePath) fs.unlinkSync(tempFilePath);
                 return res.status(400).json({ error: 'Extension ID must match manifest ID' });
             }
 
             if (value.version !== value.manifest.version) {
-                if (req.file) fs.unlinkSync(req.file.path);
+                if (tempFilePath) fs.unlinkSync(tempFilePath);
                 return res.status(400).json({ error: 'Version must match manifest version' });
             }
 
-            let tarballUrl = null;
-            let tarballHash = null;
-
-            if (req.file) {
-                const packagesDir = path.join(__dirname, '..', 'packages');
-                if (!fs.existsSync(packagesDir)) {
-                    fs.mkdirSync(packagesDir, { recursive: true });
-                }
-
-                const packageName = `${value.id}-${value.version}.tar.gz`;
-                const packagePath = path.join(packagesDir, packageName);
-                
-                fs.renameSync(req.file.path, packagePath);
-
-                const fileBuffer = fs.readFileSync(packagePath);
-                tarballHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
-                tarballUrl = `/packages/${packageName}`;
-            } else {
-                if (req.file) fs.unlinkSync(req.file.path);
+            if (!req.file) {
                 return res.status(400).json({ error: 'Tarball file is required' });
             }
 
-            const result = registry.publishExtension({
+            const fileBuffer = fs.readFileSync(tempFilePath);
+            const tarballHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
+
+            // Upload to MinIO (or local FS fallback)
+            const objectKey = await storage_client.uploadPackage(value.id, value.version, fileBuffer);
+
+            // Remove temp upload
+            fs.unlinkSync(tempFilePath);
+            tempFilePath = null;
+
+            const result = await registry.publishExtension({
                 ...value,
-                tarball_url: tarballUrl,
+                tarball_url: objectKey,
                 tarball_hash: tarballHash
+            });
+
+            publisher.publish('ghost.registry.extension.published', {
+                extensionId: value.id,
+                version: value.version,
+                author: value.author,
+                publisherId: req.publisherId
             });
 
             res.status(result.created ? 201 : 200).json(result);
         } catch (err) {
-            if (req.file && fs.existsSync(req.file.path)) {
-                fs.unlinkSync(req.file.path);
+            if (tempFilePath && fs.existsSync(tempFilePath)) {
+                fs.unlinkSync(tempFilePath);
             }
-            
             if (err.message.includes('already exists')) {
                 return res.status(409).json({ error: err.message });
             }
+            next(err);
+        }
+    });
+
+    // Redirect /packages/:file to MinIO presigned URL (or serve local file if not using MinIO)
+    app.get('/packages/:file', async (req, res, next) => {
+        try {
+            const filename = req.params.file;
+            // Derive the object key used when uploading
+            const parts = filename.replace(/\.tar\.gz$/, '').match(/^(.+)-(\d+\.\d+\.\d+)$/);
+            if (!parts) return res.status(404).json({ error: 'Not found' });
+
+            const id = parts[1];
+            const version = parts[2];
+            const objectKey = `${id}/${filename}`;
+
+            if (storage_client.isMinIO) {
+                const url = await storage_client.getPackageUrl(objectKey);
+                return res.redirect(302, url);
+            }
+
+            // Local FS fallback
+            const localPath = path.join(__dirname, '..', 'packages', filename);
+            if (!fs.existsSync(localPath)) return res.status(404).json({ error: 'Not found' });
+            res.setHeader('Content-Type', 'application/gzip');
+            fs.createReadStream(localPath).pipe(res);
+        } catch (err) {
             next(err);
         }
     });
@@ -243,7 +268,13 @@ function setupRoutes(app, registry) {
                 country: req.headers['cf-ipcountry'] || req.headers['x-country']
             };
 
-            registry.recordDownload(req.params.id, req.params.version, metadata);
+            await registry.recordDownload(req.params.id, req.params.version, metadata);
+
+            publisher.publish('ghost.registry.download.tracked', {
+                extensionId: req.params.id,
+                version: req.params.version
+            });
+
             res.json({ success: true });
         } catch (err) {
             if (err.message.includes('not found')) {
@@ -261,7 +292,7 @@ function setupRoutes(app, registry) {
                 groupBy: req.query.groupBy || 'day'
             };
 
-            const stats = registry.getDownloadStats(req.params.id, options);
+            const stats = await registry.getDownloadStats(req.params.id, options);
             res.json(stats);
         } catch (err) {
             if (err.message.includes('not found')) {
@@ -278,7 +309,7 @@ function setupRoutes(app, registry) {
                 return res.status(400).json({ error: error.details[0].message });
             }
 
-            const result = registry.submitRating(req.params.id, value.user_id, value.rating);
+            const result = await registry.submitRating(req.params.id, value.user_id, value.rating);
             res.json(result);
         } catch (err) {
             if (err.message.includes('not found')) {
@@ -295,7 +326,7 @@ function setupRoutes(app, registry) {
                 return res.status(400).json({ error: error.details[0].message });
             }
 
-            const result = registry.submitReview({
+            const result = await registry.submitReview({
                 extension_id: req.params.id,
                 ...value
             });
@@ -316,7 +347,7 @@ function setupRoutes(app, registry) {
                 sort: req.query.sort || 'recent'
             };
 
-            const reviews = registry.getReviews(req.params.id, options);
+            const reviews = await registry.getReviews(req.params.id, options);
             res.json({ reviews });
         } catch (err) {
             if (err.message.includes('not found')) {
@@ -328,14 +359,12 @@ function setupRoutes(app, registry) {
 
     app.get('/api/extensions/:id/security/:version', async (req, res, next) => {
         try {
-            const scans = registry.getSecurityScans(req.params.id, req.params.version);
+            const scans = await registry.getSecurityScans(req.params.id, req.params.version);
             res.json({ scans });
         } catch (err) {
             next(err);
         }
     });
-
-    app.use('/packages', require('express').static(path.join(__dirname, '..', 'packages')));
 
     app.get('/api/categories', (req, res) => {
         res.json({

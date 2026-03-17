@@ -1,3 +1,5 @@
+'use strict';
+
 const http = require('http');
 const url = require('url');
 const querystring = require('querystring');
@@ -14,6 +16,7 @@ const { AdminDashboard } = require('./admin-dashboard');
 const { DownloadTracker } = require('./download-tracker');
 const { HealthScorer } = require('./health-scorer');
 const { CodeSigningManager } = require('./code-signing');
+const publisher = require('./events/publisher');
 
 class MarketplaceServer {
     constructor(options = {}) {
@@ -21,13 +24,12 @@ class MarketplaceServer {
         this.db = new Database(options.dbPath);
         this.scanner = new SecurityScanner();
         this.validator = new ManifestValidator();
-        this.rateLimiter = new RateLimiter();
         this.authManager = new AuthManager();
         this.adminDashboard = new AdminDashboard(this.db);
         this.downloadTracker = new DownloadTracker(this.db);
         this.codeSigning = new CodeSigningManager();
-        this.healthScorer = new HealthScorer({ 
-            db: this.db, 
+        this.healthScorer = new HealthScorer({
+            db: this.db,
             codeSigning: this.codeSigning,
             extensionDir: options.extensionDir || path.join(__dirname, '..', '..', 'extensions')
         });
@@ -36,6 +38,15 @@ class MarketplaceServer {
         this.healthScoreCacheTTL = 3600000;
         this.startTime = Date.now();
         this._ensureUploadDir();
+
+        // Rate limiter: Redis when REDIS_URL is set, otherwise in-memory
+        if (process.env.REDIS_URL) {
+            const { RedisRateLimiter } = require('./redis-rate-limiter');
+            this.rateLimiter = new RedisRateLimiter();
+            console.log('[Marketplace] Using Redis rate limiter');
+        } else {
+            this.rateLimiter = new RateLimiter();
+        }
     }
 
     _ensureUploadDir() {
@@ -44,13 +55,23 @@ class MarketplaceServer {
         }
     }
 
-    start() {
+    async start() {
+        // Connect to NATS (non-blocking if not configured)
+        await publisher.connect();
+
+        // Initialize database (no-op for SQLite which inits in constructor)
+        if (this.db.initialize) await this.db.initialize();
+
         this.server = http.createServer((req, res) => {
             this._handleRequest(req, res);
         });
 
         this.server.listen(this.port, () => {
             console.log(`[Marketplace] Server running on port ${this.port}`);
+            console.log(`[Marketplace] DB: ${process.env.DATABASE_URL ? 'PostgreSQL' : 'SQLite'}`);
+            console.log(`[Marketplace] Rate limit: ${process.env.REDIS_URL ? 'Redis' : 'in-memory'}`);
+            console.log(`[Marketplace] Auth: ${process.env.KEYCLOAK_URL ? 'Keycloak' : 'local JWT'}`);
+            console.log(`[Marketplace] Events: ${process.env.NATS_URL ? 'NATS' : 'disabled'}`);
         });
     }
 
@@ -78,9 +99,9 @@ class MarketplaceServer {
 
         try {
             const token = req.headers.authorization?.replace('Bearer ', '');
-            
+
             if (pathname.startsWith('/api/admin/')) {
-                const decoded = this.authManager.verifyToken(token);
+                const decoded = await this.authManager.verifyToken(token);
                 if (!decoded || !decoded.isAdmin) {
                     res.writeHead(403);
                     res.end(JSON.stringify({ error: 'Admin access required' }));
@@ -88,7 +109,8 @@ class MarketplaceServer {
                 }
             }
 
-            if (!this.rateLimiter.checkLimit(this._getClientIp(req))) {
+            const allowed = await this.rateLimiter.checkLimit(this._getClientIp(req));
+            if (!allowed) {
                 res.writeHead(429);
                 res.end(JSON.stringify({ error: 'Rate limit exceeded' }));
                 return;
@@ -157,7 +179,6 @@ class MarketplaceServer {
             uptime: Math.floor(uptime / 1000),
             version: require('./package.json').version || '1.0.0'
         };
-
         res.writeHead(200);
         res.end(JSON.stringify(health));
     }
@@ -169,7 +190,7 @@ class MarketplaceServer {
             return;
         }
 
-        const user = this.authManager.verifyToken(token);
+        const user = await this.authManager.verifyToken(token);
         if (!user) {
             res.writeHead(401);
             res.end(JSON.stringify({ error: 'Invalid token' }));
@@ -197,16 +218,22 @@ class MarketplaceServer {
         const filePath = path.join(this.uploadDir, `${extensionId}-${version}.tar.gz`);
         fs.writeFileSync(filePath, file);
 
-        const extension = this.db.createExtension({
+        const extension = await this.db.createExtension({
             id: extensionId,
             name: manifest.name,
             description: manifest.description || '',
-            author: user.username,
-            authorId: user.id,
+            author: user.username || user.userId,
+            authorId: user.userId || user.id || 0,
             version,
             manifest,
             filePath,
             status: 'pending'
+        });
+
+        publisher.publish('ghost.marketplace.extension.published', {
+            extensionId,
+            version,
+            author: user.username || user.userId
         });
 
         res.writeHead(201);
@@ -260,10 +287,12 @@ class MarketplaceServer {
             return;
         }
 
-        const versions = await this.db.getExtensionVersions(id);
-        const changelog = await this.db.getExtensionChangelog(id);
-        const stats = await this.db.getExtensionStats(id);
-        const healthData = await this._getHealthScore(id);
+        const [versions, changelog, stats, healthData] = await Promise.all([
+            this.db.getExtensionVersions(id),
+            this.db.getExtensionChangelog(id),
+            this.db.getExtensionStats(id),
+            this._getHealthScore(id)
+        ]);
 
         res.writeHead(200);
         res.end(JSON.stringify({
@@ -282,7 +311,7 @@ class MarketplaceServer {
         const id = parts[3];
         const version = parts[5];
 
-        const extension = this.db.getExtensionVersion(id, version);
+        const extension = await this.db.getExtensionVersion(id, version);
         if (!extension) {
             res.writeHead(404);
             res.end(JSON.stringify({ error: 'Version not found' }));
@@ -299,7 +328,7 @@ class MarketplaceServer {
 
         res.setHeader('Content-Type', 'application/gzip');
         res.setHeader('Content-Disposition', `attachment; filename="${id}-${version}.tar.gz"`);
-        
+
         const fileStream = fs.createReadStream(extension.filePath);
         fileStream.pipe(res);
     }
@@ -311,7 +340,7 @@ class MarketplaceServer {
             return;
         }
 
-        const user = this.authManager.verifyToken(token);
+        const user = await this.authManager.verifyToken(token);
         if (!user) {
             res.writeHead(401);
             res.end(JSON.stringify({ error: 'Invalid token' }));
@@ -327,12 +356,18 @@ class MarketplaceServer {
             return;
         }
 
-        const rating = this.db.createRating({
+        const rating = await this.db.createRating({
             extensionId: id,
-            userId: user.id,
+            userId: user.userId || user.id,
             rating: body.rating,
             review: body.review || '',
             version: body.version
+        });
+
+        publisher.publish('ghost.marketplace.rating.submitted', {
+            extensionId: id,
+            userId: user.userId || user.id,
+            rating: body.rating
         });
 
         res.writeHead(201);
@@ -347,14 +382,14 @@ class MarketplaceServer {
         const page = parseInt(query.page) || 1;
         const limit = parseInt(query.limit) || 10;
 
-        const reviews = this.db.getReviews(id, { page, limit });
+        const reviews = await this.db.getReviews(id, { page, limit });
 
         res.writeHead(200);
         res.end(JSON.stringify(reviews));
     }
 
     async _handleAdminQueue(req, res) {
-        const queue = this.adminDashboard.getApprovalQueue();
+        const queue = await this.adminDashboard.getApprovalQueue();
         res.writeHead(200);
         res.end(JSON.stringify(queue));
     }
@@ -362,9 +397,14 @@ class MarketplaceServer {
     async _handleAdminApprove(req, res) {
         const id = req.url.split('/')[4];
         const body = await this._parseBody(req);
-        
-        this.db.updateExtensionStatus(id, body.version, 'approved');
-        
+
+        await this.db.updateExtensionStatus(id, body.version, 'approved');
+
+        publisher.publish('ghost.marketplace.extension.approved', {
+            extensionId: id,
+            version: body.version
+        });
+
         res.writeHead(200);
         res.end(JSON.stringify({ success: true }));
     }
@@ -372,16 +412,16 @@ class MarketplaceServer {
     async _handleAdminReject(req, res) {
         const id = req.url.split('/')[4];
         const body = await this._parseBody(req);
-        
-        this.db.updateExtensionStatus(id, body.version, 'rejected', body.reason);
-        
+
+        await this.db.updateExtensionStatus(id, body.version, 'rejected', body.reason);
+
         res.writeHead(200);
         res.end(JSON.stringify({ success: true }));
     }
 
     async _handleLogin(req, res) {
         const body = await this._parseBody(req);
-        const result = this.authManager.login(body.username, body.password);
+        const result = await this.authManager.login(body.username, body.password);
 
         if (!result.success) {
             res.writeHead(401);
@@ -401,21 +441,21 @@ class MarketplaceServer {
             return;
         }
 
-        const user = this.authManager.verifyToken(token);
+        const user = await this.authManager.verifyToken(token);
         if (!user) {
             res.writeHead(401);
             res.end(JSON.stringify({ error: 'Invalid or expired token' }));
             return;
         }
 
-        const publishToken = this.authManager.createPublishToken(user.userId);
+        const publishToken = this.authManager.createPublishToken(user.userId || user.id);
         res.writeHead(200);
         res.end(JSON.stringify({ publishToken, expiresIn: 3600 }));
     }
 
     async _handleRegister(req, res) {
         const body = await this._parseBody(req);
-        const result = this.authManager.register(body.username, body.password, body.email);
+        const result = await this.authManager.register(body.username, body.password, body.email);
 
         if (!result.success) {
             res.writeHead(400);
@@ -423,35 +463,34 @@ class MarketplaceServer {
             return;
         }
 
+        publisher.publish('ghost.marketplace.user.registered', {
+            username: body.username
+        });
+
         res.writeHead(201);
         res.end(JSON.stringify(result));
     }
 
     _getClientIp(req) {
-        return req.headers['x-forwarded-for']?.split(',')[0] || 
-               req.connection.remoteAddress || 
+        return req.headers['x-forwarded-for']?.split(',')[0] ||
+               req.connection.remoteAddress ||
                req.socket.remoteAddress;
     }
 
     async _parseBody(req) {
         return new Promise((resolve, reject) => {
             let body = '';
-            req.on('data', chunk => {
-                body += chunk.toString();
-            });
+            req.on('data', chunk => { body += chunk.toString(); });
             req.on('end', () => {
-                try {
-                    resolve(JSON.parse(body));
-                } catch (error) {
-                    reject(error);
-                }
+                try { resolve(JSON.parse(body)); }
+                catch (error) { reject(error); }
             });
             req.on('error', reject);
         });
     }
 
     async _parseMultipartUpload(req) {
-        const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+        const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
         return new Promise((resolve, reject) => {
             const bb = busboy({
@@ -467,42 +506,26 @@ class MarketplaceServer {
             bb.on('file', (name, stream) => {
                 const chunks = [];
                 stream.on('data', chunk => chunks.push(chunk));
-                stream.on('limit', () => {
-                    fileLimitExceeded = true;
-                    stream.resume();
-                });
-                stream.on('end', () => {
-                    if (!fileLimitExceeded) {
-                        fileBuffer = Buffer.concat(chunks);
-                    }
-                });
+                stream.on('limit', () => { fileLimitExceeded = true; stream.resume(); });
+                stream.on('end', () => { if (!fileLimitExceeded) fileBuffer = Buffer.concat(chunks); });
                 stream.on('error', reject);
             });
 
             bb.on('field', (name, value) => {
                 if (name === 'manifest') {
-                    try {
-                        manifest = JSON.parse(value);
-                    } catch (e) {
-                        manifestParseError = e;
-                    }
+                    try { manifest = JSON.parse(value); }
+                    catch (e) { manifestParseError = e; }
                 }
             });
 
             bb.on('finish', () => {
-                if (fileLimitExceeded) {
-                    return reject(new Error('File exceeds 10MB limit'));
-                }
-                if (!fileBuffer) {
-                    return reject(new Error('No file uploaded'));
-                }
-                if (!manifest) {
-                    return reject(new Error(
-                        manifestParseError
-                            ? `Invalid manifest JSON: ${manifestParseError.message}`
-                            : 'No manifest provided'
-                    ));
-                }
+                if (fileLimitExceeded) return reject(new Error('File exceeds 10MB limit'));
+                if (!fileBuffer) return reject(new Error('No file uploaded'));
+                if (!manifest) return reject(new Error(
+                    manifestParseError
+                        ? `Invalid manifest JSON: ${manifestParseError.message}`
+                        : 'No manifest provided'
+                ));
                 resolve({ file: fileBuffer, manifest });
             });
 
@@ -518,20 +541,14 @@ class MarketplaceServer {
         }
 
         const healthData = await this.healthScorer.calculateHealthScore(extensionId);
-        this.healthScoreCache.set(extensionId, {
-            data: healthData,
-            timestamp: Date.now()
-        });
+        this.healthScoreCache.set(extensionId, { data: healthData, timestamp: Date.now() });
 
         return healthData;
     }
 
     clearHealthScoreCache(extensionId) {
-        if (extensionId) {
-            this.healthScoreCache.delete(extensionId);
-        } else {
-            this.healthScoreCache.clear();
-        }
+        if (extensionId) this.healthScoreCache.delete(extensionId);
+        else this.healthScoreCache.clear();
     }
 }
 
