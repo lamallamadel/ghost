@@ -672,6 +672,8 @@ class GatewayLauncher {
             await this.handleWebhookCommand(parsedArgs);
         } else if (parsedArgs.command === 'dev') {
             await this.handleDevCommand(parsedArgs);
+        } else if (parsedArgs.command === 'shell') {
+            await this.handleShellCommand(parsedArgs);
         } else if (parsedArgs.command === 'init' && parsedArgs.subcommand === 'cli') {
             await this.handleCliInitCommand(parsedArgs);
         } else {
@@ -702,8 +704,95 @@ class GatewayLauncher {
         await wrapper.start({ flags: parsedArgs.flags || {} });
     }
 
+    async handleShellCommand(parsedArgs) {
+        const sub = parsedArgs.subcommand;
+        if (sub === 'prefetch') {
+            await this.handleShellPrefetch();
+        } else {
+            console.log(`${Colors.WARNING}Unknown shell subcommand: ${sub || '(none)'}${Colors.ENDC}`);
+            console.log(`${Colors.DIM}Available: ghost shell prefetch${Colors.ENDC}`);
+        }
+    }
+
+    async handleShellPrefetch() {
+        const MODELS_DIR = path.join(os.homedir(), '.ghost', 'models');
+        const CONFIG_PATH = path.join(os.homedir(), '.ghost', 'config', 'ghostrc.json');
+
+        // Guard: semantic mode must be enabled
+        let semanticEnabled = false;
+        try {
+            const rc = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+            semanticEnabled = rc?.nlRouter?.mode === 'semantic';
+        } catch {}
+
+        if (!semanticEnabled) {
+            console.log(`${Colors.WARNING}⚠  Semantic NL routing is not enabled.${Colors.ENDC}`);
+            console.log(`${Colors.DIM}Run ${Colors.ENDC}ghost setup${Colors.DIM} and answer 'y' to enable it first.${Colors.ENDC}`);
+            return;
+        }
+
+        // Guard: optional dep must be installed
+        let pipeline;
+        try {
+            const mod = await import('@xenova/transformers');
+            pipeline = mod.pipeline;
+        } catch {
+            console.log(`${Colors.FAIL}✗  @xenova/transformers is not installed.${Colors.ENDC}`);
+            console.log(`${Colors.DIM}Run: npm install @xenova/transformers${Colors.ENDC}`);
+            return;
+        }
+
+        console.log(`\n${Colors.BOLD}Prefetching semantic router model${Colors.ENDC}`);
+        console.log(`${Colors.DIM}Model:       Xenova/all-MiniLM-L6-v2 (quantized, ~25MB)${Colors.ENDC}`);
+        console.log(`${Colors.DIM}Destination: ${MODELS_DIR}${Colors.ENDC}\n`);
+
+        const files = {};
+        let renderedLines = 0;
+
+        const renderBars = () => {
+            if (!process.stdout.isTTY) return;
+            const entries = Object.values(files).filter(f => f.total > 0);
+            if (entries.length === 0) return;
+            if (renderedLines > 0) process.stdout.write(`\x1b[${renderedLines}A\x1b[J`);
+            for (const f of entries) {
+                const pct   = Math.min(100, Math.round((f.loaded / f.total) * 100));
+                const filled = Math.round((pct / 100) * 25);
+                const bar   = '█'.repeat(filled) + '░'.repeat(25 - filled);
+                const mb    = n => (n / 1048576).toFixed(1) + 'MB';
+                const done  = f.loaded >= f.total;
+                const pfx   = done ? `${Colors.GREEN}✓${Colors.ENDC}` : ' ';
+                const clr   = done ? Colors.GREEN : Colors.CYAN;
+                process.stdout.write(`${pfx} ${clr}${bar}${Colors.ENDC} ${String(pct).padStart(3)}%  ${Colors.DIM}${mb(f.loaded).padStart(7)} / ${mb(f.total).padStart(7)}  ${f.name}${Colors.ENDC}\n`);
+            }
+            renderedLines = entries.length;
+        };
+
+        try {
+            await pipeline(
+                'feature-extraction', 'Xenova/all-MiniLM-L6-v2',
+                {
+                    cache_dir: MODELS_DIR,
+                    quantized: true,
+                    progress_callback: p => {
+                        if ((p.status === 'downloading' || p.status === 'progress') && p.total) {
+                            files[p.file || p.name] = { name: p.file || p.name, loaded: p.loaded || 0, total: p.total };
+                            renderBars();
+                        }
+                    }
+                }
+            );
+            // Final redraw — mark all complete
+            for (const f of Object.values(files)) f.loaded = f.total;
+            renderBars();
+            console.log(`\n${Colors.GREEN}${Colors.BOLD}✓ Model ready${Colors.ENDC}  ${Colors.DIM}${MODELS_DIR}/Xenova/all-MiniLM-L6-v2/${Colors.ENDC}`);
+            console.log(`${Colors.DIM}Shell will now load instantly on next start.${Colors.ENDC}\n`);
+        } catch (err) {
+            console.log(`\n${Colors.FAIL}✗  Download failed: ${err.message}${Colors.ENDC}\n`);
+        }
+    }
+
     /**
-     * Handle intents from extensions. 
+     * Handle intents from extensions.
      * This is where the Gateway acts as a System Bus.
      */
     async forwardIntent(extId, request) {
