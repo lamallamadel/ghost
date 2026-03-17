@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "Port for IDE communication. Safely exposes Ghost capabilities to external editors.",
   "main": "index.js",
-  "commands": ["start", "stop", "status"],
+  "commands": ["start", "stop", "status", "auth"],
   "capabilities": {
     "network": {
       "incoming": true,
