@@ -14,6 +14,7 @@ const Colors = {
     BOLD: '\x1b[1m',
     WARNING: '\x1b[33m',
     FAIL: '\x1b[31m',
+    DIM: '\x1b[2m',
     ENDC: '\x1b[0m'
 };
 

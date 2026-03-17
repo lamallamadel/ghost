@@ -64,15 +64,44 @@ class SystemExtension {
 
     async handleSanitize(params) {
         await this.sdk.requestLog({ level: 'info', message: 'Starting environment sanitization...' });
-        
+
         const tempPath = path.join(os.homedir(), '.ghost', 'temp');
+        let cleaned = 0;
+        let errors = 0;
+
         try {
-            // In a real implementation, we would readdir and unlink files via intents
-            // For Phase 2, we simulate the cleanup of common Ghost temp artifacts
-            return { 
-                success: true, 
-                output: `${Colors.GREEN}✓ Environment sanitized.${Colors.ENDC}\n- Cleaned ~/.ghost/temp/\n- Removed stale process locks`
-            };
+            let entries = [];
+            try {
+                entries = await this.sdk.emitIntent({
+                    type: 'filesystem',
+                    operation: 'readdir',
+                    params: { path: tempPath }
+                });
+            } catch (e) {
+                // Temp dir doesn't exist — nothing to clean
+            }
+
+            for (const entry of entries) {
+                try {
+                    await this.sdk.emitIntent({
+                        type: 'filesystem',
+                        operation: 'unlink',
+                        params: { path: path.join(tempPath, entry) }
+                    });
+                    cleaned++;
+                } catch (e) {
+                    errors++;
+                    await this.sdk.requestLog({ level: 'warn', message: `Could not remove temp file: ${entry}` });
+                }
+            }
+
+            let output = `${Colors.GREEN}✓ Environment sanitized.${Colors.ENDC}\n`;
+            output += `- Cleaned ${cleaned} file(s) from ~/.ghost/temp/\n`;
+            if (errors > 0) {
+                output += `${Colors.WARNING}- ${errors} file(s) could not be removed (check logs).${Colors.ENDC}\n`;
+            }
+
+            return { success: true, output, cleaned, errors };
         } catch (error) {
             return { success: false, output: `Sanitization failed: ${error.message}` };
         }
@@ -115,12 +144,10 @@ class SystemExtension {
         output += `${Colors.CYAN}User CPU Time:${Colors.ENDC} ${Math.round(cpuUsage.user / 1000)}ms\n`;
         output += `${Colors.CYAN}System CPU Time:${Colors.ENDC} ${Math.round(cpuUsage.system / 1000)}ms\n\n`;
         
-        output += `${Colors.BOLD}Extension Footprint (Estimated)${Colors.ENDC}\n`;
-        // In a real implementation, we'd query the core for per-extension metrics
-        // For Phase 3, we provide an estimated breakdown based on active registrations
-        output += `  - ghost-git-extension: ~12MB RSS\n`;
-        output += `  - ghost-security-extension: ~45MB RSS (Scan Active)\n`;
-        output += `  - ghost-docs-extension: ~8MB RSS\n`;
+        output += `${Colors.BOLD}Extension Footprint${Colors.ENDC}\n`;
+        // Per-extension RSS is available from core telemetry on port 9877 via WebSocket
+        output += `  ${Colors.WARNING}Connect to ws://localhost:9877 for real-time per-extension metrics.${Colors.ENDC}\n`;
+        output += `  ${Colors.CYAN}Run "ghost system status" for process-level metrics.${Colors.ENDC}\n`;
         
         return { success: true, output };
     }

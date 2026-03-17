@@ -22,10 +22,6 @@ class ExtensionWrapper {
     }
 
     async graph(params) {
-        return { success: true };
-    }
-
-    async graph(params) {
         return await this.deps.handleRPCRequest({ method: 'deps.graph', params });
     }
 

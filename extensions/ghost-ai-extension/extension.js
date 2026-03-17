@@ -68,25 +68,32 @@ class AIExtension {
     async handleUsage(params) {
         await this.sdk.requestLog({ level: 'info', message: 'Retrieving AI usage analytics...' });
 
-        // In a real implementation, we'd read from ~/.ghost/metrics/ai-usage.json 
-        // or query the telemetry system via RPC.
-        const usage = {
-            totalTokens: 145200,
-            estimatedCost: 0.42,
-            breakdown: [
-                { extension: 'ghost-git-extension', tokens: 85000, percentage: '58%' },
-                { extension: 'ghost-security-extension', tokens: 42000, percentage: '29%' },
-                { extension: 'ghost-docs-extension', tokens: 18200, percentage: '13%' }
-            ]
-        };
+        const metricsPath = path.join(os.homedir(), '.ghost', 'metrics', 'ai-usage.json');
+        let usage = { totalTokens: 0, estimatedCost: 0, breakdown: [] };
+
+        try {
+            const content = await this.sdk.requestFileRead({ path: metricsPath });
+            usage = JSON.parse(content);
+        } catch (e) {
+            // Metrics file not yet created — display zeros with a note
+        }
+
+        const hasData = usage.totalTokens > 0 || usage.breakdown.length > 0;
 
         let output = `\n${Colors.BOLD}AI USAGE ANALYTICS${Colors.ENDC}\n${'='.repeat(30)}\n`;
-        output += `${Colors.CYAN}Total Tokens Consumed:${Colors.ENDC} ${usage.totalTokens.toLocaleString()}\n`;
-        output += `${Colors.CYAN}Estimated Total Cost:${Colors.ENDC} $${usage.estimatedCost.toFixed(2)}\n\n`;
-        
-        output += `${Colors.BOLD}Consumption by Extension:${Colors.ENDC}\n`;
-        for (const item of usage.breakdown) {
-            output += `  - ${item.extension}: ${item.tokens.toLocaleString()} (${item.percentage})\n`;
+        if (!hasData) {
+            output += `${Colors.WARNING}No usage data recorded yet. Metrics accumulate at ~/.ghost/metrics/ai-usage.json.${Colors.ENDC}\n`;
+        } else {
+            output += `${Colors.CYAN}Total Tokens Consumed:${Colors.ENDC} ${usage.totalTokens.toLocaleString()}\n`;
+            output += `${Colors.CYAN}Estimated Total Cost:${Colors.ENDC} $${(usage.estimatedCost || 0).toFixed(2)}\n\n`;
+
+            if (usage.breakdown && usage.breakdown.length > 0) {
+                output += `${Colors.BOLD}Consumption by Extension:${Colors.ENDC}\n`;
+                for (const item of usage.breakdown) {
+                    const pct = usage.totalTokens > 0 ? Math.round((item.tokens / usage.totalTokens) * 100) : 0;
+                    output += `  - ${item.extension}: ${item.tokens.toLocaleString()} (${pct}%)\n`;
+                }
+            }
         }
 
         return { success: true, output, usage };

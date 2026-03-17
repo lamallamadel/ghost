@@ -163,28 +163,55 @@ class MeshExtension {
     }
 
     async handleHealth(params) {
-        await this.sdk.requestLog({ level: 'info', message: 'Assessing Ghost Mesh health and RPC stability...' });
+        await this.sdk.requestLog({ level: 'info', message: 'Assessing Ghost Mesh health...' });
 
         try {
-            // In a real implementation, we'd query core telemetry for inter-extension latency
-            // For Phase 3, we simulate health metrics for the standard library
-            const metrics = [
-                { id: 'ghost-git-extension', status: 'Healthy', p95: '45ms', errors: 0 },
-                { id: 'ghost-security-extension', status: 'Under Load', p95: '850ms', errors: 2 },
-                { id: 'ghost-docs-extension', status: 'Healthy', p95: '12ms', errors: 0 },
-                { id: 'ghost-system-extension', status: 'Healthy', p95: '5ms', errors: 0 }
-            ];
+            // Enumerate registered extensions and check manifest validity as a health proxy
+            const extensionsDir = 'extensions';
+            const metrics = [];
 
-            let output = `\n${Colors.BOLD}GHOST MESH HEALTH REPORT${Colors.ENDC}\n${'='.repeat(30)}\n`;
-            output += `${Colors.CYAN}${'EXTENSION'.padEnd(25)} ${'STATUS'.padEnd(15)} ${'LATENCY'.padEnd(10)} ${'ERRORS'}${Colors.ENDC}\n`;
+            try {
+                const dirs = await this.sdk.emitIntent({
+                    type: 'filesystem',
+                    operation: 'readdir',
+                    params: { path: extensionsDir }
+                });
 
-            for (const m of metrics) {
-                const statusColor = m.status === 'Healthy' ? Colors.GREEN : Colors.WARNING;
-                output += `${m.id.padEnd(25)} ${statusColor}${m.status.padEnd(15)}${Colors.ENDC} ${m.p95.padEnd(10)} ${m.errors}\n`;
+                for (const dir of dirs) {
+                    const start = Date.now();
+                    let status = 'Healthy';
+                    let notes = '';
+                    try {
+                        const manifestPath = path.join(extensionsDir, dir, 'manifest.json');
+                        const content = await this.sdk.requestFileRead({ path: manifestPath });
+                        const manifest = JSON.parse(content);
+                        if (!manifest.id || !manifest.version) {
+                            status = 'Warning';
+                            notes = 'Incomplete manifest';
+                        }
+                    } catch (e) {
+                        status = 'Error';
+                        notes = 'Manifest unreadable';
+                    }
+                    const latency = Date.now() - start;
+                    metrics.push({ id: dir, status, latency: `${latency}ms`, notes });
+                }
+            } catch (e) {
+                return { success: false, output: `Could not read extensions directory: ${e.message}` };
             }
 
-            const isDegraded = metrics.some(m => m.status !== 'Healthy');
-            output += `\nOverall Mesh Status: ${isDegraded ? Colors.WARNING + 'DEGRADED' : Colors.GREEN + 'OPTIMAL'}${Colors.ENDC}\n`;
+            let output = `\n${Colors.BOLD}GHOST MESH HEALTH REPORT${Colors.ENDC}\n${'='.repeat(50)}\n`;
+            output += `${Colors.CYAN}${'EXTENSION'.padEnd(30)} ${'STATUS'.padEnd(10)} ${'LATENCY'.padEnd(10)} NOTES${Colors.ENDC}\n`;
+
+            for (const m of metrics) {
+                const statusColor = m.status === 'Healthy' ? Colors.GREEN : m.status === 'Warning' ? Colors.WARNING : Colors.FAIL;
+                output += `${m.id.padEnd(30)} ${statusColor}${m.status.padEnd(10)}${Colors.ENDC} ${m.latency.padEnd(10)} ${m.notes}\n`;
+            }
+
+            const healthy = metrics.filter(m => m.status === 'Healthy').length;
+            const isDegraded = healthy < metrics.length;
+            output += `\n${metrics.length} extensions checked. ${healthy} healthy.\n`;
+            output += `Overall Mesh Status: ${isDegraded ? Colors.WARNING + 'DEGRADED' : Colors.GREEN + 'OPTIMAL'}${Colors.ENDC}\n`;
 
             return { success: true, output, metrics };
         } catch (error) {

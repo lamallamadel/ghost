@@ -17,7 +17,10 @@ class ExtensionWrapper {
         this.cloud = new CloudExtension(this.sdk);
     }
 
-    async init() {
+    async init(options = {}) {
+        if (options.coreHandler) {
+            this.sdk.setCoreHandler(options.coreHandler);
+        }
         return { success: true };
     }
 

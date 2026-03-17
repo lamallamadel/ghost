@@ -6,6 +6,7 @@
  */
 
 const { ExtensionSDK } = require('@ghost/extension-sdk');
+const os = require('os');
 const path = require('path');
 
 const Colors = {
@@ -50,13 +51,13 @@ class BridgeExtension {
 
         await this.sdk.requestLog({ level: 'info', message: `Auth attempt from ${editor || 'unknown IDE'}` });
 
-        // Simulate token verification against ghostrc.json
-        const isValid = token === 'ghost-dev-token-123'; // Mock validation
-        
+        // Verify token against ghostrc.json marketplace token or a dedicated bridge token
+        const isValid = await this._verifyToken(token);
+
         if (isValid) {
             const sessionId = `sess_${Math.random().toString(36).substring(2, 10)}`;
-            this.activeSessions.set(sessionId, { 
-                editor: editor || 'Unknown', 
+            this.activeSessions.set(sessionId, {
+                editor: editor || 'Unknown',
                 connectedAt: new Date().toISOString(),
                 lastHeartbeat: Date.now()
             });
@@ -64,6 +65,22 @@ class BridgeExtension {
         }
 
         return { success: false, message: 'Invalid authentication token' };
+    }
+
+    async _verifyToken(token) {
+        try {
+            const configPath = path.join(os.homedir(), '.ghost', 'config', 'ghostrc.json');
+            const content = await this.sdk.requestFileRead({ path: configPath });
+            const config = JSON.parse(content);
+            // Accept the marketplace JWT token or a dedicated bridge token
+            const bridgeToken = config.bridge?.token || config.marketplace?.token;
+            if (bridgeToken && token === bridgeToken) return true;
+        } catch (e) {
+            // Config unreadable — fall back to env
+        }
+        // Also accept an env-set token for CI/testing environments
+        if (process.env.GHOST_BRIDGE_TOKEN && token === process.env.GHOST_BRIDGE_TOKEN) return true;
+        return false;
     }
 
     async handleStatus(params) {

@@ -265,7 +265,7 @@ class DockerHeroExtension {
             switch (method) {
                 case 'docker.scan': return await this.handleScan(params);
                 case 'docker.shrink': return await this.handleShrink(params);
-                case 'docker.generate': return { success: true, output: 'Multi-stage generation pending Phase 3.' };
+                case 'docker.generate': return await this.handleGenerate(params);
                 default: throw new Error(`Unknown method: ${method}`);
             }
         } catch (error) {

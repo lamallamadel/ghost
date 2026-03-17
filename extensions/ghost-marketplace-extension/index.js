@@ -25,23 +25,39 @@ class ExtensionWrapper {
     }
 
     async browse(params) {
-        return { success: true };
-    }
-
-    async browse(params) {
         return await this.marketplace.handleRPCRequest({ method: 'marketplace.browse', params });
-    }
-
-    async install(params) {
-        return await this.marketplace.handleRPCRequest({ method: 'marketplace.install', params });
     }
 
     async search(params) {
         return await this.marketplace.handleRPCRequest({ method: 'marketplace.search', params });
     }
 
+    async info(params) {
+        return await this.marketplace.handleRPCRequest({ method: 'marketplace.info', params });
+    }
+
+    async install(params) {
+        return await this.marketplace.handleRPCRequest({ method: 'marketplace.install', params });
+    }
+
     async update(params) {
         return await this.marketplace.handleRPCRequest({ method: 'marketplace.update', params });
+    }
+
+    async uninstall(params) {
+        return await this.marketplace.handleRPCRequest({ method: 'marketplace.uninstall', params });
+    }
+
+    async rate(params) {
+        return await this.marketplace.handleRPCRequest({ method: 'marketplace.rate', params });
+    }
+
+    async sync(params) {
+        return await this.marketplace.handleRPCRequest({ method: 'marketplace.sync', params });
+    }
+
+    async refresh(params) {
+        return await this.marketplace.handleRPCRequest({ method: 'marketplace.refresh', params });
     }
 
     async handleRPCRequest(request) {

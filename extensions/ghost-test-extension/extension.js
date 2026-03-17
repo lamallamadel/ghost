@@ -130,18 +130,36 @@ class TestExtension {
                 }
             });
 
-            // 2. Read coverage summary (simulated logic for Phase 3)
-            // In a real environment, we'd read coverage/coverage-summary.json
+            // 2. Read coverage/coverage-summary.json if produced by Jest/Vitest
             let output = `\n${Colors.BOLD}GHOST TEST COVERAGE${Colors.ENDC}\n${'='.repeat(30)}\n`;
-            output += `${Colors.CYAN}Total Coverage:${Colors.ENDC} 84.5%\n`;
-            output += `${Colors.CYAN}Statements:${Colors.ENDC} 86.2% (1240/1438)\n`;
-            output += `${Colors.CYAN}Branches:${Colors.ENDC} 72.1% (312/432)\n`;
-            output += `${Colors.CYAN}Functions:${Colors.ENDC} 91.4% (210/230)\n`;
-            output += `${Colors.CYAN}Lines:${Colors.ENDC} 85.8% (1190/1386)\n\n`;
-            
-            output += `${Colors.BOLD}Hotspots (Low Coverage):${Colors.ENDC}\n`;
-            output += `  - core/pipeline/execute.js (42%)\n`;
-            output += `  - extensions/ghost-git-extension/extension.js (68%)\n`;
+
+            try {
+                const summaryContent = await this.sdk.requestFileRead({ path: 'coverage/coverage-summary.json' });
+                const summary = JSON.parse(summaryContent);
+                const total = summary.total;
+
+                if (total) {
+                    const fmt = (m) => `${m.pct}% (${m.covered}/${m.total})`;
+                    output += `${Colors.CYAN}Statements:${Colors.ENDC}  ${fmt(total.statements)}\n`;
+                    output += `${Colors.CYAN}Branches:${Colors.ENDC}    ${fmt(total.branches)}\n`;
+                    output += `${Colors.CYAN}Functions:${Colors.ENDC}   ${fmt(total.functions)}\n`;
+                    output += `${Colors.CYAN}Lines:${Colors.ENDC}       ${fmt(total.lines)}\n\n`;
+
+                    // Identify hotspots: files with < 50% line coverage
+                    output += `${Colors.BOLD}Low-Coverage Files (<50%):${Colors.ENDC}\n`;
+                    let hotspots = 0;
+                    for (const [file, data] of Object.entries(summary)) {
+                        if (file === 'total') continue;
+                        if (data.lines && data.lines.pct < 50) {
+                            output += `  - ${file} (lines: ${data.lines.pct}%)\n`;
+                            hotspots++;
+                        }
+                    }
+                    if (hotspots === 0) output += `  ${Colors.GREEN}None${Colors.ENDC}\n`;
+                }
+            } catch (e) {
+                output += `${Colors.WARNING}Coverage report not available. Run "npm run test:coverage" manually to generate it.${Colors.ENDC}\n`;
+            }
 
             return { success: true, output };
         } catch (error) {

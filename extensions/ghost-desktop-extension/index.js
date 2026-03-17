@@ -24,14 +24,12 @@ class ExtensionWrapper {
         return { success: true };
     }
 
-    /**
-     * Overrides/Implements the 'console' command
-     */
     async console(params) {
-        return await this.desktop.handleRPCRequest({
-            method: 'desktop.console',
-            params
-        });
+        return await this.desktop.handleRPCRequest({ method: 'desktop.console', params });
+    }
+
+    async status(params) {
+        return await this.desktop.handleRPCRequest({ method: 'desktop.status', params });
     }
 
     async handleRPCRequest(request) {

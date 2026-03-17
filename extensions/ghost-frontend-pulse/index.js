@@ -25,10 +25,6 @@ class ExtensionWrapper {
     }
 
     async analyze(params) {
-        return { success: true };
-    }
-
-    async analyze(params) {
         return await this.pulse.handleRPCRequest({ method: 'fe.analyze', params });
     }
 
