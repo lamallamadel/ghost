@@ -26,44 +26,57 @@ const originalEnv = process.env.GHOST_MARKETPLACE_URL;
 
 // ── Test 1: Default URL when no ghostrc and no env var ────────────────────────
 
-console.log('▶ Test 1: Default registry URL');
+console.log('▶ Test 1: Default registry URL (local environment)');
 removeGhostrc();
 delete process.env.GHOST_MARKETPLACE_URL;
+delete process.env.GHOST_ENV;
 const { MarketplaceService: MS1 } = freshRequire();
 const svc1 = new MS1();
-assert.strictEqual(svc1.registryUrl, 'https://registry.ghost-cli.dev/api', 'Should use default URL');
-console.log('  ✓ Default URL correct\n');
+assert.strictEqual(svc1.registryUrl, 'http://localhost:3000/api', 'Should use local environment default URL');
+console.log('  ✓ Default URL correct (local preset)\n');
 
-// ── Test 2: Env var overrides default ────────────────────────────────────────
+// ── Test 2: GHOST_ENV env var selects dev environment ────────────────────────
 
-console.log('▶ Test 2: GHOST_MARKETPLACE_URL env var overrides default');
+console.log('▶ Test 2: GHOST_ENV=dev selects dev registry URL');
 removeGhostrc();
-process.env.GHOST_MARKETPLACE_URL = 'https://custom-env.example.com/api';
+delete process.env.GHOST_MARKETPLACE_URL;
+process.env.GHOST_ENV = 'dev';
 const { MarketplaceService: MS2 } = freshRequire();
 const svc2 = new MS2();
-assert.strictEqual(svc2.registryUrl, 'https://custom-env.example.com/api');
-console.log('  ✓ Env var takes precedence over default\n');
+assert.strictEqual(svc2.registryUrl, 'http://ghost-registry.dev.local/api',
+    'GHOST_ENV=dev should select dev registry URL');
+delete process.env.GHOST_ENV;
+console.log('  ✓ GHOST_ENV=dev selects dev registry URL\n');
 
-// ── Test 3: ghostrc overrides env var ────────────────────────────────────────
+// ── Test 3: profile-specific URL overrides environment preset ────────────────
 
-console.log('▶ Test 3: ghostrc.marketplace.registryUrl overrides env var');
-process.env.GHOST_MARKETPLACE_URL = 'https://should-be-ignored.example.com/api';
-writeGhostrc({ marketplace: { registryUrl: 'https://from-ghostrc.example.com/api' } });
-const { MarketplaceService: MS3 } = freshRequire();
-const svc3 = new MS3();
-assert.strictEqual(svc3.registryUrl, 'https://from-ghostrc.example.com/api', 'ghostrc wins over env var');
-console.log('  ✓ ghostrc takes top priority\n');
+console.log('▶ Test 3: profile registryUrl overrides environment preset');
+delete process.env.GHOST_ENV;
+writeGhostrc({
+    marketplace: {
+        profiles: {
+            work: { registryUrl: 'https://from-ghostrc-profile.example.com/api' }
+        }
+    }
+});
+const { MarketplaceService: MS3, resolveRegistryUrl: rru3 } = freshRequire();
+// Profile URL takes priority over environment preset
+assert.strictEqual(rru3('work'), 'https://from-ghostrc-profile.example.com/api', 'profile registryUrl wins over env preset');
+const svc3 = new MS3({ registryUrl: rru3('work') });
+assert.strictEqual(svc3.registryUrl, 'https://from-ghostrc-profile.example.com/api');
+console.log('  ✓ profile registryUrl takes top priority over environment preset\n');
 
-// ── Test 4: Malformed ghostrc falls back to env var ──────────────────────────
+// ── Test 4: Malformed ghostrc falls back to environment preset ───────────────
 
-console.log('▶ Test 4: Malformed ghostrc falls back to env var');
-process.env.GHOST_MARKETPLACE_URL = 'https://env-fallback.example.com/api';
+console.log('▶ Test 4: Malformed ghostrc falls back to local environment preset');
+delete process.env.GHOST_MARKETPLACE_URL;
+delete process.env.GHOST_ENV;
 if (!fs.existsSync(GHOSTRC_DIR)) fs.mkdirSync(GHOSTRC_DIR, { recursive: true });
 fs.writeFileSync(GHOSTRC_PATH, 'not valid json {{{{');
 const { MarketplaceService: MS4 } = freshRequire();
 const svc4 = new MS4();
-assert.strictEqual(svc4.registryUrl, 'https://env-fallback.example.com/api', 'Malformed ghostrc should fall back');
-console.log('  ✓ Malformed ghostrc falls back gracefully\n');
+assert.strictEqual(svc4.registryUrl, 'http://localhost:3000/api', 'Malformed ghostrc should fall back to local preset');
+console.log('  ✓ Malformed ghostrc falls back gracefully to local preset\n');
 
 // ── Test 5: Valid token injected as Authorization header ─────────────────────
 
@@ -242,17 +255,18 @@ function runProfileTests() {
 
     // ── Test 12: Unknown profile name falls back gracefully ───────────────────
 
-    console.log('▶ Test 12: Unknown profile name falls back gracefully');
-    process.env.GHOST_MARKETPLACE_URL = 'https://fallback.example.com/api';
+    console.log('▶ Test 12: Unknown profile name falls back to environment preset');
+    delete process.env.GHOST_MARKETPLACE_URL;
+    delete process.env.GHOST_ENV;
     writeGhostrc({ marketplace: { profiles: { known: { registryUrl: 'https://known.example.com/api' } } } });
     const { resolveRegistryUrl: rru12, readAuthToken: rat12 } = freshRequire();
-    // Unknown profile → falls back to env var
-    assert.strictEqual(rru12('unknown'), 'https://fallback.example.com/api',
-        'Unknown profile should fall back to env var');
+    // Unknown profile → falls back to environment preset (local)
+    assert.strictEqual(rru12('unknown'), 'http://localhost:3000/api',
+        'Unknown profile should fall back to local environment preset');
     // Unknown profile → null token (no crash)
     assert.strictEqual(rat12('unknown'), null,
         'Unknown profile should return null token without throwing');
-    console.log('  ✓ Unknown profile falls back gracefully\n');
+    console.log('  ✓ Unknown profile falls back to local environment preset\n');
 
     // final cleanup
     removeGhostrc();

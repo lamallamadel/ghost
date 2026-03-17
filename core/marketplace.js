@@ -11,17 +11,18 @@ const DEFAULT_PUBLIC_KEY = `-----BEGIN PUBLIC KEY-----
 MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAw8+JBKqK5vHxqD8xhN2K
 -----END PUBLIC KEY-----`;
 
+const environment = require('./environment.js');
+
 function resolveRegistryUrl(profileName = null) {
+    // Profile-specific URL takes highest precedence (per-profile login sessions)
     try {
         const rc = JSON.parse(fs.readFileSync(GHOSTRC_PATH, 'utf8'));
         const name = profileName || rc?.marketplace?.activeProfile || 'default';
-        // New format: profiles map
         const p = rc?.marketplace?.profiles?.[name];
         if (p?.registryUrl) return p.registryUrl;
-        // Old flat format (pre-profiles migration)
-        if (rc?.marketplace?.registryUrl) return rc.marketplace.registryUrl;
     } catch {}
-    return process.env.GHOST_MARKETPLACE_URL || DEFAULT_REGISTRY_URL;
+    // Environment-aware resolution (local / dev / GHOST_ENV override)
+    return environment.resolveServiceUrl('registryUrl');
 }
 
 function readAuthToken(profileName = null) {

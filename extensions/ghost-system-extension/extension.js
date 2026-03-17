@@ -8,6 +8,7 @@
 const { ExtensionSDK } = require('@ghost/extension-sdk');
 const os = require('os');
 const path = require('path');
+const environment = require('../../core/environment.js');
 
 const Colors = {
     GREEN: '\x1b[32m',
@@ -152,6 +153,56 @@ class SystemExtension {
         return { success: true, output };
     }
 
+    handleEnvShow(_params) {
+        const name = environment.getActiveEnvironment();
+        const envs = environment.listEnvironments();
+        const current = envs.find(e => e.name === name) || { name, urls: {} };
+        const source = process.env.GHOST_ENV ? ' (GHOST_ENV override)' : '';
+
+        let output = `\n${Colors.BOLD}ACTIVE ENVIRONMENT${Colors.ENDC}\n${'='.repeat(30)}\n`;
+        output += `${Colors.CYAN}Environment:${Colors.ENDC} ${Colors.BOLD}${name}${Colors.ENDC}${source}\n\n`;
+        for (const [key, url] of Object.entries(current.urls)) {
+            output += `${Colors.CYAN}${key}:${Colors.ENDC} ${url}\n`;
+        }
+        return { success: true, output };
+    }
+
+    handleEnvList(_params) {
+        const envs = environment.listEnvironments();
+        let output = `\n${Colors.BOLD}ENVIRONMENTS${Colors.ENDC}\n${'='.repeat(30)}\n`;
+        for (const env of envs) {
+            const marker = env.active ? `${Colors.GREEN}*${Colors.ENDC} ` : '  ';
+            output += `${marker}${Colors.BOLD}${env.name}${Colors.ENDC}\n`;
+            for (const [key, url] of Object.entries(env.urls)) {
+                output += `      ${Colors.CYAN}${key}:${Colors.ENDC} ${url}\n`;
+            }
+        }
+        return { success: true, output };
+    }
+
+    handleEnvUse(params) {
+        const name = params.args?.[0];
+        if (!name) return { success: false, output: 'Usage: ghost env use <name>' };
+        try {
+            environment.setActiveEnvironment(name);
+            return { success: true, output: `${Colors.GREEN}✓ Switched to environment: ${name}${Colors.ENDC}\n` };
+        } catch (err) {
+            return { success: false, output: `${Colors.FAIL}Error: ${err.message}${Colors.ENDC}\n` };
+        }
+    }
+
+    handleEnvSet(params) {
+        const [key, url] = params.args || [];
+        if (!key || !url) return { success: false, output: 'Usage: ghost env set <key> <url>' };
+        const name = environment.getActiveEnvironment();
+        try {
+            environment.setEnvUrl(name, key, url);
+            return { success: true, output: `${Colors.GREEN}✓ Set ${key}=${url} for environment '${name}'${Colors.ENDC}\n` };
+        } catch (err) {
+            return { success: false, output: `${Colors.FAIL}Error: ${err.message}${Colors.ENDC}\n` };
+        }
+    }
+
     async handleRPCRequest(request) {
         const { method, params = {} } = request;
         try {
@@ -161,6 +212,10 @@ class SystemExtension {
                 case 'sys.sanitize': return await this.handleSanitize(params);
                 case 'sys.doctor': return await this.handleDoctor(params);
                 case 'sys.analytics': return await this.handleAnalytics(params);
+                case 'env.show': return this.handleEnvShow(params);
+                case 'env.list': return this.handleEnvList(params);
+                case 'env.use':  return this.handleEnvUse(params);
+                case 'env.set':  return this.handleEnvSet(params);
                 default: throw new Error(`Unknown method: ${method}`);
             }
         } catch (error) {

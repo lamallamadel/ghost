@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "description": "System monitoring and environment health management.",
   "main": "index.js",
-  "commands": ["status", "logs", "sanitize", "doctor"],
+  "commands": ["status", "logs", "sanitize", "doctor", "env"],
   "capabilities": {
     "filesystem": {
       "read": [
@@ -14,7 +14,8 @@
       ],
       "write": [
         "~/.ghost/audit.log*",
-        "~/.ghost/temp/*"
+        "~/.ghost/temp/*",
+        "~/.ghost/config/ghostrc.json"
       ]
     }
   },
