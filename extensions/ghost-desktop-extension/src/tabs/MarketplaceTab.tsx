@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
-import { Package, Download, Star, Search, Shield, AlertCircle, CheckCircle, ExternalLink, Filter } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Package, Download, Star, Search, Shield, AlertCircle, CheckCircle, ExternalLink, Filter, SearchX } from 'lucide-react'
 import { useToastsStore } from '@/stores/useToastsStore'
+import { ghost } from '@/ipc/ghost'
 
 type MarketplaceExtension = {
   id: string
@@ -90,23 +91,134 @@ function CompatibilityIndicator({ compatibility }: { compatibility: { ghostCli: 
   )
 }
 
+function ChangelogSection({ changelog }: { changelog: string }) {
+  const sections = changelog.split(/(?=^#{1,3} |^v\d+\.\d+)/m).filter(Boolean)
+
+  if (sections.length <= 1) {
+    return (
+      <div className="whitespace-pre-wrap rounded-lg border border-white/10 bg-black/30 p-3 text-sm text-white/80">
+        {changelog}
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-2">
+      {sections.map((section, i) => {
+        const lines = section.trim().split('\n')
+        const header = lines[0].replace(/^#+\s*|^v/, '').trim()
+        const body = lines.slice(1).join('\n').trim()
+        return (
+          <details key={i} open={i === 0} className="rounded-lg border border-white/10 overflow-hidden">
+            <summary className="cursor-pointer bg-white/5 px-3 py-2 text-sm font-medium hover:bg-white/10 select-none">
+              {header}
+            </summary>
+            {body && (
+              <div className="whitespace-pre-wrap bg-black/30 p-3 text-sm text-white/80">
+                {body}
+              </div>
+            )}
+          </details>
+        )
+      })}
+    </div>
+  )
+}
+
+function FeaturedStrip({
+  extensions,
+  installedIds,
+  onInstallClick,
+  onViewDetails
+}: {
+  extensions: MarketplaceExtension[]
+  installedIds: Set<string>
+  onInstallClick: (id: string) => void
+  onViewDetails: (ext: MarketplaceExtension) => void
+}) {
+  if (!extensions.length) return null
+
+  return (
+    <div className="mb-6">
+      <div className="mb-3 flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-white/50">
+        <Star size={12} />
+        En vedette
+      </div>
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+        {extensions.map(ext => {
+          const isInstalled = installedIds.has(ext.id)
+          return (
+            <div
+              key={ext.id}
+              className="rounded-xl border border-[rgb(var(--gc-accent))]/20 bg-[rgb(var(--gc-accent))]/5 p-4 hover:border-[rgb(var(--gc-accent))]/40 transition-colors"
+            >
+              <div className="mb-2 flex items-start justify-between gap-2">
+                <h3 className="truncate font-semibold">{ext.name}</h3>
+                <div className="flex shrink-0 items-center gap-1">
+                  {ext.verified && <Shield size={14} className="text-emerald-400" />}
+                  <span className="font-mono text-xs text-white/40">v{ext.versions[0].version}</span>
+                </div>
+              </div>
+              <p className="mb-3 line-clamp-2 text-xs text-white/60">{ext.description}</p>
+              <div className="mb-3 flex items-center gap-2">
+                <CategoryBadge category={ext.category} />
+                <span className="flex items-center gap-0.5 text-xs text-white/40">
+                  <Download size={11} />
+                  {ext.downloads.toLocaleString()}
+                </span>
+              </div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => isInstalled ? null : onInstallClick(ext.id)}
+                  disabled={isInstalled}
+                  className={`flex-1 rounded-lg py-1.5 text-xs font-semibold ${isInstalled ? 'border border-emerald-500/30 bg-emerald-500/10 text-emerald-400 cursor-default' : 'bg-[rgb(var(--gc-accent))] text-black hover:opacity-90'}`}
+                >
+                  {isInstalled ? 'Installé ✓' : 'Install'}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onViewDetails(ext)}
+                  className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs hover:bg-white/10"
+                >
+                  Détails
+                </button>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 function ExtensionCard({
   extension,
-  onInstall,
+  isInstalled,
+  showInstallPanel,
+  onInstallClick,
+  onClosePanel,
   onViewDetails
 }: {
   extension: MarketplaceExtension
-  onInstall: (id: string) => void
+  isInstalled: boolean
+  showInstallPanel: boolean
+  onInstallClick: (id: string) => void
+  onClosePanel: () => void
   onViewDetails: (ext: MarketplaceExtension) => void
 }) {
+  function copyToClipboard(text: string) {
+    navigator.clipboard.writeText(text).catch(() => null)
+  }
+
   return (
     <div className="group rounded-xl border border-white/10 bg-black/20 p-4 transition-all hover:border-white/20 hover:bg-black/30">
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex items-start gap-4">
         <div className="flex items-start gap-3 flex-1 min-w-0">
           <div className="rounded-lg border border-white/10 bg-white/5 p-3 shrink-0">
             <Package size={24} />
           </div>
-          
+
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-1">
               <h3 className="font-semibold truncate">{extension.name}</h3>
@@ -143,13 +255,19 @@ function ExtensionCard({
           </div>
         </div>
 
-        <div className="flex flex-col gap-2 shrink-0">
+        <div className="relative flex flex-col gap-2 shrink-0">
+          {isInstalled && (
+            <span className="absolute -top-2 -right-2 rounded-full border border-emerald-500/30 bg-emerald-500/20 px-2 py-0.5 text-xs text-emerald-400 whitespace-nowrap">
+              Installé ✓
+            </span>
+          )}
           <button
             type="button"
-            onClick={() => onInstall(extension.id)}
-            className="rounded-lg bg-[rgb(var(--gc-accent))] px-4 py-2 text-sm font-semibold text-black hover:opacity-90"
+            onClick={() => isInstalled ? null : onInstallClick(extension.id)}
+            disabled={isInstalled}
+            className={isInstalled ? 'mt-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-4 py-2 text-sm text-emerald-400 cursor-default' : 'rounded-lg bg-[rgb(var(--gc-accent))] px-4 py-2 text-sm font-semibold text-black hover:opacity-90'}
           >
-            Install
+            {isInstalled ? 'Déjà installé' : 'Install'}
           </button>
           <button
             type="button"
@@ -160,19 +278,48 @@ function ExtensionCard({
           </button>
         </div>
       </div>
+
+      {showInstallPanel && (
+        <div className="mt-3 rounded-lg border border-white/10 bg-black/30 p-3">
+          <div className="mb-2 text-xs text-white/60">Exécuter dans votre terminal :</div>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 rounded bg-black/40 px-3 py-1.5 font-mono text-sm text-emerald-300">
+              ghost install {extension.id}
+            </code>
+            <button
+              type="button"
+              onClick={() => copyToClipboard(`ghost install ${extension.id}`)}
+              className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs hover:bg-white/10"
+            >
+              Copier
+            </button>
+            <button
+              type="button"
+              onClick={onClosePanel}
+              className="rounded-lg border border-white/10 bg-white/5 px-3 py-1.5 text-xs hover:bg-white/10"
+            >
+              Fermer
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
 
 function ExtensionDetailsModal({
   extension,
+  installedIds,
   onClose,
   onInstall
 }: {
   extension: MarketplaceExtension
+  installedIds: Set<string>
   onClose: () => void
   onInstall: (id: string) => void
 }) {
+  const isInstalled = installedIds.has(extension.id)
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm" onClick={onClose}>
       <div className="max-h-[90vh] w-full max-w-3xl overflow-auto rounded-2xl border border-white/20 bg-[rgb(var(--gc-bg))] p-6 shadow-2xl" onClick={e => e.stopPropagation()}>
@@ -235,10 +382,8 @@ function ExtensionDetailsModal({
 
         {extension.versions[0].changelog && (
           <div className="mb-6">
-            <h3 className="mb-2 font-semibold">Latest Changes</h3>
-            <div className="rounded-lg border border-white/10 bg-black/30 p-3 text-sm text-white/80">
-              {extension.versions[0].changelog}
-            </div>
+            <h3 className="mb-2 font-semibold">Changelog</h3>
+            <ChangelogSection changelog={extension.versions[0].changelog} />
           </div>
         )}
 
@@ -285,17 +430,21 @@ function ExtensionDetailsModal({
           </div>
         )}
 
-        <div className="flex justify-end">
-          <button
-            type="button"
-            onClick={() => {
-              onInstall(extension.id)
-              onClose()
-            }}
-            className="rounded-lg bg-[rgb(var(--gc-accent))] px-6 py-3 font-semibold text-black hover:opacity-90"
-          >
-            Install Extension
-          </button>
+        <div className="flex items-center justify-end gap-3">
+          {isInstalled ? (
+            <div className="text-sm text-emerald-400">Installé ✓</div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => {
+                onInstall(extension.id)
+                onClose()
+              }}
+              className="rounded-lg bg-[rgb(var(--gc-accent))] px-6 py-3 font-semibold text-black hover:opacity-90"
+            >
+              Install Extension
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -304,60 +453,74 @@ function ExtensionDetailsModal({
 
 export function MarketplaceTab() {
   const pushToast = useToastsStore((s) => s.push)
-  const [extensions, setExtensions] = useState<MarketplaceExtension[]>([])
+  const [allExtensions, setAllExtensions] = useState<MarketplaceExtension[]>([])
+  const [installedIds, setInstalledIds] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedCategory, setSelectedCategory] = useState('all')
   const [sortBy, setSortBy] = useState('downloads')
   const [selectedExtension, setSelectedExtension] = useState<MarketplaceExtension | null>(null)
+  const [installPanelId, setInstallPanelId] = useState<string | null>(null)
 
   const loadExtensions = useCallback(async () => {
     setLoading(true)
     try {
       const registry = await fetch('/marketplace-registry.json').then(r => r.json())
-      let filtered = registry.extensions || []
-
-      if (selectedCategory !== 'all') {
-        filtered = filtered.filter((e: MarketplaceExtension) => e.category === selectedCategory)
-      }
-
-      if (searchQuery) {
-        const q = searchQuery.toLowerCase()
-        filtered = filtered.filter((e: MarketplaceExtension) =>
-          e.name.toLowerCase().includes(q) ||
-          e.description.toLowerCase().includes(q) ||
-          e.tags.some(t => t.toLowerCase().includes(q))
-        )
-      }
-
-      if (sortBy === 'downloads') {
-        filtered.sort((a: MarketplaceExtension, b: MarketplaceExtension) => b.downloads - a.downloads)
-      } else if (sortBy === 'rating') {
-        filtered.sort((a: MarketplaceExtension, b: MarketplaceExtension) => b.ratings.average - a.ratings.average)
-      } else if (sortBy === 'recent') {
-        filtered.sort((a: MarketplaceExtension, b: MarketplaceExtension) =>
-          new Date(b.versions[0].publishedAt).getTime() - new Date(a.versions[0].publishedAt).getTime()
-        )
-      }
-
-      setExtensions(filtered)
+      setAllExtensions(registry.extensions || [])
     } catch (error) {
       pushToast({ title: 'Error loading marketplace', message: String(error), tone: 'danger' })
     } finally {
       setLoading(false)
     }
-  }, [selectedCategory, searchQuery, sortBy, pushToast])
+  }, [pushToast])
 
   useEffect(() => {
     loadExtensions()
   }, [loadExtensions])
 
+  useEffect(() => {
+    ghost.gatewayState()
+      .then(res => setInstalledIds(new Set(res.extensions.map(e => e.manifest.id))))
+      .catch(() => null)
+  }, [])
+
+  const extensions = useMemo(() => {
+    let filtered = [...allExtensions]
+
+    if (selectedCategory !== 'all') {
+      filtered = filtered.filter(e => e.category === selectedCategory)
+    }
+
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase()
+      filtered = filtered.filter(e =>
+        e.name.toLowerCase().includes(q) ||
+        e.description.toLowerCase().includes(q) ||
+        e.tags.some(t => t.toLowerCase().includes(q))
+      )
+    }
+
+    if (sortBy === 'downloads') {
+      filtered.sort((a, b) => b.downloads - a.downloads)
+    } else if (sortBy === 'rating') {
+      filtered.sort((a, b) => b.ratings.average - a.ratings.average)
+    } else if (sortBy === 'recent') {
+      filtered.sort((a, b) =>
+        new Date(b.versions[0].publishedAt).getTime() - new Date(a.versions[0].publishedAt).getTime()
+      )
+    }
+
+    return filtered
+  }, [allExtensions, selectedCategory, searchQuery, sortBy])
+
+  const featured = useMemo(() => {
+    if (searchQuery || selectedCategory !== 'all') return []
+    return [...allExtensions].sort((a, b) => b.downloads - a.downloads).slice(0, 3)
+  }, [allExtensions, searchQuery, selectedCategory])
+
   const handleInstall = useCallback((extensionId: string) => {
-    pushToast({ title: 'Installation started', message: `Installing ${extensionId}...`, tone: 'info' })
-    
-    setTimeout(() => {
-      pushToast({ title: 'Installation complete', message: `${extensionId} installed successfully`, tone: 'success' })
-    }, 2000)
+    setInstallPanelId(prev => prev === extensionId ? null : extensionId)
+    pushToast({ title: 'Installation', message: `ghost install ${extensionId}`, tone: 'info' })
   }, [pushToast])
 
   return (
@@ -415,23 +578,39 @@ export function MarketplaceTab() {
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto p-4">
-        {loading && !extensions.length ? (
+        {loading && !allExtensions.length ? (
           <div className="text-sm text-white/60">Loading marketplace...</div>
         ) : extensions.length === 0 ? (
           <div className="rounded-xl border border-white/10 bg-black/20 p-8 text-center">
-            <Package size={48} className="mx-auto mb-4 text-white/20" />
-            <div className="text-sm text-white/60">No extensions found</div>
+            <SearchX size={48} className="mx-auto mb-4 text-white/20" />
+            <div className="text-base font-semibold text-white/60">Aucun résultat</div>
+            <div className="mt-1 text-sm text-white/40">Essayez un autre terme ou catégorie</div>
             {(searchQuery || selectedCategory !== 'all') && (
-              <div className="mt-2 text-xs text-white/40">Try adjusting your filters</div>
+              <button
+                type="button"
+                onClick={() => { setSearchQuery(''); setSelectedCategory('all') }}
+                className="mt-4 rounded-lg border border-white/10 bg-white/5 px-4 py-2 text-sm hover:bg-white/10"
+              >
+                Effacer la recherche
+              </button>
             )}
           </div>
         ) : (
           <div className="space-y-3">
+            <FeaturedStrip
+              extensions={featured}
+              installedIds={installedIds}
+              onInstallClick={handleInstall}
+              onViewDetails={setSelectedExtension}
+            />
             {extensions.map(ext => (
               <ExtensionCard
                 key={ext.id}
                 extension={ext}
-                onInstall={handleInstall}
+                isInstalled={installedIds.has(ext.id)}
+                showInstallPanel={installPanelId === ext.id}
+                onInstallClick={handleInstall}
+                onClosePanel={() => setInstallPanelId(null)}
                 onViewDetails={setSelectedExtension}
               />
             ))}
@@ -442,6 +621,7 @@ export function MarketplaceTab() {
       {selectedExtension && (
         <ExtensionDetailsModal
           extension={selectedExtension}
+          installedIds={installedIds}
           onClose={() => setSelectedExtension(null)}
           onInstall={handleInstall}
         />

@@ -20,6 +20,12 @@
   --gc-accent: 124 92 255;
   --gc-opacity: 0.75;
   --gc-font-size: 14px;
+  --gc-line-height: 1.7;
+  --gc-reading-width: none;
+}
+
+pre {
+  line-height: var(--gc-line-height);
 }
 
 html, body, #root {

@@ -112,7 +112,7 @@ export function CommandsTab({ tabId }: { tabId: string }) {
       </div>
 
       <div className="min-h-0 flex-1 overflow-auto bg-black/10 p-4">
-        <div className="space-y-2 font-mono text-xs">
+        <div className="mx-auto w-full space-y-2 font-mono text-xs" style={{ lineHeight: 'var(--gc-line-height)', maxWidth: 'var(--gc-reading-width)' }}>
           {(session?.output || []).map((l) => (
             <pre
               key={l.id}

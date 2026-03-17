@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { ghost } from '@/ipc/ghost'
 import type { LogEvent, LogLevel, LogScope } from '@/ipc/types'
 import { useToastsStore } from '@/stores/useToastsStore'
@@ -9,6 +9,7 @@ export function LogsTab() {
   const [level, setLevel] = useState<LogLevel | ''>('')
   const [scope, setScope] = useState<LogScope | ''>('')
   const [loading, setLoading] = useState(false)
+  const scrollRef = useRef<HTMLDivElement>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -33,6 +34,10 @@ export function LogsTab() {
     } catch (e) {
       pushToast({ title: 'Export KO', message: String(e), tone: 'danger' })
     }
+  }
+
+  function scrollToBottom() {
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
   }
 
   return (
@@ -66,28 +71,42 @@ export function LogsTab() {
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto p-4">
-        {loading ? <div className="text-sm text-white/60">Chargement…</div> : null}
-        <div className="space-y-2">
-          {items.map((l) => (
-            <div key={l.id || `${l.ts}-${l.message}`} className="rounded-xl border border-white/10 bg-black/20 p-3">
-              <div className="flex items-center justify-between gap-3">
-                <div className="font-mono text-xs text-white/60">{l.ts}</div>
-                <div className="flex items-center gap-2 text-xs">
-                  <span className="rounded-md border border-white/10 bg-white/5 px-2 py-0.5">{l.level}</span>
-                  <span className="rounded-md border border-white/10 bg-white/5 px-2 py-0.5">{l.scope}</span>
+      <div className="relative min-h-0 flex-1 overflow-hidden">
+        <div className="h-full overflow-auto p-4" ref={scrollRef}>
+          {loading ? <div className="text-sm text-white/60">Chargement…</div> : null}
+          <div className="mx-auto w-full" style={{ maxWidth: 'var(--gc-reading-width)' }}>
+            <div className="divide-y divide-white/5 overflow-hidden rounded-xl border border-white/10">
+              {items.map((l) => (
+                <div key={l.id || `${l.ts}-${l.message}`} className="bg-black/20 p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="font-mono text-xs text-white/60">{l.ts}</div>
+                    <div className="flex items-center gap-2 text-xs">
+                      <span className="rounded-md border border-white/10 bg-white/5 px-2 py-0.5">{l.level}</span>
+                      <span className="rounded-md border border-white/10 bg-white/5 px-2 py-0.5">{l.scope}</span>
+                    </div>
+                  </div>
+                  <div className="mt-2 text-sm" style={{ lineHeight: 'var(--gc-line-height)' }}>{l.message}</div>
+                  {l.data ? (
+                    <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg border border-white/10 bg-black/30 p-2 font-mono text-xs text-white/70">
+                      {JSON.stringify(l.data, null, 2)}
+                    </pre>
+                  ) : null}
                 </div>
-              </div>
-              <div className="mt-2 text-sm">{l.message}</div>
-              {l.data ? (
-                <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded-lg border border-white/10 bg-black/30 p-2 font-mono text-xs text-white/70">
-                  {JSON.stringify(l.data, null, 2)}
-                </pre>
-              ) : null}
+              ))}
             </div>
-          ))}
-          {items.length === 0 && !loading ? <div className="text-sm text-white/60">Aucun log.</div> : null}
+            {items.length === 0 && !loading ? <div className="rounded-xl border border-white/10 bg-black/20 p-4 text-sm text-white/60">Aucun log.</div> : null}
+          </div>
         </div>
+
+        {items.length > 5 && (
+          <button
+            type="button"
+            onClick={scrollToBottom}
+            className="absolute bottom-4 right-4 z-10 flex items-center gap-1 rounded-full border border-white/10 bg-black/60 px-3 py-1.5 text-xs text-white/70 backdrop-blur hover:bg-black/80"
+          >
+            Aller en bas ↓
+          </button>
+        )}
       </div>
     </div>
   )

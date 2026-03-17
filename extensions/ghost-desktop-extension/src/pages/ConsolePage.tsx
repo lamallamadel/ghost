@@ -1,8 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, Settings as SettingsIcon, SidebarClose, SidebarOpen } from 'lucide-react'
+import {
+  Plus, Settings as SettingsIcon, SidebarClose, SidebarOpen,
+  Terminal, FlaskConical, Network, Puzzle, Settings2, Store,
+  BarChart2, Code2, Clock, GitCommit, FileText
+} from 'lucide-react'
 import { useSessionStore } from '@/stores/useSessionStore'
 import { useTabsStore } from '@/stores/useTabsStore'
+import { useAppearanceStore } from '@/stores/useAppearanceStore'
 import { ghost } from '@/ipc/ghost'
 import type { AppInfo } from '@/ipc/types'
 import { CommandsTab } from '@/tabs/CommandsTab'
@@ -18,23 +23,47 @@ import { AnalyticsTab } from '@/tabs/AnalyticsTab'
 import { PlaygroundTab } from '@/tabs/PlaygroundTab'
 import { useToastsStore } from '@/stores/useToastsStore'
 import { OnboardingWalkthrough } from '@/components/OnboardingWalkthrough'
+import type { TabKind } from '@/stores/useTabsStore'
+import type { LucideIcon } from 'lucide-react'
+
+const TAB_ICONS: Partial<Record<TabKind, LucideIcon>> = {
+  commands: Terminal,
+  playground: FlaskConical,
+  gateway: Network,
+  extensions: Puzzle,
+  'extension-manager': Settings2,
+  marketplace: Store,
+  analytics: BarChart2,
+  developer: Code2,
+  history: Clock,
+  git: GitCommit,
+  logs: FileText,
+}
 
 function TabButton({
   active,
   title,
+  icon: Icon,
   onClick,
   onClose,
   closable,
+  shortcut,
 }: {
   active: boolean
   title: string
+  icon?: LucideIcon
   onClick: () => void
   onClose?: () => void
   closable?: boolean
+  shortcut?: string
 }) {
   return (
-    <div className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm ${active ? 'border-white/15 bg-white/10' : 'border-white/10 bg-white/5 hover:bg-white/10'}`}>
-      <button type="button" onClick={onClick} className="truncate">
+    <div
+      className={`flex items-center gap-2 rounded-lg border px-3 py-2 text-sm ${active ? 'border-white/15 bg-white/10' : 'border-white/10 bg-white/5 hover:bg-white/10'}`}
+      title={shortcut}
+    >
+      <button type="button" onClick={onClick} className="flex items-center gap-1.5 truncate">
+        {Icon && <Icon size={14} />}
         {title}
       </button>
       {closable ? (
@@ -57,6 +86,7 @@ export default function ConsolePage() {
   const setActive = useTabsStore((s) => s.setActive)
   const openSession = useTabsStore((s) => s.openSession)
   const closeTab = useTabsStore((s) => s.closeTab)
+  const readingMode = useAppearanceStore((s) => s.readingMode)
 
   const [sidebarOpen, setSidebarOpen] = useState(true)
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null)
@@ -79,7 +109,28 @@ export default function ConsolePage() {
     }
   }, [repoPath, onboardingComplete])
 
+  // Keyboard shortcuts: Ctrl/Cmd+1-9 switch tabs
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.ctrlKey || e.metaKey) {
+        const idx = parseInt(e.key) - 1
+        if (!isNaN(idx) && idx >= 0 && idx < tabs.length) {
+          e.preventDefault()
+          setActive(tabs[idx].id)
+        }
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [tabs, setActive])
+
   const activeTab = useMemo(() => tabs.find((t) => t.id === activeId) || tabs[0], [tabs, activeId])
+
+  // Unique-kind tabs for the icon rail (one per kind, first occurrence)
+  const uniqueKindTabs = useMemo(() =>
+    tabs.filter((t, i, arr) => arr.findIndex(x => x.kind === t.kind) === i),
+    [tabs]
+  )
 
   async function revalidate() {
     if (!repoPath) return
@@ -92,7 +143,9 @@ export default function ConsolePage() {
       {showWalkthrough && <OnboardingWalkthrough onClose={() => setShowWalkthrough(false)} repoPath={repoPath || undefined} />}
       <div className="flex h-full">
         <div
-          className={`shrink-0 border-r border-white/10 bg-black/20 backdrop-blur ${sidebarOpen ? 'w-72' : 'w-14'} transition-[width] duration-200`}
+          className={`shrink-0 border-r border-white/10 bg-black/20 backdrop-blur transition-[width] duration-200 ${
+            readingMode ? 'w-0 overflow-hidden' : sidebarOpen ? 'w-72' : 'w-14'
+          }`}
         >
           <div className="flex h-full flex-col p-3">
             <div className="flex items-center justify-between gap-2">
@@ -133,6 +186,29 @@ export default function ConsolePage() {
               </div>
             </div>
 
+            {/* Icon rail when collapsed */}
+            {!sidebarOpen && (
+              <div className="mt-4 flex flex-col gap-1">
+                {uniqueKindTabs.map((t, i) => {
+                  const Icon = TAB_ICONS[t.kind]
+                  return Icon ? (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => {
+                        setActive(t.id)
+                        if (!readingMode) setSidebarOpen(true)
+                      }}
+                      title={`${t.title}${i < 9 ? ` (Ctrl+${i + 1})` : ''}`}
+                      className={`rounded-lg border p-2 text-white/60 transition-colors hover:bg-white/10 hover:text-white ${t.id === activeId ? 'border-white/15 bg-white/10 text-white' : 'border-transparent'}`}
+                    >
+                      <Icon size={16} />
+                    </button>
+                  ) : null
+                })}
+              </div>
+            )}
+
             <div className="mt-auto">
               <button
                 type="button"
@@ -152,14 +228,16 @@ export default function ConsolePage() {
         <div className="flex min-w-0 flex-1 flex-col">
           <div className="flex items-center justify-between gap-3 border-b border-white/10 bg-white/5 px-4 py-3 backdrop-blur">
             <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
-              {tabs.map((t) => (
+              {tabs.map((t, i) => (
                 <TabButton
                   key={t.id}
                   active={t.id === activeTab.id}
                   title={t.title}
+                  icon={TAB_ICONS[t.kind]}
                   onClick={() => setActive(t.id)}
                   closable={t.kind === 'commands' && t.id !== 'commands-1'}
                   onClose={() => closeTab(t.id)}
+                  shortcut={i < 9 ? `Ctrl+${i + 1}` : undefined}
                 />
               ))}
             </div>
@@ -192,4 +270,3 @@ export default function ConsolePage() {
     </div>
   )
 }
-

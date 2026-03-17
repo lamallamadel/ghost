@@ -14,18 +14,20 @@ export default function SettingsPage() {
   const nav = useNavigate()
   const { theme, toggleTheme, isDark } = useTheme()
   const repoPath = useSessionStore((s) => s.repoPath)
-  const { opacity, fontSize, accent, setOpacity, setFontSize, setAccent } = useAppearanceStore()
+  const { opacity, fontSize, accent, lineHeight, readingMode, setOpacity, setFontSize, setAccent, setLineHeight, setReadingMode } = useAppearanceStore()
   const pushToast = useToastsStore((s) => s.push)
 
   useEffect(() => {
     document.documentElement.style.setProperty('--gc-opacity', String(opacity))
     document.documentElement.style.setProperty('--gc-font-size', `${fontSize}px`)
+    document.documentElement.style.setProperty('--gc-line-height', String(lineHeight))
+    document.documentElement.style.setProperty('--gc-reading-width', readingMode ? '80ch' : 'none')
     const rgb = accent.startsWith('#') && accent.length === 7
       ? `${parseInt(accent.slice(1, 3), 16)} ${parseInt(accent.slice(3, 5), 16)} ${parseInt(accent.slice(5, 7), 16)}`
       : '124 92 255'
     document.documentElement.style.setProperty('--gc-accent', rgb)
     document.body.style.background = `rgba(var(--gc-bg) / ${0.25 + opacity * 0.55})`
-  }, [opacity, fontSize, accent])
+  }, [opacity, fontSize, accent, lineHeight, readingMode])
 
   async function exportLogs() {
     try {
@@ -94,13 +96,43 @@ export default function SettingsPage() {
               </div>
               <input
                 type="range"
-                min={12}
+                min={13}
                 max={18}
                 step={1}
                 value={fontSize}
-                onChange={(e) => setFontSize(clamp(Number(e.target.value), 12, 18))}
+                onChange={(e) => setFontSize(clamp(Number(e.target.value), 13, 18))}
                 className="mt-2 w-full"
               />
+            </div>
+
+            <div className="mt-4">
+              <div className="flex items-center justify-between">
+                <div className="text-sm">Hauteur de ligne</div>
+                <div className="text-xs text-white/60">{lineHeight.toFixed(2)}</div>
+              </div>
+              <input
+                type="range"
+                min={1.4}
+                max={2.0}
+                step={0.05}
+                value={lineHeight}
+                onChange={(e) => setLineHeight(clamp(Number(e.target.value), 1.4, 2.0))}
+                className="mt-2 w-full"
+              />
+            </div>
+
+            <div className="mt-4 flex items-center justify-between gap-3">
+              <div>
+                <div className="text-sm">Mode lecture</div>
+                <div className="text-xs text-white/60">Limite la largeur à 80 caractères</div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReadingMode(!readingMode)}
+                className={`rounded-lg border px-3 py-2 text-sm font-semibold transition-colors ${readingMode ? 'border-[rgb(var(--gc-accent))]/30 bg-[rgb(var(--gc-accent))]/10 text-[rgb(var(--gc-accent))]' : 'border-white/10 bg-white/5 hover:bg-white/10 text-white/80'}`}
+              >
+                {readingMode ? 'Activé' : 'Désactivé'}
+              </button>
             </div>
 
             <div className="mt-4">
@@ -123,8 +155,8 @@ export default function SettingsPage() {
 
             <div className="mt-4 rounded-xl border border-white/10 bg-black/20 p-3">
               <div className="text-xs text-white/60">Aperçu</div>
-              <div className="mt-1 font-mono text-sm">ghost audit --verbose</div>
-              <div className={`mt-1 text-xs ${isDark ? 'text-white/70' : 'text-black/70'}`}>Sortie console • logs • validations</div>
+              <div className="mt-1 font-mono text-sm" style={{ lineHeight }}>ghost audit --verbose</div>
+              <div className={`mt-1 text-xs ${isDark ? 'text-white/70' : 'text-black/70'}`} style={{ lineHeight }}>Sortie console • logs • validations</div>
             </div>
           </div>
 
