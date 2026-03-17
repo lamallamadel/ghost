@@ -39,7 +39,7 @@ class MockSDK {
 
 // ─── Pull internals from the extension ───────────────────────────────────────
 const ExtensionWrapper = require('../../extensions/ghost-cli-extension/index.js');
-const { HistoryManager, CommandPalette, parseArgs, CATALOG, HISTORY_PATH } = ExtensionWrapper._internals;
+const { HistoryManager, CommandPalette, parseArgs, CATALOG, HISTORY_PATH, SemanticRouter } = ExtensionWrapper._internals;
 
 console.log('🧪 Testing ghost-cli-extension (Beautiful Monster)...\n');
 
@@ -215,6 +215,116 @@ console.log('🧪 Testing ghost-cli-extension (Beautiful Monster)...\n');
     }
     console.log(`  ✓ All ${expectedCommands.length} expected extensions in CATALOG`);
     console.log('✅ CATALOG is complete\n');
+
+    // ─── Test 14: SemanticRouter.classify() — no embedder → null ─────────────
+    console.log('▶ Test 14: SemanticRouter returns null when embedder not loaded');
+    const sr14 = new SemanticRouter();
+    const r14 = await sr14.classify('commit my changes');
+    assert.strictEqual(r14, null, 'classify() should return null when embedder is null');
+    console.log('  ✓ Returns null before init');
+    console.log('✅ SemanticRouter pre-init guard works\n');
+
+    // ─── Test 15: SemanticRouter.classify() — high confidence → match ─────────
+    console.log('▶ Test 15: SemanticRouter returns match when confidence ≥ 0.5');
+    const sr15 = new SemanticRouter();
+    sr15.dim = 4;
+    sr15.catalogEntries = [
+        { cmd: 'git',      sub: 'commit', text: 'git commit: AI commit message' },
+        { cmd: 'security', sub: 'scan',   text: 'security scan: Scan for vulnerabilities' },
+    ];
+    // entry 0 → [1,0,0,0], entry 1 → [0,1,0,0]
+    sr15.catalogVecs = new Float32Array([1, 0, 0, 0,  0, 1, 0, 0]);
+    // query matches entry 0 perfectly
+    sr15.embedder = async () => ({ data: new Float32Array([1, 0, 0, 0]), dims: [1, 4] });
+    const r15 = await sr15.classify('commit my changes');
+    assert.ok(r15 !== null, 'Should return a match');
+    assert.strictEqual(r15.cmd, 'git');
+    assert.strictEqual(r15.sub, 'commit');
+    assert.ok(r15.confidence >= 0.5, `Confidence should be ≥ 0.5, got ${r15.confidence}`);
+    console.log(`  ✓ Matched git commit (confidence: ${Math.round(r15.confidence * 100)}%)`);
+    console.log('✅ SemanticRouter high-confidence match works\n');
+
+    // ─── Test 16: SemanticRouter.classify() — low confidence → null ──────────
+    console.log('▶ Test 16: SemanticRouter returns null when confidence < 0.5');
+    const sr16 = new SemanticRouter();
+    sr16.dim = 4;
+    sr16.catalogEntries = [{ cmd: 'git', sub: 'commit', text: 'git commit' }];
+    sr16.catalogVecs = new Float32Array([1, 0, 0, 0]);
+    // query orthogonal to every catalog vec → dot = 0
+    sr16.embedder = async () => ({ data: new Float32Array([0, 0, 1, 0]), dims: [1, 4] });
+    const r16 = await sr16.classify('something completely unrelated');
+    assert.strictEqual(r16, null, 'Should return null when best dot product < 0.5');
+    console.log('  ✓ Returns null when best score is 0.0 (< 0.5 threshold)');
+    console.log('✅ SemanticRouter confidence threshold enforced\n');
+
+    // ─── Test 17: SemanticRouter.classify() — branch context injected ─────────
+    console.log('▶ Test 17: SemanticRouter prepends branch context to query');
+    const sr17 = new SemanticRouter();
+    sr17.dim = 2;
+    sr17.catalogEntries = [{ cmd: 'git', sub: 'commit', text: 'git commit' }];
+    sr17.catalogVecs = new Float32Array([1, 0]);
+    let capturedQuery = null;
+    sr17.embedder = async (texts) => {
+        capturedQuery = texts[0];
+        return { data: new Float32Array([1, 0]), dims: [1, 2] };
+    };
+    await sr17.classify('commit changes', 'feature/auth');
+    assert.ok(capturedQuery !== null, 'Embedder should have been called');
+    assert.ok(capturedQuery.startsWith('[branch: feature/auth]'), `Query should start with branch context, got: "${capturedQuery}"`);
+    assert.ok(capturedQuery.includes('commit changes'), 'Query should include original input');
+    console.log(`  ✓ Query sent to embedder: "${capturedQuery}"`);
+    console.log('✅ SemanticRouter branch context injection works\n');
+
+    // ─── Test 18: SemanticRouter.classify() — embedder throws → null ─────────
+    console.log('▶ Test 18: SemanticRouter returns null when embedder throws');
+    const sr18 = new SemanticRouter();
+    sr18.dim = 2;
+    sr18.catalogEntries = [{ cmd: 'git', sub: 'commit', text: 'git commit' }];
+    sr18.catalogVecs = new Float32Array([1, 0]);
+    sr18.embedder = async () => { throw new Error('simulated WASM error'); };
+    const r18 = await sr18.classify('commit');
+    assert.strictEqual(r18, null, 'classify() should catch embedder errors and return null');
+    console.log('  ✓ Returns null on embedder error (no throw propagated)');
+    console.log('✅ SemanticRouter error isolation works\n');
+
+    // ─── Test 19: _handleNL routes via SemanticRouter when set ───────────────
+    console.log('▶ Test 19: _handleNL uses SemanticRouter when loaded');
+    const wrapper19 = new ExtensionWrapper();
+    const sdk19 = new MockSDK();
+    wrapper19.sdk   = sdk19;
+    wrapper19.shell.sdk = sdk19;
+
+    const routed19 = [];
+    wrapper19.shell._handleSlash = async (cmd) => { routed19.push(cmd); };
+
+    // Inject a mock semantic router that always matches 'security scan'
+    wrapper19.shell.semanticRouter = {
+        classify: async () => ({ cmd: 'security', sub: 'scan', confidence: 0.87 })
+    };
+    await wrapper19.shell._handleNL('show me security vulnerabilities');
+    assert.strictEqual(routed19.length, 1, '_handleSlash should have been called once');
+    assert.strictEqual(routed19[0], 'security scan', 'Should route to the matched command');
+    console.log(`  ✓ Routed to: /${routed19[0]}`);
+    console.log('✅ _handleNL semantic layer routing works\n');
+
+    // ─── Test 20: _handleNL falls back to keyword when SemanticRouter null ───
+    console.log('▶ Test 20: _handleNL falls back to keyword routing when semantic returns null');
+    const wrapper20 = new ExtensionWrapper();
+    const sdk20 = new MockSDK();
+    wrapper20.sdk   = sdk20;
+    wrapper20.shell.sdk = sdk20;
+
+    const routed20 = [];
+    wrapper20.shell._handleSlash = async (cmd) => { routed20.push(cmd); };
+
+    // Semantic router loaded but returns null (below threshold)
+    wrapper20.shell.semanticRouter = { classify: async () => null };
+    // 'run a security audit' contains 'audit' → second shortcut row → security audit
+    await wrapper20.shell._handleNL('run a security audit');
+    assert.strictEqual(routed20.length, 1, 'Keyword fallback should still route');
+    assert.strictEqual(routed20[0], 'security audit', 'Keyword "audit" should match security audit');
+    console.log(`  ✓ Fell back to keyword → /${routed20[0]}`);
+    console.log('✅ _handleNL keyword fallback works\n');
 
     console.log('🎉 All ghost-cli-extension (Beautiful Monster) tests passed!');
     process.exit(0);

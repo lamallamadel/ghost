@@ -903,4 +903,4 @@ if (require.main === module) {
 module.exports = ExtensionWrapper;
 
 // Expose internals for unit testing (not part of the public API)
-module.exports._internals = { HistoryManager, CommandPalette, parseArgs, CATALOG, HISTORY_PATH };
+module.exports._internals = { HistoryManager, CommandPalette, parseArgs, CATALOG, HISTORY_PATH, SemanticRouter };
