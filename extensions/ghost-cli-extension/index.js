@@ -344,31 +344,33 @@ class CommandPalette {
 
     update(input, cursorCol = 0) {
         // input is after the leading '/'
-        const parts  = input.split(' ');
-        const query  = parts[0].toLowerCase();
-        const hasArg = parts.length > 1;
+        const parts    = input.split(' ');
+        const query    = parts[0].toLowerCase();
+        const hasArg   = parts.length > 1;
+        const subQuery = hasArg ? parts.slice(1).join(' ').toLowerCase().trim() : '';
 
-        if (hasArg) {
-            // Showing argument hints for a selected top-level command
-            const topCmd  = CATALOG[query];
-            if (topCmd) {
-                const subQuery = parts[1].toLowerCase();
-                this.filtered = Object.entries(topCmd.sub)
-                    .filter(([sub]) => sub.toLowerCase().includes(subQuery))
-                    .map(([sub, sdef]) => ({
-                        slash: `${query} ${sub}`,
-                        desc:  sdef.d,
-                        hint:  sdef.hint
-                    }));
-                if (this.selected >= this.filtered.length)
-                    this.selected = Math.max(0, this.filtered.length - 1);
-                this._render(input, cursorCol);
-                return;
-            }
-            this.clear(cursorCol);
+        // Exact top-level command match → show its subcommands immediately,
+        // whether or not a space has been typed yet.
+        const topCmd = CATALOG[query];
+        if (topCmd) {
+            this.filtered = Object.entries(topCmd.sub)
+                .filter(([sub]) => !subQuery || sub.toLowerCase().includes(subQuery))
+                .map(([sub, sdef]) => ({
+                    slash: `${query} ${sub}`,
+                    desc:  sdef.d,
+                    hint:  sdef.hint
+                }));
+            if (this.selected >= this.filtered.length)
+                this.selected = Math.max(0, this.filtered.length - 1);
+            this._render(input, cursorCol);
             return;
         }
 
+        // No exact match — fuzzy search top-level commands (only when no space typed)
+        if (hasArg) {
+            this.clear(cursorCol);
+            return;
+        }
         this.filtered = this.items.filter(item =>
             !item.parent && this._fuzzy(query, item.slash)
         );
@@ -727,7 +729,7 @@ class GhostShell {
                     this.palette.update(line.slice(1), getCursorCol());
                     return; // suppress
                 }
-                if ((key.name === 'tab' || key.name === 'right') && !line.includes(' ')) {
+                if (key.name === 'tab') {
                     const completion = this.palette.complete();
                     if (completion) {
                         this.rl.write(null, { ctrl: true, name: 'u' });
@@ -735,6 +737,15 @@ class GhostShell {
                         this.palette.clear(getCursorCol());
                     }
                     return; // suppress readline tab-completion
+                }
+                if (key.name === 'right' && !line.includes(' ')) {
+                    const completion = this.palette.complete();
+                    if (completion) {
+                        this.rl.write(null, { ctrl: true, name: 'u' });
+                        this.rl.write(completion);
+                        this.palette.clear(getCursorCol());
+                    }
+                    return;
                 }
                 if (key.name === 'return' || key.name === 'enter') {
                     this.palette.clear(getCursorCol());
@@ -937,20 +948,12 @@ class GhostShell {
         console.log(JSON.stringify(data, null, 2));
     }
 
-    // ── Command help (no subcommand given) — interactive picker ──
-    async _showCommandHelp(cmd, def) {
-        // Header
-        process.stdout.write(`\n${def.icon || '🔧'} ${C.BOLD}${cmd}${C.RESET}  ${C.DIM}${def.description}${C.RESET}\n\n`);
-
-        // Build picker items: label = what gets pasted, desc = short description
-        const items = Object.entries(def.sub).map(([sub, s]) => ({
-            name: `/${cmd} ${sub}`,
-            desc: s.d + (s.hint ? `  ${s.hint}` : '')
-        }));
-
-        const chosen = await new ResultPicker(items, this.rl).pick();
-        if (chosen && this.rl) {
-            this.rl.write(chosen);
+    // ── Command help (no subcommand given) ──
+    // Write /<cmd> + space into readline after rl.prompt() so the palette
+    // shows subcommands naturally — no cursor-desync from separate stdout writes.
+    _showCommandHelp(cmd) {
+        if (this.rl) {
+            setImmediate(() => this.rl.write(`/${cmd} `));
         }
     }
 
