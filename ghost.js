@@ -759,7 +759,7 @@ class GatewayLauncher {
         if (type === 'system') {
             switch (operation) {
                 case 'registry':
-                    return this.gateway.listExtensions().map(e => ({ id: e.manifest.id, description: e.manifest.description }));
+                    return this.gateway.listExtensions().map(e => ({ id: e.id, description: e.name, version: e.version }));
                 case 'log':
                     if (this._isVerbose()) console.log(`[Extension:${extId}] ${params.message}`);
                     return { success: true };

@@ -57,7 +57,7 @@ class IntentSchema {
         filesystem: ['read', 'write', 'stat', 'readdir', 'mkdir', 'unlink', 'rmdir'],
         network: ['http', 'https', 'request', 'get', 'post'],
         git: ['status', 'log', 'diff', 'show', 'ls-files', 'commit', 'branch', 'tag', 'push', 'reset', 'exec'],
-        process: ['spawn', 'exec'],
+        process: ['spawn', 'exec', 'spawn-detached'],
         log: ['info', 'warn', 'error', 'debug'],
         ui: ['prompt', 'alert', 'confirm'],
         extension: ['call', 'status'],

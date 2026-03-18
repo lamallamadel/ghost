@@ -276,7 +276,9 @@ const CATALOG = {
         icon: '🖥️ ', description: 'Ghost telemetry monitoring console',
         extId: 'ghost-desktop-extension',
         sub: {
-            console: { d: 'Launch the telemetry web console', hint: '[--port <9876>] [--no-ui]' },
+            start:  { d: 'Launch the desktop console in background', hint: '[--port <9877>] [--no-ui]' },
+            stop:   { d: 'Stop the desktop console', hint: '' },
+            status: { d: 'Check desktop console status', hint: '' },
         }
     },
 };

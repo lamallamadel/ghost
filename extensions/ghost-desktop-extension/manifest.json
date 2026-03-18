@@ -4,15 +4,19 @@
   "version": "1.0.0",
   "description": "Desktop UI and real-time telemetry console for Ghost CLI.",
   "main": "index.js",
-  "commands": ["console"],
+  "commands": ["start", "stop", "status"],
   "capabilities": {
     "network": {
       "mesh": true
+    },
+    "process": {
+      "spawn": true
     }
   },
   "permissions": [
     "filesystem:read",
     "network:mesh",
-    "network:https"
+    "network:https",
+    "process:spawn"
   ]
 }

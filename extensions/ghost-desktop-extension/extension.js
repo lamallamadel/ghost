@@ -28,22 +28,8 @@ class DesktopExtension {
         this.sdk = sdk;
     }
 
-    async handleConsole(params) {
-        const subcommand = params.subcommand || params.args?.[0] || 'start';
+    async handleStart(params) {
         const flags = params.flags || {};
-
-        if (subcommand === 'start') {
-            return await this._startConsole(flags);
-        }
-
-        if (subcommand === 'stop') {
-            return await this._stopConsole();
-        }
-
-        return { success: false, output: `Unknown subcommand: ${subcommand}. Use start|stop.` };
-    }
-
-    async _startConsole(flags) {
         await this.sdk.requestLog({ level: 'info', message: 'Starting Ghost Desktop Console...' });
 
         // 1. Request telemetry server start from core
@@ -57,21 +43,33 @@ class DesktopExtension {
             await this.sdk.requestLog({ level: 'warn', message: `Telemetry server may already be running: ${e.message}` });
         }
 
-        // 2. Launch Electron unless --no-ui
+        // 2. Launch Electron in background unless --no-ui
         if (!flags['no-ui']) {
+            const logDir = path.join(os.homedir(), '.ghost', 'logs');
+            // Ensure log directory exists
+            try {
+                await this.sdk.emitIntent({
+                    type: 'filesystem',
+                    operation: 'mkdir',
+                    params: { path: logDir, recursive: true }
+                });
+            } catch (_) { /* ignore if already exists */ }
             try {
                 await this.sdk.emitIntent({
                     type: 'process',
-                    operation: 'spawn',
+                    operation: 'spawn-detached',
                     params: {
                         command: 'npm',
                         args: ['run', 'desktop:dev'],
-                        options: { cwd: DESKTOP_DIR, detached: true }
+                        cwd: DESKTOP_DIR,
+                        outLog: path.join(logDir, 'desktop-out.log'),
+                        errLog: path.join(logDir, 'desktop-err.log')
                     }
                 });
                 return {
                     success: true,
-                    output: `${Colors.GREEN}✓ Ghost Desktop Console launched from ${DESKTOP_DIR}${Colors.ENDC}`
+                    output: `${Colors.GREEN}✓ Ghost Desktop Console launched in background.${Colors.ENDC}\n` +
+                        `  Logs → ${logDir}/desktop-out.log`
                 };
             } catch (error) {
                 return {
@@ -136,7 +134,8 @@ class DesktopExtension {
         const { method, params = {} } = request;
         try {
             switch (method) {
-                case 'desktop.console': return await this.handleConsole(params);
+                case 'desktop.start':  return await this.handleStart(params);
+                case 'desktop.stop':   return await this._stopConsole();
                 case 'desktop.status': return await this.handleStatus(params);
                 default: throw new Error(`Unknown method: ${method}`);
             }
