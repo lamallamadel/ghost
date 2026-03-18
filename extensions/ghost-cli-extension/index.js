@@ -777,11 +777,17 @@ class GhostShell {
         // Catalog-routed extension commands
         const def = CATALOG[cmd];
         if (def) {
-            const extId   = def.extId;
-            const method  = subcmd ? `${cmd}.${subcmd}` : `${cmd}.list`;
-            const params  = { subcommand: subcmd, args: subArgs, flags };
+            // No subcommand — show available subcommands instead of guessing .list
+            if (!subcmd) {
+                this._showCommandHelp(cmd, def);
+                return;
+            }
 
-            this.spinner.start(`${def.icon || ''}  ${cmd}${subcmd ? ' ' + subcmd : ''}…`);
+            const extId  = def.extId;
+            const method = `${cmd}.${subcmd}`;
+            const params = { subcommand: subcmd, args: subArgs, flags };
+
+            this.spinner.start(`${def.icon || ''}  ${cmd} ${subcmd}…`);
             try {
                 const result = await this.sdk.emitIntent({
                     type: 'extension', operation: 'call',
@@ -927,6 +933,19 @@ class GhostShell {
         const keys = Object.keys(data);
         if (keys.length === 0 || (keys.length === 1 && 'success' in data)) return;
         console.log(JSON.stringify(data, null, 2));
+    }
+
+    // ── Command help (no subcommand given) ──
+    _showCommandHelp(cmd, def) {
+        const rows = Object.entries(def.sub).map(([sub, s]) => [
+            `  ${C.BOLD}/${cmd} ${sub}${C.RESET}`,
+            s.hint ? `${C.DIM}${s.hint}${C.RESET}` : '',
+            `${C.DIM}${s.d}${C.RESET}`
+        ]);
+        let out = `\n${def.icon || '🔧'} ${C.BOLD}${cmd}${C.RESET}  ${C.DIM}${def.description}${C.RESET}\n\n`;
+        out += Fmt.table(['Command', 'Arguments', 'Description'], rows);
+        out += `\n\n${C.DIM}Tip: type /${cmd} <subcommand> to run, or use Tab to autocomplete.${C.RESET}\n`;
+        console.log(out);
     }
 
     // ── Built-in: /help ──
