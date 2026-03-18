@@ -779,7 +779,7 @@ class GhostShell {
         if (def) {
             // No subcommand — show available subcommands instead of guessing .list
             if (!subcmd) {
-                this._showCommandHelp(cmd, def);
+                await this._showCommandHelp(cmd, def);
                 return;
             }
 
@@ -935,17 +935,21 @@ class GhostShell {
         console.log(JSON.stringify(data, null, 2));
     }
 
-    // ── Command help (no subcommand given) ──
-    _showCommandHelp(cmd, def) {
-        const rows = Object.entries(def.sub).map(([sub, s]) => [
-            `  ${C.BOLD}/${cmd} ${sub}${C.RESET}`,
-            s.hint ? `${C.DIM}${s.hint}${C.RESET}` : '',
-            `${C.DIM}${s.d}${C.RESET}`
-        ]);
-        let out = `\n${def.icon || '🔧'} ${C.BOLD}${cmd}${C.RESET}  ${C.DIM}${def.description}${C.RESET}\n\n`;
-        out += Fmt.table(['Command', 'Arguments', 'Description'], rows);
-        out += `\n\n${C.DIM}Tip: type /${cmd} <subcommand> to run, or use Tab to autocomplete.${C.RESET}\n`;
-        console.log(out);
+    // ── Command help (no subcommand given) — interactive picker ──
+    async _showCommandHelp(cmd, def) {
+        // Header
+        process.stdout.write(`\n${def.icon || '🔧'} ${C.BOLD}${cmd}${C.RESET}  ${C.DIM}${def.description}${C.RESET}\n\n`);
+
+        // Build picker items: label = what gets pasted, desc = short description
+        const items = Object.entries(def.sub).map(([sub, s]) => ({
+            name: `/${cmd} ${sub}`,
+            desc: s.d + (s.hint ? `  ${s.hint}` : '')
+        }));
+
+        const chosen = await new ResultPicker(items, this.rl).pick();
+        if (chosen && this.rl) {
+            this.rl.write(chosen);
+        }
     }
 
     // ── Built-in: /help ──
