@@ -429,6 +429,97 @@ class CommandPalette {
     }
 }
 
+// ─── Result Picker ────────────────────────────────────────────────────────────
+// Interactive arrow-key picker for array results.
+// Temporarily replaces _ttyWrite (same approach as CommandPalette) so it fully
+// captures arrow keys and Enter without interference from readline.
+// Resolves with the selected item's label string, or null on ESC.
+class ResultPicker {
+    constructor(items, rl) {
+        this._items = items;
+        this._rl    = rl;
+        this._sel   = 0;
+        this._lines = 0;
+    }
+
+    _label(item) {
+        if (item === null || item === undefined) return String(item);
+        if (typeof item !== 'object') return String(item);
+        return item.name || item.id || item.title || item.label || item.key || JSON.stringify(item);
+    }
+
+    _desc(item) {
+        if (!item || typeof item !== 'object') return '';
+        return item.description || item.desc || item.value || item.version || '';
+    }
+
+    _render() {
+        const LIMIT = 8;
+        const start = Math.max(0, this._sel - Math.floor(LIMIT / 2));
+        const end   = Math.min(this._items.length, start + LIMIT);
+        const rows  = [];
+
+        for (let i = start; i < end; i++) {
+            const label = this._label(this._items[i]);
+            const desc  = this._desc(this._items[i]);
+            if (i === this._sel) {
+                rows.push(`  ${C.GREEN}❯${C.RESET} ${C.BOLD}${label}${C.RESET}${desc ? C.DIM + '  ' + desc + C.RESET : ''}`);
+            } else {
+                rows.push(`    ${C.DIM}${label}${desc ? '  ' + desc : ''}${C.RESET}`);
+            }
+        }
+        if (end < this._items.length) {
+            rows.push(`  ${C.DIM}… ${this._items.length - end} more${C.RESET}`);
+        }
+        rows.push(`  ${C.DIM}↑↓ navigate   ↵ paste   esc dismiss${C.RESET}`);
+
+        const newLines = rows.length;
+        if (this._lines > 0) {
+            process.stdout.write(`\x1b[${this._lines}A\r\x1b[J`);
+        }
+        process.stdout.write(rows.join('\n') + '\n');
+        this._lines = newLines;
+    }
+
+    _clear() {
+        if (this._lines > 0) {
+            process.stdout.write(`\x1b[${this._lines}A\r\x1b[J`);
+            this._lines = 0;
+        }
+    }
+
+    pick() {
+        if (!this._rl || !process.stdout.isTTY) return Promise.resolve(null);
+        this._render();
+
+        return new Promise(resolve => {
+            const savedTtyWrite = this._rl._ttyWrite;
+
+            const done = (label) => {
+                this._clear();
+                this._rl._ttyWrite = savedTtyWrite;
+                resolve(label);
+            };
+
+            this._rl._ttyWrite = (s, key) => {
+                key = key || {};
+                if (key.name === 'up') {
+                    this._sel = Math.max(0, this._sel - 1);
+                    this._render();
+                } else if (key.name === 'down') {
+                    this._sel = Math.min(this._items.length - 1, this._sel + 1);
+                    this._render();
+                } else if (key.name === 'return' || key.name === 'enter') {
+                    done(this._label(this._items[this._sel]));
+                } else if (key.name === 'escape' || (key.ctrl && key.name === 'c')) {
+                    done(null);
+                }
+                // All other keys suppressed while picker is active.
+            };
+        });
+    }
+}
+
 // ─── Semantic Router ──────────────────────────────────────────────────────────
 class SemanticRouter {
     constructor() {
@@ -697,7 +788,7 @@ class GhostShell {
                     params: { extensionId: extId, method, params }
                 });
                 this.spinner.stop();
-                this._printResult(result);
+                await this._printResult(result);
             } catch (e) {
                 this.spinner.stop();
                 console.log(Fmt.error(`${cmd}: ${e.message}`));
@@ -722,7 +813,7 @@ class GhostShell {
                     params: { extensionId: ext.id, method, params }
                 });
                 this.spinner.stop();
-                this._printResult(result);
+                await this._printResult(result);
             } catch (e) {
                 this.spinner.stop();
                 console.log(Fmt.error(`${e.message}`));
@@ -779,7 +870,7 @@ class GhostShell {
                 }
             });
             this.spinner.stop();
-            this._printResult(result);
+            await this._printResult(result);
         } catch (err) {
             this.spinner.stop();
             const detail = err?.message ? `: ${err.message}` : '';
@@ -788,16 +879,54 @@ class GhostShell {
     }
 
     // ── Output renderer ──
-    _printResult(result) {
-        if (!result) return;
-        if (typeof result === 'string') { console.log(result); return; }
-        if (result.output) { console.log(result.output); return; }
-        if (result.result && typeof result.result === 'string') { console.log(result.result); return; }
-        if (result.error || result.success === false) {
-            console.log(Fmt.error(result.error?.message || result.output || 'Command failed'));
+    // Async so array results can await the interactive ResultPicker.
+    async _printResult(data, _depth = 0) {
+        if (data === null || data === undefined) return;
+
+        // Plain string — print as-is
+        if (typeof data === 'string') { process.stdout.write(data + (data.endsWith('\n') ? '' : '\n')); return; }
+
+        // Array → interactive picker
+        if (Array.isArray(data)) {
+            if (data.length === 0) { console.log(`  ${C.DIM}(empty list)${C.RESET}`); return; }
+            const label = await new ResultPicker(data, this.rl).pick();
+            if (label && this.rl) this.rl.write(label);
             return;
         }
-        if (Object.keys(result).length > 0) console.log(JSON.stringify(result, null, 2));
+
+        // Formatted ANSI output field (most extension commands return this)
+        if (data.output && typeof data.output === 'string') {
+            process.stdout.write(data.output);
+            if (!data.output.endsWith('\n')) process.stdout.write('\n');
+            return;
+        }
+
+        // Error field (JSON-RPC error or explicit error object)
+        if (data.error) {
+            const msg = typeof data.error === 'string'
+                ? data.error
+                : (data.error.message || JSON.stringify(data.error));
+            console.log(Fmt.error(msg));
+            return;
+        }
+
+        // Explicit failure flag
+        if (data.success === false) {
+            console.log(Fmt.error(data.message || data.output || 'Command failed'));
+            return;
+        }
+
+        // Pipeline / executor envelope: { success: true, result: innerData }
+        // Unwrap and recurse (max 3 levels to guard against pathological nesting).
+        if (data.success === true && data.result !== undefined && _depth < 3) {
+            await this._printResult(data.result, _depth + 1);
+            return;
+        }
+
+        // Fallback: formatted JSON (skip trivial { success: true } boilerplate)
+        const keys = Object.keys(data);
+        if (keys.length === 0 || (keys.length === 1 && 'success' in data)) return;
+        console.log(JSON.stringify(data, null, 2));
     }
 
     // ── Built-in: /help ──
