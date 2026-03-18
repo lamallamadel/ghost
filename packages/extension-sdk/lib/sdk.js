@@ -123,7 +123,10 @@ class ExtensionSDK {
                 throw this._createErrorFromResponse(response, intent.requestId);
             }
 
-            return response.result;
+            // Pipeline wraps executor result: { success, result: { success, result: content, content } }
+            // Unwrap one level to get the actual file content string.
+            const r = response.result;
+            return (r && typeof r === 'object') ? (r.content ?? r.result ?? r) : r;
         } catch (error) {
             throw this._handleError(error, intent.requestId);
         }
@@ -316,9 +319,9 @@ class ExtensionSDK {
     }
 
     async requestGitCurrentBranch() {
-        const result = await this.requestGitExec({ 
-            operation: 'symbolic-ref', 
-            args: ['--short', 'HEAD'] 
+        const result = await this.requestGitExec({
+            operation: 'exec',
+            args: ['symbolic-ref', '--short', 'HEAD']
         });
         
         if (result && result.stdout) {

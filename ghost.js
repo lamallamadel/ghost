@@ -638,6 +638,10 @@ class GatewayLauncher {
             throw new Error('ghost-cli-extension is not available');
         }
 
+        // Register with the pipeline so Auth stage can verify capabilities.
+        // In-process extensions bypass the normal loader registration path.
+        this.pipeline.registerExtension('ghost-cli-extension', cliExtension.manifest);
+
         const wrapperPath = path.join(cliExtension.path, cliExtension.manifest.main || 'index.js');
         const CliWrapper = require(wrapperPath);
         const wrapper = new CliWrapper();
@@ -767,24 +771,7 @@ class GatewayLauncher {
             }
         }
 
-        // DIRECT GIT OPERATIONS — bypass pipeline to prevent routing loops
-        if (type === 'git' && operation === 'exec') {
-            return new Promise((resolve, reject) => {
-                const { args, suppressError } = params;
-                const fullCommand = `git ${args.join(' ')}`;
-                if (this._isVerbose()) console.log(`[Gateway:Git] Executing: ${fullCommand}`);
-
-                exec(fullCommand, { cwd: process.cwd() }, (error, stdout, stderr) => {
-                    if (error && !suppressError) {
-                        reject(new Error(stderr || error.message));
-                    } else {
-                        resolve({ stdout, stderr, code: error ? error.code : 0 });
-                    }
-                });
-            });
-        }
-
-        // ALL OTHER OPERATIONS — through the secure pipeline
+        // ALL OPERATIONS — through the secure pipeline
         // Flat format: { extensionId, type, operation, params } is what intercept.normalize() expects.
         const pipelineMessage = {
             extensionId: extId,
@@ -794,7 +781,7 @@ class GatewayLauncher {
         };
 
         const pipelineResult = await this.pipeline.process(pipelineMessage);
-        return pipelineResult.result;
+        return pipelineResult;
     }
 
     async _runShellIntent(params) {

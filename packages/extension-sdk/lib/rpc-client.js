@@ -95,9 +95,9 @@ class RPCClient {
                     clearTimeout(timeout);
                     if (response && response.error) {
                         reject(new Error(response.error.message || 'Request failed'));
-                    } else if (response && typeof response === 'object' && 'result' in response) {
-                        resolve(response.result);
                     } else {
+                        // Resolve with the full response — same behaviour as the IPC/stdio paths
+                        // so SDK methods always receive { success, result } regardless of transport.
                         resolve(response);
                     }
                 })
